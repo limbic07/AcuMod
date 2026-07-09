@@ -1,0 +1,157 @@
+# 开发说明
+
+本文档记录 Acumod 当前开发命令、目录约定和 Tauri invoke 修改检查清单。
+
+## 环境和命令
+
+本项目在 Windows + PowerShell 环境下开发。npm 命令建议使用 `npm.cmd`，可以减少 PowerShell 下可执行文件解析问题。
+
+常用命令：
+
+```powershell
+npm.cmd install
+npm.cmd run dev
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run tauri:dev
+npm.cmd run tauri:build
+```
+
+Rust 检查：
+
+```powershell
+Set-Location src-tauri
+cargo check
+cargo fmt
+```
+
+如果只修改 Markdown 文档，不需要运行前端或 Rust 构建命令。
+
+## npm scripts
+
+当前 `package.json` 已确认脚本：
+
+- `dev`：启动 Vite 开发服务器。
+- `typecheck`：运行 `vue-tsc --noEmit`。
+- `build`：先运行 typecheck，再运行 Vite build。
+- `preview`：预览前端构建结果。
+- `tauri`：调用 Tauri CLI。
+- `tauri:dev`：启动 Tauri 桌面开发模式。
+- `tauri:build`：构建 Tauri 桌面应用。
+
+## 目录约定
+
+当前目录：
+
+```text
+src/
+  App.vue
+  main.ts
+  api/
+    app.ts
+
+src-tauri/
+  tauri.conf.json
+  capabilities/
+    default.json
+  src/
+    lib.rs
+    main.rs
+    commands/
+      mod.rs
+      app.rs
+```
+
+后续功能扩展时建议：
+
+- 前端 Tauri 调用统一放在 `src/api/`。
+- Vue 页面级文件后续放在 `src/views/`。
+- 可复用组件后续放在 `src/components/`。
+- Rust Tauri command 放在 `src-tauri/src/commands/`。
+- Rust 业务逻辑后续放在 `src-tauri/src/services/`。
+- 配置、MOD 元数据、启用状态、排序和部署记录读写后续放在 `src-tauri/src/storage/`。
+
+## Tauri invoke 检查清单
+
+修改或新增前后端命令时，必须同步检查：
+
+1. 前端 `invoke()` 的命令名。
+2. 前端传入参数名。
+3. 前端 TypeScript 返回类型。
+4. Rust `#[tauri::command]` 函数名。
+5. Rust 参数名和类型。
+6. Rust 返回 DTO 是否实现 `serde::Serialize`。
+7. 需要接收前端参数时，参数类型是否实现 `serde::Deserialize`。
+8. `src-tauri/src/lib.rs` 的 `tauri::generate_handler![...]` 是否注册命令。
+
+当前已确认示例：
+
+```text
+src/api/app.ts
+  getAppInfo()
+  -> invoke<AppInfo>("get_app_info")
+
+src-tauri/src/commands/app.rs
+  #[tauri::command]
+  get_app_info() -> AppInfo
+
+src-tauri/src/lib.rs
+  tauri::generate_handler![commands::app::get_app_info]
+```
+
+当前游戏目录切片：
+
+```text
+src/api/game.ts
+  getGameDirectoryStatus()
+  -> invoke<GameDirectoryStatus>("get_game_directory_status")
+
+  detectGameDirectory()
+  -> invoke<GameDirectoryStatus>("detect_game_directory")
+
+  saveGameDirectory(path)
+  -> invoke<GameDirectoryStatus>("save_game_directory", { path })
+
+src-tauri/src/commands/game.rs
+  #[tauri::command]
+  get_game_directory_status(app) -> Result<GameDirectoryStatus, String>
+  detect_game_directory(app) -> Result<GameDirectoryStatus, String>
+  save_game_directory(app, path) -> Result<GameDirectoryStatus, String>
+```
+
+## 薄端到端切片
+
+新增能力时优先做小而完整的链路，而不是先写一大片底层代码。
+
+推荐模板：
+
+```text
+Vue UI
+  -> src/api/* typed wrapper
+  -> Tauri command
+  -> Rust service
+  -> DTO response
+  -> Vue UI 状态展示
+```
+
+例如“检测 MHW 游戏目录”：
+
+1. Vue 页面触发检测。
+2. `src/api/game.ts` 调用 `invoke<GameDirectoryStatus>("save_game_directory", { path })`。
+3. Rust command 接收 `path`。
+4. Rust service 检查路径。
+5. 返回 DTO。
+6. Vue 显示成功、失败和原因。
+
+这个方式适合学习和验证，因为每次都能看到完整的数据流。
+
+## 验证标准
+
+按修改类型选择验证：
+
+- 只改 Markdown：阅读生成文件，确认链接、标题、术语一致。
+- 改 Vue/TypeScript：运行 `npm.cmd run build`。
+- 改 Tauri/Rust：运行 `cd src-tauri` 后的 `cargo check` 和 `cargo fmt`。
+- 改前后端通信：同时运行前端 build 和 Rust check，并手动启动 `npm.cmd run tauri:dev` 验证窗口行为。
+
+验证失败时，必须保留错误信息并先说明失败位置，再决定下一步。

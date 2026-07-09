@@ -11,6 +11,9 @@ pub fn run() {
             commands::game::detect_game_directory,
             commands::game::get_game_directory_status,
             commands::game::save_game_directory,
+            commands::mod_library::get_mod_library_status,
+            commands::mod_library::install_mod_from_folder,
+            commands::mod_library::preview_mod_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -127,6 +127,57 @@ Rust AppInfo
 
 禁用和卸载只能删除 Acumod 记录过的 `deployed_path`，不能扫描游戏目录后按猜测删除。
 
+当前存储位置分工：
+
+```text
+AppData/
+  config.json              小配置，例如 MHW 游戏目录
+
+<软件目录>/
+  AcumodData/
+    mods/
+      installed/           已导入并由 Acumod 管理的 MOD 副本
+      staging/
+        imports/           压缩包解包和导入预览的暂存目录
+```
+
+MOD 文件、导入暂存和后续备份可能很大，不放入 `AppData`。后续制作安装包时，需要确保软件目录对普通用户可写；如果安装到 `Program Files` 等受限目录，应提供 MOD 库位置设置或选择用户可写安装位置。
+
+## MOD 导入目录识别
+
+文件夹导入和压缩包导入应共用同一套目录识别规则。压缩包只负责先解包到暂存目录；解包后的目录树仍然走同一个识别入口。
+
+第一版识别顺序：
+
+1. 优先查找 `nativePC` 目录，并把其中的文件映射为 `nativePC/...`。
+2. 如果没有 `nativePC`，但内容根下出现 `weapon`、`wp`、`pl`、`plugins`、`common`、`npc`、`em`、`stage`、`sound`、`ui` 等常见 nativePC 内部目录，则自动补成 `nativePC/...`。
+3. 如果用户直接选择了 nativePC 内部目录本身，例如 `plugins/` 或 `weapon/`，则保留目录名并映射为 `nativePC/plugins/...` 或 `nativePC/weapon/...`。
+4. 如果出现多个同级候选内容根，不自动选择，返回候选列表让用户决定。
+5. 如果无法识别 `nativePC` 或常见内部目录，但目录内存在文件，则提示用户确认是否按游戏根目录相对路径导入。确认前不能自动执行。
+
+这个规则覆盖两类常见情况：
+
+```text
+导入内容/nativePC/weapon/...
+  -> nativePC/weapon/...
+
+导入内容/weapon/...
+  -> nativePC/weapon/...
+
+导入内容/nativePC/plugins/...
+用户直接选择 plugins/
+  -> nativePC/plugins/...
+```
+
+也保留游戏根目录 MOD：
+
+```text
+导入内容/dinput8.dll
+  -> dinput8.dll
+```
+
+游戏根目录 MOD 风险更高，因为它可能覆盖可执行文件同级内容，所以必须经过明确确认和路径预览。
+
 ## MHW 模型替换识别
 
 MHW 的模型替换 MOD 通常可以通过文件路径和文件 ID 判断它替换的是哪一个游戏内模型。Acumod 需要内置维护一份 MHW 文件 ID 表，把低层文件 ID 映射成用户能理解的名称。MVP 先覆盖武器、防具、发型替换；同一个 MOD 可能识别出多个替换目标。第一版只做识别和展示，不提供替换目标选择或改绑。
@@ -216,4 +267,22 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 
 这个切片能同时验证路径参数、错误处理、DTO、文件系统访问和 UI 展示，是后续 MOD 管理能力的基础。
 
-下一个推荐切片是“建立 Acumod 本地 MOD 库目录结构”，再接“文件夹 MOD 导入”。模型替换识别可以作为扫描能力稳定后的重点切片。
+第二个 MVP 切片是“MOD 库目录与导入内容识别预览”：
+
+1. Rust service 在软件目录旁的 `AcumodData/` 下创建 `mods/installed` 和 `mods/staging/imports`。
+2. 前端展示 MOD 库路径。
+3. 用户输入本地 MOD 文件夹。
+4. Rust service 识别 `nativePC`、常见 nativePC 内部目录、多候选目录和游戏根目录 fallback。
+5. Vue 展示部署路径预览，不真正安装、不写入游戏目录。
+
+第三个 MVP 切片是“文件夹 MOD 导入到本地 MOD 库”：
+
+1. Vue 在导入预览为 `ready` 后提供“导入到 MOD 库”入口。
+2. `src/api/modLibrary.ts` 调用 `install_mod_from_folder`。
+3. Rust command 接收 `path` 和 `allow_game_root`。
+4. Rust service 重新使用导入识别规则确认内容根，并收集完整文件列表。
+5. Rust service 将文件复制到 `AcumodData/mods/installed/<mod_id>/content/`。
+6. Rust service 写入 `manifest.json`，记录 MOD ID、名称、来源路径、内容根、识别方式、部署相对路径和启用状态。
+7. Vue 展示本地库目录、内容目录、manifest 路径和已导入文件预览。
+
+这个切片仍然只表示“安装到 Acumod 本地 MOD 库”，不表示“启用到 MHW 游戏目录”。压缩包导入可以在同一规则稳定后接入：先解包到 staging，再调用相同的导入识别和本地安装逻辑。

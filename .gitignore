@@ -23,3 +23,10 @@ target
 *.njsproj
 *.sln
 *.sw?
+
+# Local reference data copied from external sources.
+references/mhwi-data/raw/*
+!references/mhwi-data/raw/README.md
+
+# Local runtime data when running portable/dev builds from the repo root.
+AcumodData/

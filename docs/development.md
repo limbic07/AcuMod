@@ -119,6 +119,33 @@ src-tauri/src/commands/game.rs
   save_game_directory(app, path) -> Result<GameDirectoryStatus, String>
 ```
 
+当前 MOD 导入识别切片：
+
+```text
+src/api/modLibrary.ts
+  getModLibraryStatus()
+  -> invoke<ModLibraryStatus>("get_mod_library_status")
+
+  previewModImport(path, allowGameRoot)
+  -> invoke<ModImportPreview>("preview_mod_import", { path, allowGameRoot })
+
+  installModFromFolder(path, allowGameRoot)
+  -> invoke<ModInstallResult>("install_mod_from_folder", { path, allowGameRoot })
+
+src-tauri/src/commands/mod_library.rs
+  #[tauri::command]
+  get_mod_library_status(app) -> Result<ModLibraryStatus, String>
+  preview_mod_import(path, allow_game_root) -> Result<ModImportPreview, String>
+  install_mod_from_folder(app, path, allow_game_root) -> Result<ModInstallResult, String>
+
+src-tauri/src/services/mod_library.rs
+  创建 MOD 库目录
+  MOD 库位于软件目录旁的 AcumodData/，不放入 AppData
+  识别 nativePC、nativePC 内部目录、多候选目录和游戏根目录确认 fallback
+  将 ready 状态的文件夹 MOD 复制到 AcumodData/mods/installed/<mod_id>/content/
+  写入 manifest.json，记录来源、识别方式、部署相对路径和启用状态
+```
+
 ## 薄端到端切片
 
 新增能力时优先做小而完整的链路，而不是先写一大片底层代码。
@@ -144,6 +171,24 @@ Vue UI
 6. Vue 显示成功、失败和原因。
 
 这个方式适合学习和验证，因为每次都能看到完整的数据流。
+
+例如“预览 MOD 导入目录”：
+
+1. Vue 调用 `previewImportPath(false)`。
+2. `src/api/modLibrary.ts` 调用 `invoke<ModImportPreview>("preview_mod_import", { path, allowGameRoot })`。
+3. Rust command 接收 `path` 和 `allow_game_root`。
+4. Rust service 扫描目录并生成部署路径预览。
+5. 如果需要游戏根目录 fallback，Vue 先提示用户确认，再调用 `previewImportPath(true)`。
+
+例如“导入文件夹 MOD 到本地库”：
+
+1. Vue 在预览 `ready` 后调用 `installPreviewedMod()`。
+2. `src/api/modLibrary.ts` 调用 `invoke<ModInstallResult>("install_mod_from_folder", { path, allowGameRoot })`。
+3. Rust command 接收 `path` 和 `allow_game_root`。
+4. Rust service 复用预览识别规则，确认 MOD 内容根。
+5. Rust service 将文件复制到 `AcumodData/mods/installed/<mod_id>/content/`。
+6. Rust service 写入 `manifest.json`。
+7. Vue 显示 MOD ID、库内目录、manifest 路径和文件数。
 
 ## 验证标准
 

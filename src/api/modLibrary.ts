@@ -54,8 +54,31 @@ export interface ModInstallResult {
   message: string;
 }
 
+export interface InstalledModSummary {
+  id: string;
+  name: string;
+  modPath: string;
+  contentPath: string;
+  manifestPath: string;
+  fileCount: number;
+  enabled: boolean;
+  deployRoot: string;
+  detectionMethod: string;
+  installedAtUnixSeconds: number;
+}
+
+export interface InstalledModList {
+  mods: InstalledModSummary[];
+  warnings: string[];
+  message: string;
+}
+
 export function getModLibraryStatus(): Promise<ModLibraryStatus> {
   return invoke<ModLibraryStatus>("get_mod_library_status");
+}
+
+export function listInstalledMods(): Promise<InstalledModList> {
+  return invoke<InstalledModList>("list_installed_mods");
 }
 
 export function previewModImport(
@@ -73,6 +96,16 @@ export function installModFromFolder(
   allowGameRoot: boolean,
 ): Promise<ModInstallResult> {
   return invoke<ModInstallResult>("install_mod_from_folder", {
+    path,
+    allowGameRoot,
+  });
+}
+
+export function installModFromArchive(
+  path: string,
+  allowGameRoot: boolean,
+): Promise<ModInstallResult> {
+  return invoke<ModInstallResult>("install_mod_from_archive", {
     path,
     allowGameRoot,
   });

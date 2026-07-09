@@ -9,8 +9,11 @@ import {
 } from "./api/game";
 import {
   getModLibraryStatus,
+  installModFromArchive,
   installModFromFolder,
+  listInstalledMods,
   previewModImport,
+  type InstalledModList,
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
@@ -19,19 +22,23 @@ import {
 const appInfo = ref<AppInfo | null>(null);
 const gameStatus = ref<GameDirectoryStatus | null>(null);
 const modLibraryStatus = ref<ModLibraryStatus | null>(null);
+const installedModList = ref<InstalledModList | null>(null);
 const importPreview = ref<ModImportPreview | null>(null);
 const installResult = ref<ModInstallResult | null>(null);
 const manualPath = ref("");
 const importPath = ref("");
+const archivePath = ref("");
 const appError = ref("");
 const gameError = ref("");
 const modLibraryError = ref("");
 const importError = ref("");
+const archiveError = ref("");
 const isLoadingApp = ref(false);
 const isLoadingGame = ref(false);
 const isLoadingModLibrary = ref(false);
 const isPreviewingImport = ref(false);
 const isInstallingMod = ref(false);
+const isInstallingArchive = ref(false);
 
 const statusLabel = computed(() => {
   if (!gameStatus.value) {
@@ -87,6 +94,7 @@ const importStatusClass = computed(() => {
 
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
+const installedMods = computed(() => installedModList.value?.mods ?? []);
 
 async function loadAppInfo() {
   isLoadingApp.value = true;
@@ -125,6 +133,15 @@ async function loadModLibraryStatus() {
     modLibraryError.value = error instanceof Error ? error.message : String(error);
   } finally {
     isLoadingModLibrary.value = false;
+  }
+}
+
+async function loadInstalledMods() {
+  try {
+    installedModList.value = await listInstalledMods();
+    modLibraryError.value = "";
+  } catch (error) {
+    modLibraryError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -203,6 +220,7 @@ async function installPreviewedMod() {
     installResult.value = await installModFromFolder(importPath.value, allowGameRoot);
     importError.value = "";
     await loadModLibraryStatus();
+    await loadInstalledMods();
   } catch (error) {
     importError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -210,10 +228,27 @@ async function installPreviewedMod() {
   }
 }
 
+async function installArchive() {
+  isInstallingArchive.value = true;
+
+  try {
+    installResult.value = await installModFromArchive(archivePath.value, false);
+    archiveError.value = "";
+    importPreview.value = null;
+    await loadModLibraryStatus();
+    await loadInstalledMods();
+  } catch (error) {
+    archiveError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isInstallingArchive.value = false;
+  }
+}
+
 onMounted(() => {
   void loadAppInfo();
   void loadGameStatus();
   void loadModLibraryStatus();
+  void loadInstalledMods();
 });
 </script>
 
@@ -309,6 +344,23 @@ onMounted(() => {
         </div>
       </form>
 
+      <form class="path-form" @submit.prevent="installArchive">
+        <label for="archive-path">本地 MOD 压缩包</label>
+        <div class="path-row">
+          <input
+            id="archive-path"
+            v-model.trim="archivePath"
+            type="text"
+            autocomplete="off"
+            placeholder="D:\Downloads\Cool Sword Mod.zip"
+          />
+          <button type="submit" :disabled="isInstallingArchive || !archivePath">
+            {{ isInstallingArchive ? "解包导入中" : "导入压缩包" }}
+          </button>
+        </div>
+        <p class="hint">支持 .zip / .7z / .rar；通过 Acumod 内置解包组件处理。</p>
+      </form>
+
       <div
         v-if="importPreview?.requiresGameRootConfirmation"
         class="notice warning-notice"
@@ -328,6 +380,7 @@ onMounted(() => {
 
       <p v-if="modLibraryError" class="error">{{ modLibraryError }}</p>
       <p v-if="importError" class="error">{{ importError }}</p>
+      <p v-if="archiveError" class="error">{{ archiveError }}</p>
 
       <dl v-if="modLibraryStatus" class="facts">
         <div>
@@ -424,6 +477,36 @@ onMounted(() => {
           <li v-for="file in installedFiles" :key="file.libraryRelativePath">
             <span>{{ file.deployRelativePath }}</span>
             <strong>{{ file.libraryRelativePath }}</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div class="preview-block">
+        <div class="section-title-row">
+          <h3>已安装 MOD</h3>
+          <button type="button" class="secondary-button" @click="loadInstalledMods">刷新</button>
+        </div>
+        <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
+        <ul v-if="installedMods.length" class="mod-list">
+          <li v-for="mod in installedMods" :key="mod.id">
+            <div>
+              <strong>{{ mod.name }}</strong>
+              <span>{{ mod.id }}</span>
+            </div>
+            <div>
+              <span>{{ mod.fileCount }} files</span>
+              <span>{{ mod.enabled ? "已启用" : "未启用" }}</span>
+              <span>{{ mod.deployRoot }}</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="installedModList?.warnings.length" class="preview-block">
+        <h3>MOD 库警告</h3>
+        <ul class="compact-list">
+          <li v-for="warning in installedModList.warnings" :key="warning">
+            <span>{{ warning }}</span>
           </li>
         </ul>
       </div>
@@ -617,6 +700,14 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.secondary-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-color: #cbd8d4;
+  color: #24745b;
+  background: #ffffff;
+}
+
 .facts {
   display: grid;
   gap: 0;
@@ -648,6 +739,12 @@ dd {
   color: #b42318;
 }
 
+.hint {
+  margin-top: 8px;
+  color: #61756f;
+  font-size: 0.88rem;
+}
+
 .notice {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -676,8 +773,16 @@ dd {
   margin-top: 20px;
 }
 
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .file-preview,
-.compact-list {
+.compact-list,
+.mod-list {
   display: grid;
   gap: 8px;
   margin: 0;
@@ -686,7 +791,8 @@ dd {
 }
 
 .file-preview li,
-.compact-list li {
+.compact-list li,
+.mod-list li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 0.55fr);
   gap: 12px;
@@ -700,10 +806,35 @@ dd {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.mod-list li {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.mod-list li div {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mod-list li div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.mod-list li span {
+  min-width: 0;
+  color: #52645f;
+  overflow-wrap: anywhere;
+}
+
 .file-preview span,
 .file-preview strong,
 .compact-list span,
-.compact-list strong {
+.compact-list strong,
+.mod-list strong {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -729,13 +860,18 @@ dd {
   .path-row,
   .notice,
   .file-preview li,
-  .compact-list li {
+  .compact-list li,
+  .mod-list li {
     grid-template-columns: 1fr;
   }
 
   .topbar,
   .panel-heading,
   .notice {
+    display: grid;
+  }
+
+  .section-title-row {
     display: grid;
   }
 

@@ -126,17 +126,25 @@ src/api/modLibrary.ts
   getModLibraryStatus()
   -> invoke<ModLibraryStatus>("get_mod_library_status")
 
+  listInstalledMods()
+  -> invoke<InstalledModList>("list_installed_mods")
+
   previewModImport(path, allowGameRoot)
   -> invoke<ModImportPreview>("preview_mod_import", { path, allowGameRoot })
 
   installModFromFolder(path, allowGameRoot)
   -> invoke<ModInstallResult>("install_mod_from_folder", { path, allowGameRoot })
 
+  installModFromArchive(path, allowGameRoot)
+  -> invoke<ModInstallResult>("install_mod_from_archive", { path, allowGameRoot })
+
 src-tauri/src/commands/mod_library.rs
   #[tauri::command]
   get_mod_library_status(app) -> Result<ModLibraryStatus, String>
+  list_installed_mods(app) -> Result<InstalledModList, String>
   preview_mod_import(path, allow_game_root) -> Result<ModImportPreview, String>
   install_mod_from_folder(app, path, allow_game_root) -> Result<ModInstallResult, String>
+  install_mod_from_archive(app, path, allow_game_root) -> Result<ModInstallResult, String>
 
 src-tauri/src/services/mod_library.rs
   创建 MOD 库目录
@@ -144,6 +152,8 @@ src-tauri/src/services/mod_library.rs
   识别 nativePC、nativePC 内部目录、多候选目录和游戏根目录确认 fallback
   将 ready 状态的文件夹 MOD 复制到 AcumodData/mods/installed/<mod_id>/content/
   写入 manifest.json，记录来源、识别方式、部署相对路径和启用状态
+  读取 installed/*/manifest.json 生成已安装 MOD 列表
+  使用 Acumod 内置 7-Zip 解包组件解包 .zip/.7z/.rar，再复用文件夹导入逻辑
 ```
 
 ## 薄端到端切片
@@ -189,6 +199,25 @@ Vue UI
 5. Rust service 将文件复制到 `AcumodData/mods/installed/<mod_id>/content/`。
 6. Rust service 写入 `manifest.json`。
 7. Vue 显示 MOD ID、库内目录、manifest 路径和文件数。
+
+例如“显示已安装 MOD 列表”：
+
+1. Vue 挂载后调用 `loadInstalledMods()`。
+2. `src/api/modLibrary.ts` 调用 `invoke<InstalledModList>("list_installed_mods")`。
+3. Rust service 扫描 `AcumodData/mods/installed/`。
+4. Rust service 读取每个 `manifest.json`。
+5. Vue 显示 MOD 名称、ID、文件数、启用状态和部署根。
+
+例如“导入压缩包 MOD”：
+
+1. Vue 调用 `installArchive()`。
+2. `src/api/modLibrary.ts` 调用 `invoke<ModInstallResult>("install_mod_from_archive", { path, allowGameRoot })`。
+3. Rust service 校验 `.zip/.7z/.rar` 扩展名。
+4. Rust service 调用 Acumod 内置 7-Zip 解包组件，解包到 `AcumodData/mods/staging/imports/`。
+5. Rust service 复用文件夹导入识别和本地安装逻辑。
+6. Vue 刷新已安装 MOD 列表。
+
+当前压缩包导入不新增 Rust 依赖，但开发和发布包中需要提供 `resources/unpackers/7zip/7z.exe`、`7z.dll` 和 7-Zip 许可文件。用户不需要单独安装 7-Zip。
 
 ## 验证标准
 

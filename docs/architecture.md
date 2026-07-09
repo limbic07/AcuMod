@@ -286,3 +286,22 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 7. Vue 展示本地库目录、内容目录、manifest 路径和已导入文件预览。
 
 这个切片仍然只表示“安装到 Acumod 本地 MOD 库”，不表示“启用到 MHW 游戏目录”。压缩包导入可以在同一规则稳定后接入：先解包到 staging，再调用相同的导入识别和本地安装逻辑。
+
+第四个 MVP 切片是“已安装 MOD 列表”：
+
+1. Rust service 扫描 `AcumodData/mods/installed/`。
+2. 每个 MOD 目录必须包含 `manifest.json`。
+3. Rust service 读取 manifest，返回 MOD ID、名称、文件数、启用状态、部署根、识别方式和库内路径。
+4. Vue 展示已安装 MOD 列表，并提供刷新入口。
+
+第五个 MVP 切片是“压缩包 MOD 导入”：
+
+1. Vue 提供 `.zip`、`.7z`、`.rar` 压缩包路径输入。
+2. `src/api/modLibrary.ts` 调用 `install_mod_from_archive`。
+3. Rust service 校验压缩包存在且扩展名受支持。
+4. Rust service 查找 Acumod 随包携带的 7-Zip 解包组件：`resources/unpackers/7zip/7z.exe` 和 `7z.dll`。
+5. Rust service 将压缩包解包到 `AcumodData/mods/staging/imports/<archive>-<stamp>/`。
+6. 解包后的目录继续走文件夹导入识别和本地安装逻辑。
+7. manifest 的 `source_path` 记录原始压缩包路径，`content_root_path` 记录解包后识别出的内容根。
+
+当前没有新增 Rust 解包依赖。Acumod 采用随安装包分发解包组件的方式，避免要求用户另行安装 7-Zip；代价是发布包会增加几 MB，并且需要随包保留 7-Zip 许可文件。

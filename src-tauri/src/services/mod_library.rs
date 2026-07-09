@@ -3,10 +3,12 @@ use std::{
     collections::HashSet,
     env, fs,
     path::{Component, Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 const PREVIEW_FILE_LIMIT: usize = 200;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
@@ -77,6 +79,29 @@ pub struct ModInstallResult {
     pub manifest_path: String,
     pub file_count: usize,
     pub files: Vec<InstalledModFile>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledModSummary {
+    pub id: String,
+    pub name: String,
+    pub mod_path: String,
+    pub content_path: String,
+    pub manifest_path: String,
+    pub file_count: usize,
+    pub enabled: bool,
+    pub deploy_root: String,
+    pub detection_method: String,
+    pub installed_at_unix_seconds: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledModList {
+    pub mods: Vec<InstalledModSummary>,
+    pub warnings: Vec<String>,
     pub message: String,
 }
 
@@ -185,10 +210,65 @@ pub fn install_mod_from_folder(
     install_mod_from_folder_into(raw_path, allow_game_root, &paths.installed_path)
 }
 
+pub fn install_mod_from_archive(
+    app: &tauri::AppHandle,
+    raw_path: String,
+    allow_game_root: bool,
+) -> Result<ModInstallResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let archive_path = normalize_user_path(&raw_path);
+    let archive_path = validate_archive_path(&archive_path)?;
+    let archive_name = derive_mod_name(&archive_path);
+    let staging_path = paths
+        .import_staging_path
+        .join(unique_mod_id(&archive_name)?);
+
+    fs::create_dir_all(&staging_path).map_err(|error| {
+        format!(
+            "Could not create archive staging directory {}: {error}",
+            staging_path.display()
+        )
+    })?;
+
+    let result = (|| {
+        extract_archive_with_bundled_7zip(app, &archive_path, &staging_path)?;
+        install_mod_from_folder_into_with_options(
+            path_to_string(&staging_path),
+            allow_game_root,
+            &paths.installed_path,
+            Some(archive_name),
+            Some(path_to_string(&archive_path)),
+        )
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging_path);
+    }
+
+    result
+}
+
+pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    list_installed_mods_from(&paths.installed_path)
+}
+
 fn install_mod_from_folder_into(
     raw_path: String,
     allow_game_root: bool,
     installed_root: &Path,
+) -> Result<ModInstallResult, String> {
+    install_mod_from_folder_into_with_options(raw_path, allow_game_root, installed_root, None, None)
+}
+
+fn install_mod_from_folder_into_with_options(
+    raw_path: String,
+    allow_game_root: bool,
+    installed_root: &Path,
+    preferred_name: Option<String>,
+    original_source_path: Option<String>,
 ) -> Result<ModInstallResult, String> {
     let preview = preview_mod_import(raw_path, allow_game_root)?;
 
@@ -212,7 +292,7 @@ fn install_mod_from_folder_into(
     }
 
     let source_path = PathBuf::from(&preview.source_path);
-    let mod_name = derive_mod_name(&source_path);
+    let mod_name = preferred_name.unwrap_or_else(|| derive_mod_name(&source_path));
     let mod_id = unique_mod_id(&mod_name)?;
     let final_mod_path = installed_root.join(&mod_id);
     let temp_mod_path = installed_root.join(format!(".{mod_id}.tmp"));
@@ -276,7 +356,7 @@ fn install_mod_from_folder_into(
             schema_version: 1,
             id: mod_id.clone(),
             name: mod_name.clone(),
-            source_path: preview.source_path.clone(),
+            source_path: original_source_path.unwrap_or_else(|| preview.source_path.clone()),
             content_root_path,
             detection_method: preview.detection_method.clone(),
             deploy_root: preview.deploy_root.clone(),
@@ -668,6 +748,195 @@ fn common_native_pc_child_name(path: &Path) -> Option<String> {
         .then(|| normalized_name)
 }
 
+fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, String> {
+    let mut mods = Vec::new();
+    let mut warnings = Vec::new();
+
+    if !installed_root.exists() {
+        return Ok(InstalledModList {
+            mods,
+            warnings,
+            message: "No installed MOD directory exists yet.".to_string(),
+        });
+    }
+
+    let entries = fs::read_dir(installed_root).map_err(|error| {
+        format!(
+            "Could not read installed MOD directory {}: {error}",
+            installed_root.display()
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not read entry under {}: {error}",
+                installed_root.display()
+            )
+        })?;
+        let mod_path = entry.path();
+
+        if !mod_path.is_dir()
+            || mod_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with('.'))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let manifest_path = mod_path.join("manifest.json");
+
+        if !manifest_path.is_file() {
+            warnings.push(format!(
+                "Skipped installed MOD without manifest: {}",
+                mod_path.display()
+            ));
+            continue;
+        }
+
+        let manifest_json = fs::read_to_string(&manifest_path).map_err(|error| {
+            format!(
+                "Could not read MOD manifest {}: {error}",
+                manifest_path.display()
+            )
+        })?;
+        let manifest =
+            serde_json::from_str::<InstalledModManifest>(&manifest_json).map_err(|error| {
+                format!(
+                    "Could not parse MOD manifest {}: {error}",
+                    manifest_path.display()
+                )
+            })?;
+
+        mods.push(InstalledModSummary {
+            id: manifest.id,
+            name: manifest.name,
+            mod_path: path_to_string(&mod_path),
+            content_path: path_to_string(&mod_path.join("content")),
+            manifest_path: path_to_string(&manifest_path),
+            file_count: manifest.file_count,
+            enabled: manifest.enabled,
+            deploy_root: manifest.deploy_root,
+            detection_method: manifest.detection_method,
+            installed_at_unix_seconds: manifest.installed_at_unix_seconds,
+        });
+    }
+
+    mods.sort_by(|left, right| {
+        right
+            .installed_at_unix_seconds
+            .cmp(&left.installed_at_unix_seconds)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    let message = if mods.is_empty() {
+        "No MODs have been imported into the local library yet.".to_string()
+    } else {
+        format!("{} MOD(s) are installed in the local library.", mods.len())
+    };
+
+    Ok(InstalledModList {
+        mods,
+        warnings,
+        message,
+    })
+}
+
+fn validate_archive_path(path: &Path) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() {
+        return Err("Choose a MOD archive before importing.".to_string());
+    }
+
+    if !path.exists() {
+        return Err(format!("Archive does not exist: {}", path.display()));
+    }
+
+    if !path.is_file() {
+        return Err(format!("Archive path is not a file: {}", path.display()));
+    }
+
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .ok_or_else(|| format!("Archive has no extension: {}", path.display()))?;
+
+    if !matches!(extension.as_str(), "zip" | "7z" | "rar") {
+        return Err(format!(
+            "Unsupported archive extension .{extension}. Supported: .zip, .7z, .rar."
+        ));
+    }
+
+    path.canonicalize()
+        .map_err(|error| format!("Could not resolve archive path {}: {error}", path.display()))
+}
+
+fn extract_archive_with_bundled_7zip(
+    app: &tauri::AppHandle,
+    archive_path: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let seven_zip = bundled_7zip_executable(app).ok_or_else(|| {
+        "Bundled 7-Zip unpacker is missing. Expected resources/unpackers/7zip/7z.exe and 7z.dll in the Acumod application resources.".to_string()
+    })?;
+    let output = Command::new(&seven_zip)
+        .arg("x")
+        .arg("-y")
+        .arg(format!("-o{}", destination.display()))
+        .arg(archive_path)
+        .output()
+        .map_err(|error| {
+            format!(
+                "Could not run bundled unpacker {}: {error}",
+                seven_zip.display()
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    Err(format!(
+        "Bundled 7-Zip could not extract archive {}.\nstdout: {}\nstderr: {}",
+        archive_path.display(),
+        stdout.trim(),
+        stderr.trim()
+    ))
+}
+
+fn bundled_7zip_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
+    bundled_resource_candidates(app)
+        .into_iter()
+        .map(|base| base.join("unpackers").join("7zip").join("7z.exe"))
+        .find(|path| path.is_file())
+}
+
+fn bundled_resource_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir);
+    }
+
+    if let Ok(current_dir) = env::current_dir() {
+        candidates.push(current_dir.join("resources"));
+        candidates.push(current_dir.join("src-tauri").join("resources"));
+    }
+
+    if let Ok(executable_path) = env::current_exe() {
+        if let Some(executable_dir) = executable_path.parent() {
+            candidates.push(executable_dir.join("resources"));
+        }
+    }
+
+    candidates
+}
+
 fn deploy_root_from_preview(
     preview: &ModImportPreview,
     source_root: &Path,
@@ -752,9 +1021,13 @@ fn normalize_user_path(path: &str) -> PathBuf {
 }
 
 fn derive_mod_name(source_path: &Path) -> String {
-    source_path
-        .file_name()
-        .and_then(|name| name.to_str())
+    let name = if source_path.is_file() {
+        source_path.file_stem()
+    } else {
+        source_path.file_name()
+    };
+
+    name.and_then(|name| name.to_str())
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .unwrap_or("Imported MOD")
@@ -865,7 +1138,10 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{install_mod_from_folder_into, preview_mod_import};
+    use super::{
+        install_mod_from_folder_into, list_installed_mods_from, preview_mod_import,
+        validate_archive_path,
+    };
 
     #[test]
     fn previews_native_pc_directory() {
@@ -996,6 +1272,40 @@ mod tests {
 
         cleanup(root);
         cleanup(installed_root);
+    }
+
+    #[test]
+    fn lists_installed_mods_from_manifests() {
+        let root = temp_root("list_source");
+        let installed_root = temp_root("list_target");
+        write_file(&root.join("nativePC").join("weapon").join("sword.mod3"));
+        install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+
+        let list = list_installed_mods_from(&installed_root).unwrap();
+
+        assert_eq!(list.mods.len(), 1);
+        assert_eq!(
+            list.mods[0].name,
+            root.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(list.mods[0].file_count, 1);
+        assert!(!list.mods[0].enabled);
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn rejects_unsupported_archive_extension() {
+        let root = temp_root("archive_extension");
+        let archive_path = root.join("not-a-mod.txt");
+        write_file(&archive_path);
+
+        let error = validate_archive_path(&archive_path).unwrap_err();
+
+        assert!(error.contains("Unsupported archive extension"));
+
+        cleanup(root);
     }
 
     fn temp_root(name: &str) -> PathBuf {

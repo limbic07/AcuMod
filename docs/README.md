@@ -25,7 +25,7 @@
 - MOD 库、导入预览和本地安装命令：`src-tauri/src/commands/mod_library.rs`
 - MOD 库、导入预览和本地安装 service：`src-tauri/src/services/mod_library.rs`
 
-当前第三个切片已经支持把文件夹 MOD 导入到 Acumod 本地 MOD 库。该切片复用导入路径预览规则，把文件复制到 `AcumodData/mods/installed/<mod_id>/content/`，并写入 `manifest.json`；暂时仍不写入 MHW 游戏目录。
+当前第五个切片已经支持本地 MOD 库列表和压缩包导入。文件夹 MOD 会复制到 `AcumodData/mods/installed/<mod_id>/content/` 并写入 `manifest.json`；已安装列表从 manifest 读取；`.zip`、`.7z`、`.rar` 压缩包会先通过 Acumod 内置解包组件解包到 `AcumodData/mods/staging/imports/`，再复用同一套导入识别和本地安装逻辑。暂时仍不写入 MHW 游戏目录。
 
 ## 文档阅读顺序
 
@@ -52,7 +52,7 @@
 - MVP 存储策略：先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和部署记录；后续需要复杂查询时再考虑 SQLite。
 - 存储位置：`AppData` 只保存 `config.json` 等小配置；MOD 库、导入暂存和后续备份放在软件目录旁的 `AcumodData/` 下。
 - MOD 部署方式：只使用复制式部署。安装时在 Acumod 软件目录保存一份 MOD；启用时复制到 MHW 游戏目录；禁用时删除游戏目录中的已部署副本；卸载 MOD 时删除软件目录中的 MOD 副本。
-- MOD 导入方式：第一版必须支持文件夹导入，以及 `rar`、`zip`、`7z` 压缩包导入。
+- MOD 导入方式：第一版支持文件夹导入，以及 `rar`、`zip`、`7z` 压缩包导入；当前压缩包导入使用随 Acumod 打包的 7-Zip 解包组件，不要求用户另行安装 7-Zip。
 - MOD 导入识别：优先识别 `nativePC`；缺少 `nativePC` 但出现常见 nativePC 内部目录时自动补成 `nativePC/...`；用户直接选择 `plugins`、`weapon` 等内部目录时保留目录名并映射到 `nativePC/<目录名>/...`；仍无法识别时允许用户确认按游戏根目录相对路径导入。
 - MHW 模型替换识别：内置维护 MHW 文件 ID 表，用于识别模型替换 MOD 对应的游戏装备或模型名称；第一版覆盖武器、防具、发型替换；第一版只识别，不提供替换目标选择或改绑。
 - 第一版只保留单 Profile：首期只维护当前这一套启用状态和排序；多 Profile 后续可以做。

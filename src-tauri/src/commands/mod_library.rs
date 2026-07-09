@@ -1,4 +1,6 @@
-use crate::services::mod_library::{self, ModImportPreview, ModInstallResult, ModLibraryStatus};
+use crate::services::mod_library::{
+    self, InstalledModList, ModImportPreview, ModInstallResult, ModLibraryStatus,
+};
 
 #[tauri::command]
 pub fn get_mod_library_status(app: tauri::AppHandle) -> Result<ModLibraryStatus, String> {
@@ -17,4 +19,18 @@ pub fn install_mod_from_folder(
     allow_game_root: bool,
 ) -> Result<ModInstallResult, String> {
     mod_library::install_mod_from_folder(&app, path, allow_game_root)
+}
+
+#[tauri::command]
+pub fn install_mod_from_archive(
+    app: tauri::AppHandle,
+    path: String,
+    allow_game_root: bool,
+) -> Result<ModInstallResult, String> {
+    mod_library::install_mod_from_archive(&app, path, allow_game_root)
+}
+
+#[tauri::command]
+pub fn list_installed_mods(app: tauri::AppHandle) -> Result<InstalledModList, String> {
+    mod_library::list_installed_mods(&app)
 }

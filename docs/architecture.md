@@ -327,3 +327,13 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 5. 部署清理完成后，Rust service 删除 `AcumodData/mods/installed/<mod_id>/`，也就是 Acumod 管理的本地 MOD 副本。
 
 卸载不扫描 MHW 游戏目录，不根据 MOD 名称猜测删除文件；它只处理 manifest 中记录过的部署文件和 Acumod 本地库中的对应 MOD 目录。
+
+第八个 MVP 切片是“一键还原纯净状态”：
+
+1. Vue 在已安装 MOD 区域提供一键还原入口。
+2. `src/api/modLibrary.ts` 调用 `preview_restore_all_mods` 和 `restore_all_mods`。
+3. Rust service 扫描 Acumod 本地 MOD 库中的所有 manifest，找出仍处于启用状态或仍有 `deployedFiles` 记录的 MOD。
+4. 预览阶段只返回会影响的 MOD 数量和部署文件数量，不写入游戏目录。
+5. 用户确认后，Rust service 复用部署记录清理逻辑，删除所有记录过的游戏目录部署文件，并把相关 MOD 标记为未启用、清空 `deployedFiles`。
+
+一键还原不扫描或猜测 MHW 游戏目录中的未知文件，因此它只能还原 Acumod 记录过的部署内容。手动安装的文件或其他工具安装的文件不会被删除。

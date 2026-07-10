@@ -178,6 +178,35 @@ pub struct ModUninstallResult {
     pub message: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreModPlanItem {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub deployed_file_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreAllPlan {
+    pub affected_mod_count: usize,
+    pub deployed_file_count: usize,
+    pub mods: Vec<RestoreModPlanItem>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreAllResult {
+    pub affected_mod_count: usize,
+    pub removed_deployed_file_count: usize,
+    pub mods: Vec<RestoreModPlanItem>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstalledModManifest {
@@ -384,6 +413,19 @@ pub fn uninstall_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModUninst
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
     uninstall_mod_from(&paths.installed_path, &game_root, &mod_id)
+}
+
+pub fn preview_restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    preview_restore_all_mods_from(&paths.installed_path)
+}
+
+pub fn restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    restore_all_mods_from(&paths.installed_path, &game_root)
 }
 
 fn install_mod_from_folder_into(
@@ -1137,6 +1179,79 @@ fn uninstall_mod_from(
     })
 }
 
+fn preview_restore_all_mods_from(installed_root: &Path) -> Result<RestoreAllPlan, String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let mods = restore_plan_items(&contexts);
+    let deployed_file_count = mods.iter().map(|item| item.deployed_file_count).sum();
+    let message = if mods.is_empty() {
+        "No enabled or deployed MODs were found.".to_string()
+    } else {
+        format!(
+            "Restore will disable {} MOD(s) and remove {} recorded deployed file(s).",
+            mods.len(),
+            deployed_file_count
+        )
+    };
+
+    Ok(RestoreAllPlan {
+        affected_mod_count: mods.len(),
+        deployed_file_count,
+        mods,
+        warnings: Vec::new(),
+        message,
+    })
+}
+
+fn restore_all_mods_from(
+    installed_root: &Path,
+    game_root: &Path,
+) -> Result<RestoreAllResult, String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let plan_mods = restore_plan_items(&contexts);
+    let mut warnings = Vec::new();
+    let mut removed_deployed_file_count = 0;
+
+    for mut context in contexts {
+        if !context.manifest.enabled && context.manifest.deployed_files.is_empty() {
+            continue;
+        }
+
+        let deployed_files = context.manifest.deployed_files.clone();
+        removed_deployed_file_count +=
+            remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
+        context.manifest.enabled = false;
+        context.manifest.deployed_files = Vec::new();
+        save_manifest(&context.manifest_path, &context.manifest)?;
+    }
+
+    let message = if plan_mods.is_empty() {
+        "No enabled or deployed MODs needed restoring.".to_string()
+    } else {
+        "All recorded deployed MOD files were removed and affected MODs were disabled.".to_string()
+    };
+
+    Ok(RestoreAllResult {
+        affected_mod_count: plan_mods.len(),
+        removed_deployed_file_count,
+        mods: plan_mods,
+        warnings,
+        message,
+    })
+}
+
+fn restore_plan_items(contexts: &[InstalledManifestContext]) -> Vec<RestoreModPlanItem> {
+    contexts
+        .iter()
+        .filter(|context| context.manifest.enabled || !context.manifest.deployed_files.is_empty())
+        .map(|context| RestoreModPlanItem {
+            mod_id: context.manifest.id.clone(),
+            name: context.manifest.name.clone(),
+            enabled: context.manifest.enabled,
+            deployed_file_count: context.manifest.deployed_files.len(),
+        })
+        .collect()
+}
+
 fn remove_deployed_files(
     game_root: &Path,
     deployed_files: &[DeployedModFile],
@@ -1333,6 +1448,66 @@ fn load_installed_manifest(
         manifest_path,
         manifest,
     })
+}
+
+fn load_all_installed_manifests(
+    installed_root: &Path,
+) -> Result<Vec<InstalledManifestContext>, String> {
+    let mut contexts = Vec::new();
+
+    if !installed_root.exists() {
+        return Ok(contexts);
+    }
+
+    for entry in fs::read_dir(installed_root).map_err(|error| {
+        format!(
+            "Could not read installed MOD directory {}: {error}",
+            installed_root.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not read entry under {}: {error}",
+                installed_root.display()
+            )
+        })?;
+        let mod_path = entry.path();
+
+        if !mod_path.is_dir()
+            || mod_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with('.'))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let Some(mod_id) = mod_path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if !mod_path.join("manifest.json").is_file() {
+            continue;
+        }
+
+        contexts.push(load_installed_manifest(installed_root, mod_id)?);
+    }
+
+    contexts.sort_by(|left, right| {
+        right
+            .manifest
+            .installed_at_unix_seconds
+            .cmp(&left.manifest.installed_at_unix_seconds)
+            .then_with(|| {
+                left.manifest
+                    .name
+                    .to_lowercase()
+                    .cmp(&right.manifest.name.to_lowercase())
+            })
+    });
+
+    Ok(contexts)
 }
 
 fn read_manifest(manifest_path: &Path) -> Result<InstalledModManifest, String> {
@@ -1790,8 +1965,9 @@ mod tests {
 
     use super::{
         disable_mod_from, enable_mod_from, install_mod_from_folder_into, list_installed_mods_from,
-        preview_enable_mod_from, preview_mod_import, preview_uninstall_mod_from,
-        uninstall_mod_from, validate_archive_path,
+        preview_enable_mod_from, preview_mod_import, preview_restore_all_mods_from,
+        preview_uninstall_mod_from, restore_all_mods_from, uninstall_mod_from,
+        validate_archive_path,
     };
 
     #[test]
@@ -2130,6 +2306,96 @@ mod tests {
             .exists());
 
         cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn previews_restore_all_enabled_mods() {
+        let first_source = temp_root("restore_preview_first_source");
+        let second_source = temp_root("restore_preview_second_source");
+        let installed_root = temp_root("restore_preview_installed");
+        let game_root = temp_root("restore_preview_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("first.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("second.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, false).unwrap();
+
+        let plan = preview_restore_all_mods_from(&installed_root).unwrap();
+
+        assert_eq!(plan.affected_mod_count, 2);
+        assert_eq!(plan.deployed_file_count, 2);
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn restore_all_disables_mods_and_removes_recorded_deployments() {
+        let first_source = temp_root("restore_execute_first_source");
+        let second_source = temp_root("restore_execute_second_source");
+        let installed_root = temp_root("restore_execute_installed");
+        let game_root = temp_root("restore_execute_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("first.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("second.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, false).unwrap();
+
+        let result = restore_all_mods_from(&installed_root, &game_root).unwrap();
+        let list = list_installed_mods_from(&installed_root).unwrap();
+
+        assert_eq!(result.affected_mod_count, 2);
+        assert_eq!(result.removed_deployed_file_count, 2);
+        assert!(list.mods.iter().all(|mod_summary| !mod_summary.enabled));
+        assert!(!game_root
+            .join("nativePC")
+            .join("weapon")
+            .join("first.mod3")
+            .exists());
+        assert!(!game_root
+            .join("nativePC")
+            .join("weapon")
+            .join("second.mod3")
+            .exists());
+
+        cleanup(first_source);
+        cleanup(second_source);
         cleanup(installed_root);
         cleanup(game_root);
     }

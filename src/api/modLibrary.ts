@@ -131,6 +131,29 @@ export interface ModUninstallResult {
   message: string;
 }
 
+export interface RestoreModPlanItem {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  deployedFileCount: number;
+}
+
+export interface RestoreAllPlan {
+  affectedModCount: number;
+  deployedFileCount: number;
+  mods: RestoreModPlanItem[];
+  warnings: string[];
+  message: string;
+}
+
+export interface RestoreAllResult {
+  affectedModCount: number;
+  removedDeployedFileCount: number;
+  mods: RestoreModPlanItem[];
+  warnings: string[];
+  message: string;
+}
+
 export function getModLibraryStatus(): Promise<ModLibraryStatus> {
   return invoke<ModLibraryStatus>("get_mod_library_status");
 }
@@ -201,4 +224,12 @@ export function uninstallMod(modId: string): Promise<ModUninstallResult> {
   return invoke<ModUninstallResult>("uninstall_mod", {
     modId,
   });
+}
+
+export function previewRestoreAllMods(): Promise<RestoreAllPlan> {
+  return invoke<RestoreAllPlan>("preview_restore_all_mods");
+}
+
+export function restoreAllMods(): Promise<RestoreAllResult> {
+  return invoke<RestoreAllResult>("restore_all_mods");
 }

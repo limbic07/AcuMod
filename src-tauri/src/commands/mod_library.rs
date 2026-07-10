@@ -1,6 +1,7 @@
 use crate::services::mod_library::{
     self, InstalledModList, ModDeploymentPlan, ModDeploymentResult, ModImportPreview,
-    ModInstallResult, ModLibraryStatus, ModUninstallPlan, ModUninstallResult,
+    ModInstallResult, ModLibraryStatus, ModUninstallPlan, ModUninstallResult, RestoreAllPlan,
+    RestoreAllResult,
 };
 
 #[tauri::command]
@@ -69,4 +70,14 @@ pub fn preview_uninstall_mod(
 #[tauri::command]
 pub fn uninstall_mod(app: tauri::AppHandle, mod_id: String) -> Result<ModUninstallResult, String> {
     mod_library::uninstall_mod(&app, mod_id)
+}
+
+#[tauri::command]
+pub fn preview_restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllPlan, String> {
+    mod_library::preview_restore_all_mods(&app)
+}
+
+#[tauri::command]
+pub fn restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllResult, String> {
+    mod_library::restore_all_mods(&app)
 }

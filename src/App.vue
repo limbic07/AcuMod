@@ -16,7 +16,9 @@ import {
   listInstalledMods,
   previewEnableMod,
   previewModImport,
+  previewRestoreAllMods,
   previewUninstallMod,
+  restoreAllMods,
   uninstallMod,
   type InstalledModList,
   type InstalledModSummary,
@@ -27,6 +29,8 @@ import {
   type ModLibraryStatus,
   type ModUninstallPlan,
   type ModUninstallResult,
+  type RestoreAllPlan,
+  type RestoreAllResult,
 } from "./api/modLibrary";
 
 const appInfo = ref<AppInfo | null>(null);
@@ -39,6 +43,8 @@ const deploymentPlan = ref<ModDeploymentPlan | null>(null);
 const deploymentResult = ref<ModDeploymentResult | null>(null);
 const uninstallPlan = ref<ModUninstallPlan | null>(null);
 const uninstallResult = ref<ModUninstallResult | null>(null);
+const restorePlan = ref<RestoreAllPlan | null>(null);
+const restoreResult = ref<RestoreAllResult | null>(null);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
@@ -55,6 +61,7 @@ const isPreviewingImport = ref(false);
 const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
 const activeModAction = ref("");
+const isRestoringAll = ref(false);
 
 const statusLabel = computed(() => {
   if (!gameStatus.value) {
@@ -114,6 +121,8 @@ const installedMods = computed(() => installedModList.value?.mods ?? []);
 const deploymentPlanFiles = computed(() => deploymentPlan.value?.files.slice(0, 12) ?? []);
 const deployedFiles = computed(() => deploymentResult.value?.files.slice(0, 12) ?? []);
 const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.slice(0, 12) ?? []);
+const restorePlanMods = computed(() => restorePlan.value?.mods.slice(0, 12) ?? []);
+const restoreResultMods = computed(() => restoreResult.value?.mods.slice(0, 12) ?? []);
 
 async function loadAppInfo() {
   isLoadingApp.value = true;
@@ -346,6 +355,40 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
     activeModAction.value = "";
+  }
+}
+
+async function restoreAllInstalledMods() {
+  isRestoringAll.value = true;
+
+  try {
+    restoreResult.value = null;
+    const plan = await previewRestoreAllMods();
+    restorePlan.value = plan;
+    deploymentError.value = "";
+
+    if (plan.affectedModCount === 0) {
+      return;
+    }
+
+    const shouldRestore = window.confirm(
+      `一键还原会禁用 ${plan.affectedModCount} 个 MOD，并删除 ${plan.deployedFileCount} 个由 Acumod 记录的部署文件。是否继续？`,
+    );
+
+    if (!shouldRestore) {
+      return;
+    }
+
+    restoreResult.value = await restoreAllMods();
+    deploymentPlan.value = null;
+    deploymentResult.value = null;
+    uninstallPlan.value = null;
+    uninstallResult.value = null;
+    await loadInstalledMods();
+  } catch (error) {
+    deploymentError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isRestoringAll.value = false;
   }
 }
 
@@ -589,7 +632,19 @@ onMounted(() => {
       <div class="preview-block">
         <div class="section-title-row">
           <h3>已安装 MOD</h3>
-          <button type="button" class="secondary-button" @click="loadInstalledMods">刷新</button>
+          <div class="section-actions">
+            <button
+              type="button"
+              class="secondary-button danger-button"
+              :disabled="isRestoringAll || !installedMods.length"
+              @click="restoreAllInstalledMods"
+            >
+              {{ isRestoringAll ? "还原中" : "一键还原" }}
+            </button>
+            <button type="button" class="secondary-button" @click="loadInstalledMods">
+              刷新
+            </button>
+          </div>
         </div>
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
         <ul v-if="installedMods.length" class="mod-list">
@@ -663,6 +718,38 @@ onMounted(() => {
           <li v-for="file in deployedFiles" :key="file.deployedPath">
             <span>{{ file.deployRelativePath }}</span>
             <strong>{{ file.deployedPath }}</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="restorePlan" class="preview-block">
+        <h3>一键还原预览</h3>
+        <p class="hint">{{ restorePlan.message }}</p>
+        <ul v-if="restorePlan.warnings.length" class="compact-list">
+          <li v-for="warning in restorePlan.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+        <ul v-if="restorePlanMods.length" class="compact-list">
+          <li v-for="mod in restorePlanMods" :key="mod.modId">
+            <span>{{ mod.name }}</span>
+            <strong>{{ mod.deployedFileCount }} files</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="restoreResult" class="preview-block">
+        <h3>一键还原结果</h3>
+        <p class="hint">{{ restoreResult.message }}</p>
+        <ul v-if="restoreResult.warnings.length" class="compact-list">
+          <li v-for="warning in restoreResult.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+        <ul v-if="restoreResultMods.length" class="compact-list">
+          <li v-for="mod in restoreResultMods" :key="mod.modId">
+            <span>{{ mod.name }}</span>
+            <strong>{{ mod.deployedFileCount }} files</strong>
           </li>
         </ul>
       </div>
@@ -986,6 +1073,14 @@ dd {
   gap: 12px;
 }
 
+.section-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .file-preview,
 .compact-list,
 .mod-list {
@@ -1083,6 +1178,10 @@ dd {
 
   .section-title-row {
     display: grid;
+  }
+
+  .section-actions {
+    justify-content: flex-start;
   }
 
   .status-pill {

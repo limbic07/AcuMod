@@ -153,6 +153,12 @@ src/api/modLibrary.ts
   uninstallMod(modId)
   -> invoke<ModUninstallResult>("uninstall_mod", { modId })
 
+  previewRestoreAllMods()
+  -> invoke<RestoreAllPlan>("preview_restore_all_mods")
+
+  restoreAllMods()
+  -> invoke<RestoreAllResult>("restore_all_mods")
+
 src-tauri/src/commands/mod_library.rs
   #[tauri::command]
   get_mod_library_status(app) -> Result<ModLibraryStatus, String>
@@ -171,6 +177,10 @@ src-tauri/src/commands/mod_library.rs
 
   uninstall_mod(app, mod_id) -> Result<ModUninstallResult, String>
 
+  preview_restore_all_mods(app) -> Result<RestoreAllPlan, String>
+
+  restore_all_mods(app) -> Result<RestoreAllResult, String>
+
 src-tauri/src/services/mod_library.rs
   创建 MOD 库目录
   MOD 库位于软件目录旁的 AcumodData/，不放入 AppData
@@ -182,6 +192,7 @@ src-tauri/src/services/mod_library.rs
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
   卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
+  一键还原时扫描本地 MOD 库 manifest，清理所有记录过的 deployedFiles，并将相关 MOD 标记为未启用
 ```
 
 ## 薄端到端切片
@@ -264,6 +275,15 @@ Vue UI
 4. Vue 展示确认提示。
 5. 用户确认后调用 `uninstall_mod`。
 6. Rust service 先清理该 MOD 的 `deployedFiles`，再删除 `AcumodData/mods/installed/<mod_id>/`。
+
+例如“一键还原纯净状态”：
+
+1. Vue 点击一键还原。
+2. `src/api/modLibrary.ts` 调用 `preview_restore_all_mods` 获取还原预览。
+3. Rust service 扫描本地 MOD 库 manifest，统计仍启用或仍有部署记录的 MOD。
+4. Vue 展示确认提示。
+5. 用户确认后调用 `restore_all_mods`。
+6. Rust service 删除所有 manifest 中记录过的部署文件，清理空目录，并把相关 MOD 标记为未启用。
 
 ## 验证标准
 

@@ -19,7 +19,9 @@ pub fn run() {
             commands::mod_library::list_installed_mods,
             commands::mod_library::preview_enable_mod,
             commands::mod_library::preview_mod_import,
+            commands::mod_library::preview_restore_all_mods,
             commands::mod_library::preview_uninstall_mod,
+            commands::mod_library::restore_all_mods,
             commands::mod_library::uninstall_mod,
         ])
         .run(tauri::generate_context!())

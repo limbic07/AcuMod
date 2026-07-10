@@ -25,7 +25,7 @@
 - MOD 库、导入预览和本地安装命令：`src-tauri/src/commands/mod_library.rs`
 - MOD 库、导入预览和本地安装 service：`src-tauri/src/services/mod_library.rs`
 
-当前第七个切片已经支持已安装 MOD 的启用、禁用和卸载。文件夹 MOD 会复制到 `AcumodData/mods/installed/<mod_id>/content/` 并写入 `manifest.json`；已安装列表从 manifest 读取；`.zip`、`.7z`、`.rar` 压缩包会先通过 Acumod 内置解包组件解包到 `AcumodData/mods/staging/imports/`，再复用同一套导入识别和本地安装逻辑。启用 MOD 时会从本地 MOD 库复制到已配置的 MHW 游戏目录，并把实际部署路径写回 manifest；禁用 MOD 时只删除 manifest 中记录过的部署文件；卸载 MOD 时会先清理已记录部署，再删除 Acumod 本地库中的该 MOD 副本。
+当前第八个切片已经支持已安装 MOD 的启用、禁用、卸载和一键还原。文件夹 MOD 会复制到 `AcumodData/mods/installed/<mod_id>/content/` 并写入 `manifest.json`；已安装列表从 manifest 读取；`.zip`、`.7z`、`.rar` 压缩包会先通过 Acumod 内置解包组件解包到 `AcumodData/mods/staging/imports/`，再复用同一套导入识别和本地安装逻辑。启用 MOD 时会从本地 MOD 库复制到已配置的 MHW 游戏目录，并把实际部署路径写回 manifest；禁用 MOD 时只删除 manifest 中记录过的部署文件；卸载 MOD 时会先清理已记录部署，再删除 Acumod 本地库中的该 MOD 副本；一键还原会禁用所有仍有部署记录的 MOD，并删除所有 Acumod 记录过的部署文件。
 
 ## 文档阅读顺序
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getAppInfo, type AppInfo } from "./api/app";
 import {
   detectGameDirectory,
@@ -8,12 +9,16 @@ import {
   type GameDirectoryStatus,
 } from "./api/game";
 import {
+  applyConflictOrder,
   disableMod,
   enableMod,
+  getModConflictReport,
   getModLibraryStatus,
   installModFromArchive,
   installModFromFolder,
   listInstalledMods,
+  moveConflictParticipant,
+  previewApplyConflictOrder,
   previewEnableMod,
   previewModImport,
   previewRestoreAllMods,
@@ -22,6 +27,9 @@ import {
   uninstallMod,
   type InstalledModList,
   type InstalledModSummary,
+  type ApplyConflictOrderPlan,
+  type ApplyConflictOrderResult,
+  type ModConflictReport,
   type ModDeploymentPlan,
   type ModDeploymentResult,
   type ModImportPreview,
@@ -45,6 +53,9 @@ const uninstallPlan = ref<ModUninstallPlan | null>(null);
 const uninstallResult = ref<ModUninstallResult | null>(null);
 const restorePlan = ref<RestoreAllPlan | null>(null);
 const restoreResult = ref<RestoreAllResult | null>(null);
+const conflictReport = ref<ModConflictReport | null>(null);
+const conflictOrderPlan = ref<ApplyConflictOrderPlan | null>(null);
+const conflictOrderResult = ref<ApplyConflictOrderResult | null>(null);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
@@ -62,6 +73,15 @@ const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
 const activeModAction = ref("");
 const isRestoringAll = ref(false);
+const isApplyingConflict = ref(false);
+const isConflictManagerOpen = ref(false);
+const selectedConflictGroupId = ref("");
+const isDragActive = ref(false);
+const isHandlingDrop = ref(false);
+const pendingDropPath = ref("");
+const dragError = ref("");
+const conflictActionError = ref("");
+let stopDragListener: (() => void) | undefined;
 
 const statusLabel = computed(() => {
   if (!gameStatus.value) {
@@ -123,6 +143,12 @@ const deployedFiles = computed(() => deploymentResult.value?.files.slice(0, 12) 
 const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.slice(0, 12) ?? []);
 const restorePlanMods = computed(() => restorePlan.value?.mods.slice(0, 12) ?? []);
 const restoreResultMods = computed(() => restoreResult.value?.mods.slice(0, 12) ?? []);
+const conflictGroups = computed(() => conflictReport.value?.groups ?? []);
+const selectedConflictGroup = computed(() =>
+  conflictGroups.value.find(
+    (group) => group.groupId === selectedConflictGroupId.value,
+  ),
+);
 
 async function loadAppInfo() {
   isLoadingApp.value = true;
@@ -171,6 +197,42 @@ async function loadInstalledMods() {
   } catch (error) {
     modLibraryError.value = error instanceof Error ? error.message : String(error);
   }
+}
+
+async function loadConflictReport() {
+  try {
+    conflictReport.value = await getModConflictReport();
+    modLibraryError.value = "";
+  } catch (error) {
+    modLibraryError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function refreshModViews() {
+  await loadInstalledMods();
+  await loadConflictReport();
+}
+
+function openConflictManager() {
+  if (!selectedConflictGroupId.value && conflictGroups.value.length) {
+    selectedConflictGroupId.value = conflictGroups.value[0].groupId;
+  }
+
+  conflictActionError.value = "";
+  conflictOrderPlan.value = null;
+  conflictOrderResult.value = null;
+  isConflictManagerOpen.value = true;
+}
+
+function closeConflictManager() {
+  isConflictManagerOpen.value = false;
+}
+
+function selectConflict(groupId: string) {
+  selectedConflictGroupId.value = groupId;
+  conflictActionError.value = "";
+  conflictOrderPlan.value = null;
+  conflictOrderResult.value = null;
 }
 
 async function runGameAction(action: () => Promise<GameDirectoryStatus>) {
@@ -249,6 +311,7 @@ async function installPreviewedMod() {
     importError.value = "";
     await loadModLibraryStatus();
     await loadInstalledMods();
+    await loadConflictReport();
   } catch (error) {
     importError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -265,10 +328,57 @@ async function installArchive() {
     importPreview.value = null;
     await loadModLibraryStatus();
     await loadInstalledMods();
+    await loadConflictReport();
   } catch (error) {
     archiveError.value = error instanceof Error ? error.message : String(error);
   } finally {
     isInstallingArchive.value = false;
+  }
+}
+
+function handleDroppedPaths(paths: string[]) {
+  isDragActive.value = false;
+  dragError.value = "";
+
+  if (paths.length !== 1) {
+    dragError.value = "一次只能拖入一个 MOD 文件夹或压缩包。";
+    return;
+  }
+
+  pendingDropPath.value = paths[0];
+}
+
+function cancelDroppedImport() {
+  pendingDropPath.value = "";
+}
+
+async function confirmDroppedImport() {
+  const droppedPath = pendingDropPath.value;
+  pendingDropPath.value = "";
+
+  if (!droppedPath) {
+    return;
+  }
+
+  const extension = droppedPath.split(".").pop()?.toLowerCase();
+  isHandlingDrop.value = true;
+
+  try {
+    if (extension === "zip" || extension === "7z" || extension === "rar") {
+      archivePath.value = droppedPath;
+      await installArchive();
+    } else {
+      importPath.value = droppedPath;
+      await previewImportPath(false);
+
+      if (importPreview.value?.status === "ready") {
+        await installPreviewedMod();
+      }
+    }
+  } catch (error) {
+    dragError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isHandlingDrop.value = false;
   }
 }
 
@@ -295,6 +405,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
 
     deploymentResult.value = await enableMod(mod.id, confirmOverwrite);
     await loadInstalledMods();
+    await loadConflictReport();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -318,6 +429,7 @@ async function disableInstalledMod(mod: InstalledModSummary) {
     deploymentResult.value = await disableMod(mod.id);
     deploymentError.value = "";
     await loadInstalledMods();
+    await loadConflictReport();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -351,6 +463,7 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
     deploymentResult.value = null;
     await loadModLibraryStatus();
     await loadInstalledMods();
+    await loadConflictReport();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -385,10 +498,71 @@ async function restoreAllInstalledMods() {
     uninstallPlan.value = null;
     uninstallResult.value = null;
     await loadInstalledMods();
+    await loadConflictReport();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
     isRestoringAll.value = false;
+  }
+}
+
+async function moveSelectedConflictParticipant(
+  modId: string,
+  direction: "up" | "down",
+) {
+  if (!selectedConflictGroupId.value) {
+    return;
+  }
+
+  activeModAction.value = modId;
+
+  try {
+    await moveConflictParticipant(selectedConflictGroupId.value, modId, direction);
+    conflictActionError.value = "";
+    await loadConflictReport();
+  } catch (error) {
+    conflictActionError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    activeModAction.value = "";
+  }
+}
+
+async function applySelectedConflictOrder() {
+  if (!selectedConflictGroupId.value) {
+    return;
+  }
+
+  isApplyingConflict.value = true;
+
+  try {
+    conflictOrderResult.value = null;
+    const plan = await previewApplyConflictOrder(selectedConflictGroupId.value);
+    conflictOrderPlan.value = plan;
+    conflictActionError.value = "";
+
+    if (plan.applicableFileCount === 0) {
+      return;
+    }
+
+    const shouldApply = window.confirm(
+      plan.requiresOverwriteConfirmation
+        ? "目标文件不是 Acumod 已记录的文件，将被覆盖。是否继续？"
+        : `将当前覆盖顺序应用到 ${plan.applicableFileCount} 个冲突文件，是否继续？`,
+    );
+
+    if (!shouldApply) {
+      return;
+    }
+
+    conflictOrderResult.value = await applyConflictOrder(
+      selectedConflictGroupId.value,
+      plan.requiresOverwriteConfirmation,
+    );
+    await refreshModViews();
+  } catch (error) {
+    conflictActionError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isApplyingConflict.value = false;
   }
 }
 
@@ -397,11 +571,36 @@ onMounted(() => {
   void loadGameStatus();
   void loadModLibraryStatus();
   void loadInstalledMods();
+  void loadConflictReport();
+  void getCurrentWebview()
+    .onDragDropEvent((event) => {
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        isDragActive.value = true;
+        return;
+      }
+
+      if (event.payload.type === "leave") {
+        isDragActive.value = false;
+        return;
+      }
+
+      void handleDroppedPaths(event.payload.paths);
+    })
+    .then((unlisten) => {
+      stopDragListener = unlisten;
+    })
+    .catch(() => {
+      // Browser-only Vite development has no Tauri webview drag-drop API.
+    });
+});
+
+onBeforeUnmount(() => {
+  stopDragListener?.();
 });
 </script>
 
 <template>
-  <main class="app-shell">
+  <main v-if="!isConflictManagerOpen" class="app-shell">
     <header class="topbar">
       <div>
         <p class="eyebrow">Acumod</p>
@@ -574,6 +773,10 @@ onMounted(() => {
           <dd>{{ installResult.message }}</dd>
         </div>
         <div>
+          <dt>状态</dt>
+          <dd>{{ installResult.alreadyInstalled ? "已导入，未重复安装" : "安装完成" }}</dd>
+        </div>
+        <div>
           <dt>MOD ID</dt>
           <dd>{{ installResult.modId }}</dd>
         </div>
@@ -641,16 +844,24 @@ onMounted(() => {
             >
               {{ isRestoringAll ? "还原中" : "一键还原" }}
             </button>
-            <button type="button" class="secondary-button" @click="loadInstalledMods">
+            <button
+              type="button"
+              class="secondary-button"
+              :disabled="!conflictGroups.length"
+              @click="openConflictManager"
+            >
+              冲突管理 ({{ conflictGroups.length }})
+            </button>
+            <button type="button" class="secondary-button" @click="refreshModViews">
               刷新
             </button>
           </div>
         </div>
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
         <ul v-if="installedMods.length" class="mod-list">
-          <li v-for="mod in installedMods" :key="mod.id">
+          <li v-for="(mod, index) in installedMods" :key="mod.id">
             <div>
-              <strong>{{ mod.name }}</strong>
+              <strong>#{{ index + 1 }} {{ mod.name }}</strong>
               <span>{{ mod.id }}</span>
             </div>
             <div class="mod-actions">
@@ -831,6 +1042,125 @@ onMounted(() => {
       </dl>
     </section>
   </main>
+
+  <main v-else class="conflict-workspace">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Acumod</p>
+        <h1>冲突管理</h1>
+      </div>
+      <button type="button" class="secondary-button" @click="closeConflictManager">返回 MOD 库</button>
+    </header>
+
+    <section class="conflict-layout">
+      <aside class="conflict-sidebar">
+        <div class="conflict-sidebar-heading">
+          <h2>冲突组</h2>
+          <span>{{ conflictGroups.length }}</span>
+        </div>
+        <p class="hint">互相冲突的 MOD 组成一组；彼此无关的冲突会分开显示。</p>
+        <ul class="conflict-group-list">
+          <li v-for="group in conflictGroups" :key="group.groupId">
+            <button
+              type="button"
+              class="conflict-group-button"
+              :class="{ selected: selectedConflictGroupId === group.groupId }"
+              @click="selectConflict(group.groupId)"
+            >
+              <strong>{{ group.participants.map((participant) => participant.name).join(" / ") }}</strong>
+              <span>{{ group.participantCount }} 个 MOD / {{ group.conflictFileCount }} 个冲突文件</span>
+            </button>
+          </li>
+        </ul>
+      </aside>
+
+      <section class="conflict-detail">
+        <template v-if="selectedConflictGroup">
+          <div class="panel-heading">
+            <div>
+              <h2>{{ selectedConflictGroup.participants.map((participant) => participant.name).join(" / ") }}</h2>
+              <p>从上到下为覆盖顺序；对每个冲突文件，排在最后且包含该文件的已启用 MOD 生效。</p>
+            </div>
+            <button
+              type="button"
+              :disabled="isApplyingConflict || selectedConflictGroup.enabledParticipantCount === 0"
+              @click="applySelectedConflictOrder"
+            >
+              {{ isApplyingConflict ? "应用中" : "应用此组顺序" }}
+            </button>
+          </div>
+
+          <ol class="conflict-order-list">
+            <li v-for="(participant, index) in selectedConflictGroup.participants" :key="participant.modId">
+              <span class="conflict-order-number">{{ participant.order }}</span>
+              <div>
+                <strong>{{ participant.name }}</strong>
+                <span>{{ participant.enabled ? "已启用" : "未启用" }}</span>
+              </div>
+              <div class="section-actions">
+                <button
+                  type="button"
+                  class="secondary-button"
+                  :disabled="!!activeModAction || index === 0"
+                  @click="moveSelectedConflictParticipant(participant.modId, 'up')"
+                >
+                  上移
+                </button>
+                <button
+                  type="button"
+                  class="secondary-button"
+                  :disabled="!!activeModAction || index + 1 === selectedConflictGroup.participants.length"
+                  @click="moveSelectedConflictParticipant(participant.modId, 'down')"
+                >
+                  下移
+                </button>
+              </div>
+            </li>
+          </ol>
+
+          <p v-if="selectedConflictGroup.enabledParticipantCount === 0" class="error">
+            当前没有已启用的参与 MOD，无法应用这个冲突。
+          </p>
+          <p v-if="conflictActionError" class="error">{{ conflictActionError }}</p>
+
+          <div v-if="conflictOrderPlan" class="preview-block">
+            <h3>应用预览</h3>
+            <p class="hint">{{ conflictOrderPlan.message }}</p>
+            <ul v-if="conflictOrderPlan.warnings.length" class="compact-list">
+              <li v-for="warning in conflictOrderPlan.warnings" :key="warning">
+                <span>{{ warning }}</span>
+              </li>
+            </ul>
+          </div>
+
+          <div v-if="conflictOrderResult" class="preview-block">
+            <h3>应用结果</h3>
+            <p class="hint">{{ conflictOrderResult.message }}</p>
+          </div>
+        </template>
+        <p v-else class="hint">当前没有需要处理的 MOD 冲突组。</p>
+      </section>
+    </section>
+  </main>
+
+  <div v-if="isDragActive" class="drag-overlay">
+    <div>
+      <strong>{{ isHandlingDrop ? "正在处理导入" : "释放以导入 MOD" }}</strong>
+      <span>支持 MOD 文件夹和 .zip / .7z / .rar 压缩包</span>
+    </div>
+  </div>
+  <div v-if="pendingDropPath" class="dialog-backdrop" role="presentation">
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="drop-confirm-title">
+      <h2 id="drop-confirm-title">确认导入 MOD</h2>
+      <p>是否导入以下文件夹或压缩包？</p>
+      <strong>{{ pendingDropPath }}</strong>
+      <div class="section-actions">
+        <button type="button" class="secondary-button" @click="cancelDroppedImport">取消</button>
+        <button type="button" @click="confirmDroppedImport">确认导入</button>
+      </div>
+    </section>
+  </div>
+  <p v-if="dragError" class="drag-error">{{ dragError }}</p>
 </template>
 
 <style scoped>
@@ -1083,7 +1413,8 @@ dd {
 
 .file-preview,
 .compact-list,
-.mod-list {
+.mod-list,
+.conflict-list {
   display: grid;
   gap: 8px;
   margin: 0;
@@ -1093,7 +1424,8 @@ dd {
 
 .file-preview li,
 .compact-list li,
-.mod-list li {
+.mod-list li,
+.conflict-list > li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 0.55fr);
   gap: 12px;
@@ -1110,6 +1442,10 @@ dd {
 .mod-list li {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+}
+
+.conflict-list > li {
+  grid-template-columns: 1fr;
 }
 
 .mod-list li div {
@@ -1135,11 +1471,29 @@ dd {
   justify-content: flex-end;
 }
 
+.conflict-list ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conflict-list ul li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
 .file-preview span,
 .file-preview strong,
 .compact-list span,
 .compact-list strong,
-.mod-list strong {
+.mod-list strong,
+.conflict-list span,
+.conflict-list strong {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1154,10 +1508,221 @@ dd {
   color: #17211f;
 }
 
+.conflict-workspace {
+  width: min(1180px, calc(100vw - 40px));
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 40px 0;
+}
+
+.conflict-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.38fr) minmax(0, 1fr);
+  min-height: 560px;
+  border: 1px solid #d9e2df;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.conflict-sidebar {
+  padding: 20px;
+  border-right: 1px solid #d9e2df;
+  background: #f7faf8;
+}
+
+.conflict-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conflict-sidebar-heading span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #cbd8d4;
+  border-radius: 50%;
+  color: #17613f;
+  background: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.conflict-group-list,
+.conflict-order-list {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conflict-group-button {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+  gap: 4px;
+  padding: 12px;
+  border-color: #d9e2df;
+  color: #17211f;
+  background: #ffffff;
+  text-align: left;
+}
+
+.conflict-group-button span {
+  color: #61756f;
+  font-size: 0.82rem;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.conflict-group-button.selected {
+  border-color: #24745b;
+  background: #e8f6ee;
+}
+
+.conflict-detail {
+  min-width: 0;
+  padding: 28px;
+}
+
+.conflict-order-list li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #edf1f0;
+  border-radius: 6px;
+  background: #fbfdfc;
+}
+
+.conflict-order-list li > div:nth-child(2) {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.conflict-order-list li span {
+  color: #52645f;
+  overflow-wrap: anywhere;
+}
+
+.conflict-order-number {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #cbd8d4;
+  border-radius: 50%;
+  color: #17613f;
+  background: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.drag-overlay {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 69, 52, 0.25);
+  pointer-events: none;
+}
+
+.drag-overlay > div {
+  display: grid;
+  min-width: min(460px, 100%);
+  gap: 8px;
+  padding: 28px;
+  border: 2px dashed #24745b;
+  border-radius: 8px;
+  color: #17613f;
+  background: #ffffff;
+  text-align: center;
+}
+
+.drag-overlay span {
+  color: #52645f;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(23, 33, 31, 0.38);
+}
+
+.confirm-dialog {
+  display: grid;
+  width: min(520px, 100%);
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid #d9e2df;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 20px 60px rgba(23, 33, 31, 0.18);
+}
+
+.confirm-dialog p {
+  color: #52645f;
+}
+
+.confirm-dialog > strong {
+  padding: 10px 12px;
+  border: 1px solid #edf1f0;
+  border-radius: 6px;
+  background: #fbfdfc;
+  overflow-wrap: anywhere;
+}
+
+.drag-error {
+  position: fixed;
+  z-index: 11;
+  right: 20px;
+  bottom: 20px;
+  max-width: min(420px, calc(100vw - 40px));
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e4b5ae;
+  border-radius: 6px;
+  color: #b42318;
+  background: #ffffff;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     width: min(100% - 24px, 980px);
     padding: 24px 0;
+  }
+
+  .conflict-workspace {
+    width: min(100% - 24px, 1180px);
+    padding: 24px 0;
+  }
+
+  .conflict-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .conflict-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #d9e2df;
+  }
+
+  .conflict-order-list li {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .conflict-order-list .section-actions {
+    grid-column: 1 / -1;
   }
 
   .topbar,

@@ -77,6 +77,7 @@ pub struct InstalledModFile {
 pub struct ModInstallResult {
     pub mod_id: String,
     pub name: String,
+    pub already_installed: bool,
     pub mod_path: String,
     pub content_path: String,
     pub manifest_path: String,
@@ -207,6 +208,67 @@ pub struct RestoreAllResult {
     pub message: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModConflictParticipant {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub order: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModConflictGroup {
+    pub group_id: String,
+    pub participant_count: usize,
+    pub conflict_file_count: usize,
+    pub enabled_participant_count: usize,
+    pub participants: Vec<ModConflictParticipant>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModConflictReport {
+    pub conflict_count: usize,
+    pub conflict_file_count: usize,
+    pub groups: Vec<ModConflictGroup>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModConflictMoveResult {
+    pub group_id: String,
+    pub mod_id: String,
+    pub direction: String,
+    pub moved: bool,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyConflictOrderPlan {
+    pub group_id: String,
+    pub conflict_file_count: usize,
+    pub applicable_file_count: usize,
+    pub enabled_participant_count: usize,
+    pub requires_overwrite_confirmation: bool,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyConflictOrderResult {
+    pub group_id: String,
+    pub applied_file_count: usize,
+    pub skipped_file_count: usize,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstalledModManifest {
@@ -223,6 +285,24 @@ struct InstalledModManifest {
     files: Vec<InstalledModFile>,
     #[serde(default)]
     deployed_files: Vec<DeployedModFile>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConflictOrderStore {
+    #[serde(default = "default_conflict_order_schema_version")]
+    schema_version: u32,
+    #[serde(default)]
+    orders: HashMap<String, Vec<String>>,
+}
+
+struct ConflictPathGroup {
+    deploy_relative_path: String,
+    participant_ids: Vec<String>,
+}
+
+fn default_conflict_order_schema_version() -> u32 {
+    1
 }
 
 #[derive(Clone)]
@@ -331,6 +411,11 @@ pub fn install_mod_from_archive(
     let archive_path = normalize_user_path(&raw_path);
     let archive_path = validate_archive_path(&archive_path)?;
     let archive_name = derive_mod_name(&archive_path);
+
+    if let Some(existing) = find_installed_mod_by_name(&paths.installed_path, &archive_name)? {
+        return Ok(existing);
+    }
+
     let staging_path = paths
         .import_staging_path
         .join(unique_mod_id(&archive_name)?);
@@ -428,6 +513,49 @@ pub fn restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllResult, Stri
     restore_all_mods_from(&paths.installed_path, &game_root)
 }
 
+pub fn get_mod_conflict_report(app: &tauri::AppHandle) -> Result<ModConflictReport, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    get_mod_conflict_report_from(&paths.installed_path)
+}
+
+pub fn move_conflict_participant(
+    app: &tauri::AppHandle,
+    group_id: String,
+    mod_id: String,
+    direction: String,
+) -> Result<ModConflictMoveResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    move_conflict_participant_from(&paths.installed_path, &group_id, &mod_id, &direction)
+}
+
+pub fn preview_apply_conflict_order(
+    app: &tauri::AppHandle,
+    group_id: String,
+) -> Result<ApplyConflictOrderPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    preview_apply_conflict_order_from(&paths.installed_path, &game_root, &group_id)
+}
+
+pub fn apply_conflict_order(
+    app: &tauri::AppHandle,
+    group_id: String,
+    confirm_overwrite: bool,
+) -> Result<ApplyConflictOrderResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    apply_conflict_order_from(
+        &paths.installed_path,
+        &game_root,
+        &group_id,
+        confirm_overwrite,
+    )
+}
+
 fn install_mod_from_folder_into(
     raw_path: String,
     allow_game_root: bool,
@@ -466,6 +594,11 @@ fn install_mod_from_folder_into_with_options(
 
     let source_path = PathBuf::from(&preview.source_path);
     let mod_name = preferred_name.unwrap_or_else(|| derive_mod_name(&source_path));
+
+    if let Some(existing) = find_installed_mod_by_name(installed_root, &mod_name)? {
+        return Ok(existing);
+    }
+
     let mod_id = unique_mod_id(&mod_name)?;
     let final_mod_path = installed_root.join(&mod_id);
     let temp_mod_path = installed_root.join(format!(".{mod_id}.tmp"));
@@ -566,6 +699,7 @@ fn install_mod_from_folder_into_with_options(
         Ok(ModInstallResult {
             mod_id,
             name: mod_name,
+            already_installed: false,
             mod_path: path_to_string(&final_mod_path),
             content_path: path_to_string(&final_mod_path.join("content")),
             manifest_path: path_to_string(&final_mod_path.join("manifest.json")),
@@ -580,6 +714,33 @@ fn install_mod_from_folder_into_with_options(
     }
 
     result
+}
+
+fn find_installed_mod_by_name(
+    installed_root: &Path,
+    mod_name: &str,
+) -> Result<Option<ModInstallResult>, String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let existing = contexts.into_iter().find(|context| {
+        context
+            .manifest
+            .name
+            .trim()
+            .eq_ignore_ascii_case(mod_name.trim())
+    });
+
+    Ok(existing.map(|context| ModInstallResult {
+        mod_id: context.manifest.id,
+        name: context.manifest.name,
+        already_installed: true,
+        mod_path: path_to_string(&context.mod_path),
+        content_path: path_to_string(&context.content_path),
+        manifest_path: path_to_string(&context.manifest_path),
+        file_count: context.manifest.file_count,
+        files: context.manifest.files,
+        message: "A MOD with the same name is already installed. The existing MOD was kept."
+            .to_string(),
+    }))
 }
 
 fn preview_from_candidates(
@@ -1078,6 +1239,14 @@ fn enable_mod_from(
     context.manifest.enabled = true;
     context.manifest.deployed_files = deployed_files.clone();
     save_manifest(&context.manifest_path, &context.manifest)?;
+    let mut warnings = plan.warnings;
+    record_enabled_mod_conflict_order(installed_root, &context.manifest.id)?;
+    reapply_conflict_groups_for_mod(
+        installed_root,
+        game_root,
+        &context.manifest.id,
+        &mut warnings,
+    )?;
 
     Ok(ModDeploymentResult {
         mod_id: context.manifest.id,
@@ -1085,7 +1254,7 @@ fn enable_mod_from(
         enabled: true,
         affected_file_count: deployed_files.len(),
         files: deployed_files,
-        warnings: plan.warnings,
+        warnings,
         message: "MOD was enabled and copied to the MHW game directory.".to_string(),
     })
 }
@@ -1097,12 +1266,25 @@ fn disable_mod_from(
 ) -> Result<ModDeploymentResult, String> {
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     let deployed_files = context.manifest.deployed_files.clone();
+    let disabled_file_paths = context
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
     let mut warnings = Vec::new();
     let removed_count = remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
 
     context.manifest.enabled = false;
     context.manifest.deployed_files = Vec::new();
     save_manifest(&context.manifest_path, &context.manifest)?;
+
+    restore_enabled_versions_for_paths(
+        installed_root,
+        game_root,
+        &disabled_file_paths,
+        &mut warnings,
+    )?;
 
     let message = if deployed_files.is_empty() {
         "MOD was already disabled; no deployment records were found.".to_string()
@@ -1155,10 +1337,14 @@ fn uninstall_mod_from(
 ) -> Result<ModUninstallResult, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
     let removed_library_file_count = context.manifest.files.len();
-    let deployed_files = context.manifest.deployed_files.clone();
     let mut warnings = Vec::new();
-    let removed_deployed_file_count =
-        remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
+    let removed_deployed_file_count = if context.manifest.enabled {
+        let disable_result = disable_mod_from(installed_root, game_root, mod_id)?;
+        warnings.extend(disable_result.warnings);
+        disable_result.affected_file_count
+    } else {
+        remove_deployed_files(game_root, &context.manifest.deployed_files, &mut warnings)?
+    };
     let mod_id = context.manifest.id;
     let name = context.manifest.name;
 
@@ -1250,6 +1436,625 @@ fn restore_plan_items(contexts: &[InstalledManifestContext]) -> Vec<RestoreModPl
             deployed_file_count: context.manifest.deployed_files.len(),
         })
         .collect()
+}
+
+fn get_mod_conflict_report_from(installed_root: &Path) -> Result<ModConflictReport, String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let store = read_conflict_order_store(installed_root)?;
+    build_mod_conflict_report(&contexts, &store)
+}
+
+fn move_conflict_participant_from(
+    installed_root: &Path,
+    group_id: &str,
+    mod_id: &str,
+    direction: &str,
+) -> Result<ModConflictMoveResult, String> {
+    validate_mod_id(mod_id)?;
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let mut store = read_conflict_order_store(installed_root)?;
+    let report = build_mod_conflict_report(&contexts, &store)?;
+    let group = find_conflict_group(&report, group_id)?;
+    let mut order = group
+        .participants
+        .iter()
+        .map(|participant| participant.mod_id.clone())
+        .collect::<Vec<_>>();
+    let index = order
+        .iter()
+        .position(|participant_id| participant_id == mod_id)
+        .ok_or_else(|| format!("MOD is not part of this conflict: {mod_id}"))?;
+    let target_index = match direction {
+        "up" if index > 0 => Some(index - 1),
+        "down" if index + 1 < order.len() => Some(index + 1),
+        "up" | "down" => None,
+        other => return Err(format!("Unknown conflict move direction: {other}")),
+    };
+
+    let Some(target_index) = target_index else {
+        return Ok(ModConflictMoveResult {
+            group_id: group.group_id.clone(),
+            mod_id: mod_id.to_string(),
+            direction: direction.to_string(),
+            moved: false,
+            message: "MOD is already at the requested edge of this conflict order.".to_string(),
+        });
+    };
+
+    order.swap(index, target_index);
+    store.orders.insert(group.group_id.clone(), order);
+    save_conflict_order_store(installed_root, &store)?;
+
+    Ok(ModConflictMoveResult {
+        group_id: group.group_id.clone(),
+        mod_id: mod_id.to_string(),
+        direction: direction.to_string(),
+        moved: true,
+        message: "Conflict order was updated. Apply this group to update its game files."
+            .to_string(),
+    })
+}
+
+fn preview_apply_conflict_order_from(
+    installed_root: &Path,
+    game_root: &Path,
+    group_id: &str,
+) -> Result<ApplyConflictOrderPlan, String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let store = read_conflict_order_store(installed_root)?;
+    let report = build_mod_conflict_report(&contexts, &store)?;
+    let group = find_conflict_group(&report, group_id)?;
+    let conflict_paths = conflict_paths_for_group(&contexts, group);
+    let deployed_file_index = deployed_file_index(installed_root)?;
+    let mut warnings = Vec::new();
+    let mut requires_overwrite_confirmation = false;
+    let mut applicable_file_count = 0;
+
+    for conflict_path in &conflict_paths {
+        if winner_for_conflict_path(group, conflict_path).is_none() {
+            continue;
+        }
+
+        applicable_file_count += 1;
+        let target_path = game_root.join(relative_string_to_path(
+            &conflict_path.deploy_relative_path,
+        )?);
+
+        if target_path.exists() && !deployed_file_index.contains_key(&deployment_key(&target_path))
+        {
+            requires_overwrite_confirmation = true;
+            warnings.push(format!(
+                "Target exists but is not recorded as Acumod-managed: {}",
+                target_path.display()
+            ));
+        }
+    }
+
+    let message = if applicable_file_count == 0 {
+        "No conflict files have an enabled MOD version to apply.".to_string()
+    } else {
+        format!(
+            "Applying this order will update {applicable_file_count} of {} conflicting file(s).",
+            conflict_paths.len()
+        )
+    };
+
+    Ok(ApplyConflictOrderPlan {
+        group_id: group.group_id.clone(),
+        conflict_file_count: conflict_paths.len(),
+        applicable_file_count,
+        enabled_participant_count: group.enabled_participant_count,
+        requires_overwrite_confirmation,
+        warnings,
+        message,
+    })
+}
+
+fn apply_conflict_order_from(
+    installed_root: &Path,
+    game_root: &Path,
+    group_id: &str,
+    confirm_overwrite: bool,
+) -> Result<ApplyConflictOrderResult, String> {
+    let plan = preview_apply_conflict_order_from(installed_root, game_root, group_id)?;
+
+    if plan.requires_overwrite_confirmation && !confirm_overwrite {
+        return Err("Applying this conflict requires overwrite confirmation.".to_string());
+    }
+
+    if plan.applicable_file_count == 0 {
+        return Err("No enabled MOD can provide a file for this conflict group.".to_string());
+    }
+
+    let mut contexts = load_all_installed_manifests(installed_root)?;
+    let store = read_conflict_order_store(installed_root)?;
+    let report = build_mod_conflict_report(&contexts, &store)?;
+    let group = find_conflict_group(&report, group_id)?;
+    let conflict_paths = conflict_paths_for_group(&contexts, group);
+    let deployed_at = unix_seconds_now()?;
+    let mut applied_file_count = 0;
+
+    for conflict_path in &conflict_paths {
+        let Some(winner_mod_id) = winner_for_conflict_path(group, conflict_path) else {
+            continue;
+        };
+        let winner_index = contexts
+            .iter()
+            .position(|context| context.manifest.id == winner_mod_id)
+            .ok_or_else(|| format!("Conflict winner was not found: {winner_mod_id}"))?;
+        let source_file = contexts[winner_index]
+            .manifest
+            .files
+            .iter()
+            .find(|file| {
+                conflict_path_key(&file.deploy_relative_path)
+                    == conflict_path_key(&conflict_path.deploy_relative_path)
+            })
+            .cloned()
+            .ok_or_else(|| "Conflict winner does not contain the selected file.".to_string())?;
+        let source_path = source_path_for_installed_file(&contexts[winner_index], &source_file)?;
+        let target_path = game_root.join(relative_string_to_path(
+            &conflict_path.deploy_relative_path,
+        )?);
+
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "Could not create deployment directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        fs::copy(&source_path, &target_path).map_err(|error| {
+            format!(
+                "Could not apply conflict winner {} to {}: {error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+
+        for context in &mut contexts {
+            context.manifest.deployed_files.retain(|file| {
+                conflict_path_key(&file.deploy_relative_path)
+                    != conflict_path_key(&conflict_path.deploy_relative_path)
+            });
+
+            if context.manifest.id == winner_mod_id {
+                context.manifest.deployed_files.push(DeployedModFile {
+                    deploy_relative_path: conflict_path.deploy_relative_path.clone(),
+                    deployed_path: path_to_string(&target_path),
+                    deployed_at_unix_seconds: deployed_at,
+                });
+            }
+        }
+
+        applied_file_count += 1;
+    }
+
+    for context in &contexts {
+        save_manifest(&context.manifest_path, &context.manifest)?;
+    }
+
+    Ok(ApplyConflictOrderResult {
+        group_id: plan.group_id,
+        applied_file_count,
+        skipped_file_count: plan.conflict_file_count - applied_file_count,
+        warnings: plan.warnings,
+        message: format!("Applied the MOD order to {applied_file_count} conflicting file(s)."),
+    })
+}
+
+fn build_mod_conflict_report(
+    contexts: &[InstalledManifestContext],
+    store: &ConflictOrderStore,
+) -> Result<ModConflictReport, String> {
+    let conflict_paths = collect_conflict_path_groups(contexts);
+    let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for conflict_path in &conflict_paths {
+        for mod_id in &conflict_path.participant_ids {
+            let neighbors = adjacency.entry(mod_id.clone()).or_default();
+            neighbors.extend(
+                conflict_path
+                    .participant_ids
+                    .iter()
+                    .filter(|participant_id| *participant_id != mod_id)
+                    .cloned(),
+            );
+        }
+    }
+
+    let mut visited = HashSet::new();
+    let mut groups = Vec::new();
+
+    for mod_id in adjacency.keys() {
+        if !visited.insert(mod_id.clone()) {
+            continue;
+        }
+
+        let mut participant_ids = Vec::new();
+        let mut pending = vec![mod_id.clone()];
+
+        while let Some(current_id) = pending.pop() {
+            participant_ids.push(current_id.clone());
+
+            if let Some(neighbors) = adjacency.get(&current_id) {
+                for neighbor in neighbors {
+                    if visited.insert(neighbor.clone()) {
+                        pending.push(neighbor.clone());
+                    }
+                }
+            }
+        }
+
+        participant_ids.sort();
+        let group_id = conflict_group_id(&participant_ids);
+        let participant_id_set = participant_ids.iter().cloned().collect::<HashSet<_>>();
+        let mut participants = contexts
+            .iter()
+            .filter(|context| participant_id_set.contains(&context.manifest.id))
+            .map(|context| ModConflictParticipant {
+                mod_id: context.manifest.id.clone(),
+                name: context.manifest.name.clone(),
+                enabled: context.manifest.enabled,
+                order: 0,
+            })
+            .collect::<Vec<_>>();
+        let stored_order = store
+            .orders
+            .get(&group_id)
+            .or_else(|| find_best_stored_order(store, &participant_ids));
+        sort_participants_by_conflict_order(&mut participants, stored_order);
+        let enabled_participant_count = participants
+            .iter()
+            .filter(|participant| participant.enabled)
+            .count();
+        let conflict_file_count = conflict_paths
+            .iter()
+            .filter(|path| {
+                path.participant_ids
+                    .iter()
+                    .any(|participant_id| participant_id_set.contains(participant_id))
+            })
+            .count();
+
+        groups.push(ModConflictGroup {
+            group_id,
+            participant_count: participants.len(),
+            conflict_file_count,
+            enabled_participant_count,
+            participants,
+        });
+    }
+
+    groups.sort_by(|left, right| {
+        left.participants
+            .first()
+            .map(|participant| participant.name.to_lowercase())
+            .cmp(
+                &right
+                    .participants
+                    .first()
+                    .map(|participant| participant.name.to_lowercase()),
+            )
+    });
+
+    let conflict_count = groups.len();
+    let conflict_file_count = conflict_paths.len();
+    let message = if conflict_count == 0 {
+        "No conflicting MOD groups were found.".to_string()
+    } else {
+        format!("{conflict_count} independent conflicting MOD group(s) were found.")
+    };
+
+    Ok(ModConflictReport {
+        conflict_count,
+        conflict_file_count,
+        groups,
+        warnings: Vec::new(),
+        message,
+    })
+}
+
+fn find_conflict_group<'a>(
+    report: &'a ModConflictReport,
+    group_id: &str,
+) -> Result<&'a ModConflictGroup, String> {
+    report
+        .groups
+        .iter()
+        .find(|group| group.group_id == group_id)
+        .ok_or_else(|| format!("No conflict group was found for: {group_id}"))
+}
+
+fn collect_conflict_path_groups(contexts: &[InstalledManifestContext]) -> Vec<ConflictPathGroup> {
+    let mut participants_by_path: HashMap<String, (String, HashSet<String>)> = HashMap::new();
+
+    for context in contexts {
+        if !context.manifest.enabled {
+            continue;
+        }
+
+        for file in &context.manifest.files {
+            participants_by_path
+                .entry(conflict_path_key(&file.deploy_relative_path))
+                .or_insert_with(|| (file.deploy_relative_path.clone(), HashSet::new()))
+                .1
+                .insert(context.manifest.id.clone());
+        }
+    }
+
+    let mut groups = participants_by_path
+        .into_values()
+        .filter_map(|(deploy_relative_path, participant_ids)| {
+            if participant_ids.len() < 2 {
+                return None;
+            }
+
+            let mut participant_ids = participant_ids.into_iter().collect::<Vec<_>>();
+            participant_ids.sort();
+            Some(ConflictPathGroup {
+                deploy_relative_path,
+                participant_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    groups.sort_by(|left, right| {
+        conflict_path_key(&left.deploy_relative_path)
+            .cmp(&conflict_path_key(&right.deploy_relative_path))
+    });
+    groups
+}
+
+fn conflict_group_id(participant_ids: &[String]) -> String {
+    format!("mods:{}", participant_ids.join("|"))
+}
+
+fn find_best_stored_order<'a>(
+    store: &'a ConflictOrderStore,
+    participant_ids: &[String],
+) -> Option<&'a Vec<String>> {
+    store
+        .orders
+        .values()
+        .filter(|stored_order| {
+            participant_ids
+                .iter()
+                .any(|participant_id| stored_order.contains(participant_id))
+        })
+        .max_by(|left, right| {
+            let left_matches = participant_ids
+                .iter()
+                .filter(|participant_id| left.contains(participant_id))
+                .count();
+            let right_matches = participant_ids
+                .iter()
+                .filter(|participant_id| right.contains(participant_id))
+                .count();
+            left_matches
+                .cmp(&right_matches)
+                .then_with(|| right.len().cmp(&left.len()))
+        })
+}
+
+fn conflict_paths_for_group(
+    contexts: &[InstalledManifestContext],
+    group: &ModConflictGroup,
+) -> Vec<ConflictPathGroup> {
+    let participant_ids = group
+        .participants
+        .iter()
+        .map(|participant| participant.mod_id.as_str())
+        .collect::<HashSet<_>>();
+
+    collect_conflict_path_groups(contexts)
+        .into_iter()
+        .filter(|path| {
+            path.participant_ids
+                .iter()
+                .any(|participant_id| participant_ids.contains(participant_id.as_str()))
+        })
+        .collect()
+}
+
+fn winner_for_conflict_path<'a>(
+    group: &'a ModConflictGroup,
+    conflict_path: &ConflictPathGroup,
+) -> Option<&'a str> {
+    group
+        .participants
+        .iter()
+        .rev()
+        .find(|participant| {
+            participant.enabled && conflict_path.participant_ids.contains(&participant.mod_id)
+        })
+        .map(|participant| participant.mod_id.as_str())
+}
+
+fn reapply_conflict_groups_for_mod(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let report = get_mod_conflict_report_from(installed_root)?;
+
+    for group in report.groups {
+        if group.enabled_participant_count == 0
+            || !group
+                .participants
+                .iter()
+                .any(|participant| participant.mod_id == mod_id)
+        {
+            continue;
+        }
+
+        if let Err(error) =
+            apply_conflict_order_from(installed_root, game_root, &group.group_id, false)
+        {
+            warnings.push(format!(
+                "Could not reapply conflict group {}: {error}",
+                group.group_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn record_enabled_mod_conflict_order(
+    installed_root: &Path,
+    enabled_mod_id: &str,
+) -> Result<(), String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let mut store = read_conflict_order_store(installed_root)?;
+    let report = build_mod_conflict_report(&contexts, &store)?;
+    let mut changed = false;
+
+    for group in report.groups {
+        if !group
+            .participants
+            .iter()
+            .any(|participant| participant.mod_id == enabled_mod_id)
+        {
+            continue;
+        }
+
+        let mut order = group
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect::<Vec<_>>();
+        order.retain(|mod_id| mod_id != enabled_mod_id);
+        order.push(enabled_mod_id.to_string());
+        store.orders.insert(group.group_id, order);
+        changed = true;
+    }
+
+    if changed {
+        save_conflict_order_store(installed_root, &store)?;
+    }
+
+    Ok(())
+}
+
+fn restore_enabled_versions_for_paths(
+    installed_root: &Path,
+    game_root: &Path,
+    deploy_relative_paths: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let mut contexts = load_all_installed_manifests(installed_root)?;
+    let store = read_conflict_order_store(installed_root)?;
+    let deployed_at = unix_seconds_now()?;
+    let mut seen_paths = HashSet::new();
+    let mut changed = false;
+
+    for deploy_relative_path in deploy_relative_paths {
+        let path_key = conflict_path_key(deploy_relative_path);
+
+        if !seen_paths.insert(path_key.clone()) {
+            continue;
+        }
+
+        let mut participants = contexts
+            .iter()
+            .filter(|context| {
+                context.manifest.enabled
+                    && context
+                        .manifest
+                        .files
+                        .iter()
+                        .any(|file| conflict_path_key(&file.deploy_relative_path) == path_key)
+            })
+            .map(|context| ModConflictParticipant {
+                mod_id: context.manifest.id.clone(),
+                name: context.manifest.name.clone(),
+                enabled: true,
+                order: 0,
+            })
+            .collect::<Vec<_>>();
+
+        if participants.is_empty() {
+            continue;
+        }
+
+        let mut participant_ids = participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect::<Vec<_>>();
+        participant_ids.sort();
+        let stored_order = find_best_stored_order(&store, &participant_ids);
+        sort_participants_by_conflict_order(&mut participants, stored_order);
+        let winner_mod_id = participants.last().unwrap().mod_id.clone();
+        let Some(winner_index) = contexts
+            .iter()
+            .position(|context| context.manifest.id == winner_mod_id)
+        else {
+            continue;
+        };
+        let Some(source_file) = contexts[winner_index]
+            .manifest
+            .files
+            .iter()
+            .find(|file| conflict_path_key(&file.deploy_relative_path) == path_key)
+            .cloned()
+        else {
+            continue;
+        };
+        let source_path = source_path_for_installed_file(&contexts[winner_index], &source_file)?;
+        let target_path = game_root.join(relative_string_to_path(deploy_relative_path)?);
+        let copy_result = (|| {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "Could not create deployment directory {}: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+
+            fs::copy(&source_path, &target_path).map_err(|error| {
+                format!(
+                    "Could not restore enabled MOD file {} to {}: {error}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+            Ok::<(), String>(())
+        })();
+
+        if let Err(error) = copy_result {
+            warnings.push(error);
+            continue;
+        }
+
+        for context in &mut contexts {
+            context
+                .manifest
+                .deployed_files
+                .retain(|file| conflict_path_key(&file.deploy_relative_path) != path_key);
+
+            if context.manifest.id == winner_mod_id {
+                context.manifest.deployed_files.push(DeployedModFile {
+                    deploy_relative_path: deploy_relative_path.clone(),
+                    deployed_path: path_to_string(&target_path),
+                    deployed_at_unix_seconds: deployed_at,
+                });
+            }
+        }
+
+        changed = true;
+    }
+
+    if changed {
+        for context in &contexts {
+            save_manifest(&context.manifest_path, &context.manifest)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn remove_deployed_files(
@@ -1494,11 +2299,16 @@ fn load_all_installed_manifests(
         contexts.push(load_installed_manifest(installed_root, mod_id)?);
     }
 
+    sort_contexts_by_installation(&mut contexts);
+
+    Ok(contexts)
+}
+
+fn sort_contexts_by_installation(contexts: &mut [InstalledManifestContext]) {
     contexts.sort_by(|left, right| {
-        right
-            .manifest
+        left.manifest
             .installed_at_unix_seconds
-            .cmp(&left.manifest.installed_at_unix_seconds)
+            .cmp(&right.manifest.installed_at_unix_seconds)
             .then_with(|| {
                 left.manifest
                     .name
@@ -1506,8 +2316,86 @@ fn load_all_installed_manifests(
                     .cmp(&right.manifest.name.to_lowercase())
             })
     });
+}
 
-    Ok(contexts)
+fn sort_participants_by_conflict_order(
+    participants: &mut [ModConflictParticipant],
+    stored_order: Option<&Vec<String>>,
+) {
+    let mut order_index = HashMap::new();
+
+    if let Some(stored_order) = stored_order {
+        for (index, mod_id) in stored_order.iter().enumerate() {
+            order_index.insert(mod_id, index);
+        }
+    }
+
+    participants.sort_by(|left, right| {
+        order_index
+            .get(&left.mod_id)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(
+                &order_index
+                    .get(&right.mod_id)
+                    .copied()
+                    .unwrap_or(usize::MAX),
+            )
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    for (index, participant) in participants.iter_mut().enumerate() {
+        participant.order = index + 1;
+    }
+}
+
+fn conflict_order_store_path(installed_root: &Path) -> PathBuf {
+    installed_root.join("conflict-orders.json")
+}
+
+fn conflict_path_key(deploy_relative_path: &str) -> String {
+    deploy_relative_path.replace('\\', "/").to_lowercase()
+}
+
+fn read_conflict_order_store(installed_root: &Path) -> Result<ConflictOrderStore, String> {
+    let store_path = conflict_order_store_path(installed_root);
+
+    if !store_path.exists() {
+        return Ok(ConflictOrderStore {
+            schema_version: default_conflict_order_schema_version(),
+            orders: HashMap::new(),
+        });
+    }
+
+    let store_json = fs::read_to_string(&store_path).map_err(|error| {
+        format!(
+            "Could not read conflict order store {}: {error}",
+            store_path.display()
+        )
+    })?;
+
+    serde_json::from_str(&store_json).map_err(|error| {
+        format!(
+            "Could not parse conflict order store {}: {error}",
+            store_path.display()
+        )
+    })
+}
+
+fn save_conflict_order_store(
+    installed_root: &Path,
+    store: &ConflictOrderStore,
+) -> Result<(), String> {
+    let store_path = conflict_order_store_path(installed_root);
+    let store_json = serde_json::to_string_pretty(store)
+        .map_err(|error| format!("Could not serialize conflict order store: {error}"))?;
+
+    fs::write(&store_path, store_json).map_err(|error| {
+        format!(
+            "Could not save conflict order store {}: {error}",
+            store_path.display()
+        )
+    })
 }
 
 fn read_manifest(manifest_path: &Path) -> Result<InstalledModManifest, String> {
@@ -1964,7 +2852,8 @@ mod tests {
     };
 
     use super::{
-        disable_mod_from, enable_mod_from, install_mod_from_folder_into, list_installed_mods_from,
+        apply_conflict_order_from, disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
+        install_mod_from_folder_into, list_installed_mods_from, move_conflict_participant_from,
         preview_enable_mod_from, preview_mod_import, preview_restore_all_mods_from,
         preview_uninstall_mod_from, restore_all_mods_from, uninstall_mod_from,
         validate_archive_path,
@@ -2096,6 +2985,27 @@ mod tests {
         let manifest = fs::read_to_string(&result.manifest_path).unwrap();
         assert!(manifest.contains("\"enabled\": false"));
         assert!(manifest.contains("nativePC/weapon/sword.mod3"));
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn same_name_mod_returns_existing_installation() {
+        let root = temp_root("duplicate_source");
+        let installed_root = temp_root("duplicate_target");
+        write_file(&root.join("nativePC").join("weapon").join("sword.mod3"));
+
+        let first =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let duplicate =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let list = list_installed_mods_from(&installed_root).unwrap();
+
+        assert!(!first.already_installed);
+        assert!(duplicate.already_installed);
+        assert_eq!(duplicate.mod_id, first.mod_id);
+        assert_eq!(list.mods.len(), 1);
 
         cleanup(root);
         cleanup(installed_root);
@@ -2400,6 +3310,386 @@ mod tests {
         cleanup(game_root);
     }
 
+    #[test]
+    fn detects_conflicting_deploy_paths() {
+        let first_source = temp_root("conflict_first_source");
+        let second_source = temp_root("conflict_second_source");
+        let installed_root = temp_root("conflict_installed");
+        let game_root = temp_root("conflict_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+
+        let disabled_report = get_mod_conflict_report_from(&installed_root).unwrap();
+        assert_eq!(disabled_report.conflict_count, 0);
+
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, true).unwrap();
+
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+
+        assert_eq!(report.conflict_count, 1);
+        assert_eq!(report.conflict_file_count, 1);
+        assert_eq!(report.groups[0].conflict_file_count, 1);
+        assert_eq!(report.groups[0].participant_count, 2);
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn groups_indirectly_conflicting_mods_together() {
+        let first_source = temp_root("connected_first_source");
+        let bridge_source = temp_root("connected_bridge_source");
+        let third_source = temp_root("connected_third_source");
+        let installed_root = temp_root("connected_installed");
+        let game_root = temp_root("connected_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("first-shared.mod3"),
+        );
+        write_file(
+            &bridge_source
+                .join("nativePC")
+                .join("weapon")
+                .join("first-shared.mod3"),
+        );
+        write_file(
+            &bridge_source
+                .join("nativePC")
+                .join("weapon")
+                .join("second-shared.mod3"),
+        );
+        write_file(
+            &third_source
+                .join("nativePC")
+                .join("weapon")
+                .join("second-shared.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let bridge =
+            install_mod_from_folder_into(root_to_string(&bridge_source), false, &installed_root)
+                .unwrap();
+        let third =
+            install_mod_from_folder_into(root_to_string(&third_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &bridge.mod_id, true).unwrap();
+        enable_mod_from(&installed_root, &game_root, &third.mod_id, true).unwrap();
+
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+
+        assert_eq!(report.groups.len(), 1);
+        assert_eq!(report.groups[0].participant_count, 3);
+        assert_eq!(report.groups[0].conflict_file_count, 2);
+
+        cleanup(first_source);
+        cleanup(bridge_source);
+        cleanup(third_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn moving_one_conflict_order_changes_only_that_winner() {
+        let first_source = temp_root("priority_first_source");
+        let second_source = temp_root("priority_second_source");
+        let installed_root = temp_root("priority_installed");
+        let game_root = temp_root("priority_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, true).unwrap();
+
+        let initial_report = get_mod_conflict_report_from(&installed_root).unwrap();
+        let group_id = initial_report.groups[0].group_id.clone();
+        move_conflict_participant_from(&installed_root, &group_id, &second.mod_id, "down").unwrap();
+        let moved_report = get_mod_conflict_report_from(&installed_root).unwrap();
+
+        assert_eq!(
+            initial_report.groups[0].participants.last().unwrap().mod_id,
+            first.mod_id
+        );
+        assert_eq!(
+            moved_report.groups[0].participants.last().unwrap().mod_id,
+            second.mod_id
+        );
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn moving_one_conflict_does_not_change_another_conflict_order() {
+        let first_source = temp_root("isolated_first_source");
+        let second_source = temp_root("isolated_second_source");
+        let third_source = temp_root("isolated_third_source");
+        let fourth_source = temp_root("isolated_fourth_source");
+        let installed_root = temp_root("isolated_installed");
+        let game_root = temp_root("isolated_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+        );
+        write_file(
+            &third_source
+                .join("nativePC")
+                .join("weapon")
+                .join("other.mod3"),
+        );
+        write_file(
+            &fourth_source
+                .join("nativePC")
+                .join("weapon")
+                .join("other.mod3"),
+        );
+
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        let third =
+            install_mod_from_folder_into(root_to_string(&third_source), false, &installed_root)
+                .unwrap();
+        let fourth =
+            install_mod_from_folder_into(root_to_string(&fourth_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, true).unwrap();
+        enable_mod_from(&installed_root, &game_root, &third.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &fourth.mod_id, true).unwrap();
+
+        let before = get_mod_conflict_report_from(&installed_root).unwrap();
+        assert_eq!(before.groups.len(), 2);
+        let edited_group = before
+            .groups
+            .iter()
+            .find(|group| {
+                group
+                    .participants
+                    .iter()
+                    .any(|participant| participant.mod_id == first.mod_id)
+            })
+            .unwrap();
+        let other_group = before
+            .groups
+            .iter()
+            .find(|group| group.group_id != edited_group.group_id)
+            .unwrap();
+        let edited_group_id = edited_group.group_id.clone();
+        let other_group_id = other_group.group_id.clone();
+        let other_before = other_group
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect::<Vec<_>>();
+
+        move_conflict_participant_from(&installed_root, &edited_group_id, &first.mod_id, "down")
+            .unwrap();
+
+        let after = get_mod_conflict_report_from(&installed_root).unwrap();
+        let other_after = after
+            .groups
+            .iter()
+            .find(|group| group.group_id == other_group_id)
+            .unwrap()
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(other_before, other_after);
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(third_source);
+        cleanup(fourth_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn applying_one_conflict_group_updates_all_shared_files() {
+        let first_source = temp_root("apply_order_first_source");
+        let second_source = temp_root("apply_order_second_source");
+        let installed_root = temp_root("apply_order_installed");
+        let game_root = temp_root("apply_order_game");
+        let target_path = game_root.join("nativePC").join("weapon").join("same.mod3");
+        let second_target_path = game_root.join("nativePC").join("weapon").join("same.mrl3");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file_with_contents(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+            "first",
+        );
+        write_file_with_contents(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+            "second",
+        );
+        write_file_with_contents(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mrl3"),
+            "first material",
+        );
+        write_file_with_contents(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mrl3"),
+            "second material",
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, true).unwrap();
+        assert_eq!(fs::read_to_string(&target_path).unwrap(), "second");
+        assert_eq!(
+            fs::read_to_string(&second_target_path).unwrap(),
+            "second material"
+        );
+
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+        let group_id = report.groups[0].group_id.clone();
+        assert_eq!(report.groups[0].conflict_file_count, 2);
+        move_conflict_participant_from(&installed_root, &group_id, &first.mod_id, "down").unwrap();
+        let result =
+            apply_conflict_order_from(&installed_root, &game_root, &group_id, false).unwrap();
+
+        assert_eq!(result.applied_file_count, 2);
+        assert_eq!(fs::read_to_string(&target_path).unwrap(), "first");
+        assert_eq!(
+            fs::read_to_string(&second_target_path).unwrap(),
+            "first material"
+        );
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn disabling_conflict_winner_restores_the_next_enabled_participant() {
+        let first_source = temp_root("handoff_first_source");
+        let second_source = temp_root("handoff_second_source");
+        let installed_root = temp_root("handoff_installed");
+        let game_root = temp_root("handoff_game");
+        let target_path = game_root.join("nativePC").join("weapon").join("same.mod3");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file_with_contents(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+            "first",
+        );
+        write_file_with_contents(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("same.mod3"),
+            "second",
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, true).unwrap();
+
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+        let group_id = report.groups[0].group_id.clone();
+        let winner = report.groups[0]
+            .participants
+            .iter()
+            .rev()
+            .find(|participant| participant.enabled)
+            .unwrap()
+            .mod_id
+            .clone();
+        apply_conflict_order_from(&installed_root, &game_root, &group_id, false).unwrap();
+        disable_mod_from(&installed_root, &game_root, &winner).unwrap();
+
+        let expected = if winner == first.mod_id {
+            "second"
+        } else {
+            "first"
+        };
+        assert_eq!(fs::read_to_string(&target_path).unwrap(), expected);
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
     fn temp_root(name: &str) -> PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2418,6 +3708,11 @@ mod tests {
     fn write_file(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "test").unwrap();
+    }
+
+    fn write_file_with_contents(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
     }
 
     fn root_to_string(path: &Path) -> String {

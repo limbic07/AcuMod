@@ -159,6 +159,18 @@ src/api/modLibrary.ts
   restoreAllMods()
   -> invoke<RestoreAllResult>("restore_all_mods")
 
+  getModConflictReport()
+  -> invoke<ModConflictReport>("get_mod_conflict_report")
+
+  moveConflictParticipant(groupId, modId, direction)
+  -> invoke<ModConflictMoveResult>("move_conflict_participant", { groupId, modId, direction })
+
+  previewApplyConflictOrder(groupId)
+  -> invoke<ApplyConflictOrderPlan>("preview_apply_conflict_order", { groupId })
+
+  applyConflictOrder(groupId, confirmOverwrite)
+  -> invoke<ApplyConflictOrderResult>("apply_conflict_order", { groupId, confirmOverwrite })
+
 src-tauri/src/commands/mod_library.rs
   #[tauri::command]
   get_mod_library_status(app) -> Result<ModLibraryStatus, String>
@@ -181,6 +193,14 @@ src-tauri/src/commands/mod_library.rs
 
   restore_all_mods(app) -> Result<RestoreAllResult, String>
 
+  get_mod_conflict_report(app) -> Result<ModConflictReport, String>
+
+  move_conflict_participant(app, group_id, mod_id, direction) -> Result<ModConflictMoveResult, String>
+
+  preview_apply_conflict_order(app, group_id) -> Result<ApplyConflictOrderPlan, String>
+
+  apply_conflict_order(app, group_id, confirm_overwrite) -> Result<ApplyConflictOrderResult, String>
+
 src-tauri/src/services/mod_library.rs
   创建 MOD 库目录
   MOD 库位于软件目录旁的 AcumodData/，不放入 AppData
@@ -193,6 +213,7 @@ src-tauri/src/services/mod_library.rs
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
   卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
   一键还原时扫描本地 MOD 库 manifest，清理所有记录过的 deployedFiles，并将相关 MOD 标记为未启用
+  扫描 deployRelativePath 构建 MOD 冲突关系图，将每个独立冲突组的整体顺序保存到 conflict-orders.json，并应用组内全部冲突文件
 ```
 
 ## 薄端到端切片
@@ -284,6 +305,16 @@ Vue UI
 4. Vue 展示确认提示。
 5. 用户确认后调用 `restore_all_mods`。
 6. Rust service 删除所有 manifest 中记录过的部署文件，清理空目录，并把相关 MOD 标记为未启用。
+
+例如“冲突检测和排序”：
+
+1. Vue 读取已安装 MOD 后调用 `get_mod_conflict_report`，主列表只显示普通序号。
+2. Rust service 扫描所有 manifest 中的 `deployRelativePath`，将直接或间接相互冲突的 MOD 聚合为独立冲突组。
+3. 用户打开冲突管理界面并选择一个 MOD 组；Vue 调用 `move_conflict_participant` 上移或下移组内 MOD。
+4. 排序移动只更新 `conflict-orders.json` 中这个 MOD 组合的顺序，不立即写入 MHW 游戏目录。
+5. 用户点击应用此组顺序后，Vue 先调用 `preview_apply_conflict_order`。
+6. 用户确认后调用 `apply_conflict_order`，Rust service 遍历组内全部冲突文件，按组顺序选择各文件的最终提供者并更新部署记录。
+7. 冲突报告只使用已启用 MOD；`enable_mod` 成功后把本次启用的 MOD 追加到相关组末尾，再应用组顺序。
 
 ## 验证标准
 

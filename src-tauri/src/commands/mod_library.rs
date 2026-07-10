@@ -1,7 +1,8 @@
 use crate::services::mod_library::{
-    self, InstalledModList, ModDeploymentPlan, ModDeploymentResult, ModImportPreview,
-    ModInstallResult, ModLibraryStatus, ModUninstallPlan, ModUninstallResult, RestoreAllPlan,
-    RestoreAllResult,
+    self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
+    ModConflictMoveResult, ModConflictReport, ModDeploymentPlan, ModDeploymentResult,
+    ModImportPreview, ModInstallResult, ModLibraryStatus, ModUninstallPlan, ModUninstallResult,
+    RestoreAllPlan, RestoreAllResult,
 };
 
 #[tauri::command]
@@ -80,4 +81,36 @@ pub fn preview_restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllPlan,
 #[tauri::command]
 pub fn restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllResult, String> {
     mod_library::restore_all_mods(&app)
+}
+
+#[tauri::command]
+pub fn get_mod_conflict_report(app: tauri::AppHandle) -> Result<ModConflictReport, String> {
+    mod_library::get_mod_conflict_report(&app)
+}
+
+#[tauri::command]
+pub fn move_conflict_participant(
+    app: tauri::AppHandle,
+    group_id: String,
+    mod_id: String,
+    direction: String,
+) -> Result<ModConflictMoveResult, String> {
+    mod_library::move_conflict_participant(&app, group_id, mod_id, direction)
+}
+
+#[tauri::command]
+pub fn preview_apply_conflict_order(
+    app: tauri::AppHandle,
+    group_id: String,
+) -> Result<ApplyConflictOrderPlan, String> {
+    mod_library::preview_apply_conflict_order(&app, group_id)
+}
+
+#[tauri::command]
+pub fn apply_conflict_order(
+    app: tauri::AppHandle,
+    group_id: String,
+    confirm_overwrite: bool,
+) -> Result<ApplyConflictOrderResult, String> {
+    mod_library::apply_conflict_order(&app, group_id, confirm_overwrite)
 }

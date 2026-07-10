@@ -46,6 +46,7 @@ export interface InstalledModFile {
 export interface ModInstallResult {
   modId: string;
   name: string;
+  alreadyInstalled: boolean;
   modPath: string;
   contentPath: string;
   manifestPath: string;
@@ -154,6 +155,55 @@ export interface RestoreAllResult {
   message: string;
 }
 
+export interface ModConflictParticipant {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  order: number;
+}
+
+export interface ModConflictGroup {
+  groupId: string;
+  participantCount: number;
+  conflictFileCount: number;
+  enabledParticipantCount: number;
+  participants: ModConflictParticipant[];
+}
+
+export interface ModConflictReport {
+  conflictCount: number;
+  conflictFileCount: number;
+  groups: ModConflictGroup[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModConflictMoveResult {
+  groupId: string;
+  modId: string;
+  direction: string;
+  moved: boolean;
+  message: string;
+}
+
+export interface ApplyConflictOrderPlan {
+  groupId: string;
+  conflictFileCount: number;
+  applicableFileCount: number;
+  enabledParticipantCount: number;
+  requiresOverwriteConfirmation: boolean;
+  warnings: string[];
+  message: string;
+}
+
+export interface ApplyConflictOrderResult {
+  groupId: string;
+  appliedFileCount: number;
+  skippedFileCount: number;
+  warnings: string[];
+  message: string;
+}
+
 export function getModLibraryStatus(): Promise<ModLibraryStatus> {
   return invoke<ModLibraryStatus>("get_mod_library_status");
 }
@@ -232,4 +282,38 @@ export function previewRestoreAllMods(): Promise<RestoreAllPlan> {
 
 export function restoreAllMods(): Promise<RestoreAllResult> {
   return invoke<RestoreAllResult>("restore_all_mods");
+}
+
+export function getModConflictReport(): Promise<ModConflictReport> {
+  return invoke<ModConflictReport>("get_mod_conflict_report");
+}
+
+export function moveConflictParticipant(
+  groupId: string,
+  modId: string,
+  direction: "up" | "down",
+): Promise<ModConflictMoveResult> {
+  return invoke<ModConflictMoveResult>("move_conflict_participant", {
+    groupId,
+    modId,
+    direction,
+  });
+}
+
+export function previewApplyConflictOrder(
+  groupId: string,
+): Promise<ApplyConflictOrderPlan> {
+  return invoke<ApplyConflictOrderPlan>("preview_apply_conflict_order", {
+    groupId,
+  });
+}
+
+export function applyConflictOrder(
+  groupId: string,
+  confirmOverwrite: boolean,
+): Promise<ApplyConflictOrderResult> {
+  return invoke<ApplyConflictOrderResult>("apply_conflict_order", {
+    groupId,
+    confirmOverwrite,
+  });
 }

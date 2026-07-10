@@ -25,7 +25,7 @@
 - MOD 库、导入预览和本地安装命令：`src-tauri/src/commands/mod_library.rs`
 - MOD 库、导入预览和本地安装 service：`src-tauri/src/services/mod_library.rs`
 
-当前第八个切片已经支持已安装 MOD 的启用、禁用、卸载和一键还原。文件夹 MOD 会复制到 `AcumodData/mods/installed/<mod_id>/content/` 并写入 `manifest.json`；已安装列表从 manifest 读取；`.zip`、`.7z`、`.rar` 压缩包会先通过 Acumod 内置解包组件解包到 `AcumodData/mods/staging/imports/`，再复用同一套导入识别和本地安装逻辑。启用 MOD 时会从本地 MOD 库复制到已配置的 MHW 游戏目录，并把实际部署路径写回 manifest；禁用 MOD 时只删除 manifest 中记录过的部署文件；卸载 MOD 时会先清理已记录部署，再删除 Acumod 本地库中的该 MOD 副本；一键还原会禁用所有仍有部署记录的 MOD，并删除所有 Acumod 记录过的部署文件。
+当前第九个切片已经支持已安装 MOD 的启用、禁用、卸载、一键还原、冲突检测和按冲突组排序。窗口任意位置可拖入一个 MOD 文件夹或 `.zip`、`.7z`、`.rar` 压缩包，确认弹窗后才导入；可正常识别的文件夹和压缩包会直接安装到本地 MOD 库，目录歧义或游戏根目录 fallback 仍沿用现有确认流程。同名 MOD 再次导入时返回已有记录，不创建重复安装。冲突界面只显示当前已启用 MOD 之间的冲突，例如 A/B 与 C/D 会显示为两个独立组；组内覆盖顺序默认采用实际启用顺序，后启用的 MOD 排在最后并覆盖先启用的 MOD，用户手动调整后保存到 `AcumodData/mods/installed/conflict-orders.json`。
 
 ## 文档阅读顺序
 
@@ -50,7 +50,7 @@
 - Tauri identifier：`com.acumod.app`。
 - 开发端口：Vite 固定使用 `1420`，Tauri devUrl 为 `http://localhost:1420`。
 - MVP 存储策略：先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和部署记录；后续需要复杂查询时再考虑 SQLite。
-- 存储位置：`AppData` 只保存 `config.json` 等小配置；MOD 库、导入暂存和后续备份放在软件目录旁的 `AcumodData/` 下。
+- 存储位置：`AppData` 只保存 `config.json` 等小配置；MOD 库和导入暂存放在软件目录旁的 `AcumodData/` 下。
 - MOD 部署方式：只使用复制式部署。安装时在 Acumod 软件目录保存一份 MOD；启用时复制到 MHW 游戏目录；禁用时删除游戏目录中的已部署副本；卸载 MOD 时删除软件目录中的 MOD 副本。
 - MOD 导入方式：第一版支持文件夹导入，以及 `rar`、`zip`、`7z` 压缩包导入；当前压缩包导入使用随 Acumod 打包的 7-Zip 解包组件，不要求用户另行安装 7-Zip。
 - MOD 导入识别：优先识别 `nativePC`；缺少 `nativePC` 但出现常见 nativePC 内部目录时自动补成 `nativePC/...`；用户直接选择 `plugins`、`weapon` 等内部目录时保留目录名并映射到 `nativePC/<目录名>/...`；仍无法识别时允许用户确认按游戏根目录相对路径导入。
@@ -67,7 +67,7 @@
 - MOD 元数据、启用状态、排序和部署记录的 JSON 文件拆分方式。
 - `rar`、`zip`、`7z` 解包实现方案和依赖选择。
 - MHW 文件 ID 表的数据格式和维护位置。
-- 冲突排序的重新部署策略。
+- 应用整个冲突组顺序时的部署记录修复策略。
 - 后续多 Profile 的数据结构。
 - 后续模型改绑的路径重写或文件改写规则。
 - 后续 MHW 游戏术语表的数据来源和翻译规则。

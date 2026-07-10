@@ -138,6 +138,21 @@ src/api/modLibrary.ts
   installModFromArchive(path, allowGameRoot)
   -> invoke<ModInstallResult>("install_mod_from_archive", { path, allowGameRoot })
 
+  previewEnableMod(modId)
+  -> invoke<ModDeploymentPlan>("preview_enable_mod", { modId })
+
+  enableMod(modId, confirmOverwrite)
+  -> invoke<ModDeploymentResult>("enable_mod", { modId, confirmOverwrite })
+
+  disableMod(modId)
+  -> invoke<ModDeploymentResult>("disable_mod", { modId })
+
+  previewUninstallMod(modId)
+  -> invoke<ModUninstallPlan>("preview_uninstall_mod", { modId })
+
+  uninstallMod(modId)
+  -> invoke<ModUninstallResult>("uninstall_mod", { modId })
+
 src-tauri/src/commands/mod_library.rs
   #[tauri::command]
   get_mod_library_status(app) -> Result<ModLibraryStatus, String>
@@ -145,6 +160,16 @@ src-tauri/src/commands/mod_library.rs
   preview_mod_import(path, allow_game_root) -> Result<ModImportPreview, String>
   install_mod_from_folder(app, path, allow_game_root) -> Result<ModInstallResult, String>
   install_mod_from_archive(app, path, allow_game_root) -> Result<ModInstallResult, String>
+
+  preview_enable_mod(app, mod_id) -> Result<ModDeploymentPlan, String>
+
+  enable_mod(app, mod_id, confirm_overwrite) -> Result<ModDeploymentResult, String>
+
+  disable_mod(app, mod_id) -> Result<ModDeploymentResult, String>
+
+  preview_uninstall_mod(app, mod_id) -> Result<ModUninstallPlan, String>
+
+  uninstall_mod(app, mod_id) -> Result<ModUninstallResult, String>
 
 src-tauri/src/services/mod_library.rs
   创建 MOD 库目录
@@ -154,6 +179,9 @@ src-tauri/src/services/mod_library.rs
   写入 manifest.json，记录来源、识别方式、部署相对路径和启用状态
   读取 installed/*/manifest.json 生成已安装 MOD 列表
   使用 Acumod 内置 7-Zip 解包组件解包 .zip/.7z/.rar，再复用文件夹导入逻辑
+  启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
+  禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
+  卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
 ```
 
 ## 薄端到端切片
@@ -218,6 +246,24 @@ Vue UI
 6. Vue 刷新已安装 MOD 列表。
 
 当前压缩包导入不新增 Rust 依赖，但开发和发布包中需要提供 `resources/unpackers/7zip/7z.exe`、`7z.dll` 和 7-Zip 许可文件。用户不需要单独安装 7-Zip。
+
+例如“启用和禁用已安装 MOD”：
+
+1. Vue 在已安装 MOD 列表中点击启用。
+2. `src/api/modLibrary.ts` 调用 `preview_enable_mod` 获取部署计划。
+3. Rust service 根据 manifest 文件列表生成 `源文件 -> MHW 目标文件` 映射，并检查目标是否已存在。
+4. 如果需要覆盖确认，Vue 弹出确认，再调用 `enable_mod`。
+5. Rust service 将库内文件复制到 MHW 游戏目录，并把 `deployedFiles` 写回 manifest。
+6. 禁用时 Vue 调用 `disable_mod`，Rust service 只删除该 MOD manifest 中记录过的部署文件。
+
+例如“卸载已安装 MOD”：
+
+1. Vue 在已安装 MOD 列表中点击卸载。
+2. `src/api/modLibrary.ts` 调用 `preview_uninstall_mod` 获取卸载预览。
+3. Rust service 返回库内文件数量、已记录部署文件数量和是否仍启用。
+4. Vue 展示确认提示。
+5. 用户确认后调用 `uninstall_mod`。
+6. Rust service 先清理该 MOD 的 `deployedFiles`，再删除 `AcumodData/mods/installed/<mod_id>/`。
 
 ## 验证标准
 

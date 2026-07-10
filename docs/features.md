@@ -92,6 +92,9 @@ MVP 完成标准：
 - 当前压缩包导入实现使用随 Acumod 打包的 7-Zip 解包组件：先解包到 `AcumodData/mods/staging/imports/`，再复用文件夹导入识别和本地 MOD 库安装逻辑；用户不需要另行安装 7-Zip。
 - 导入识别优先以 `nativePC` 为内容根；如果压缩包或文件夹缺少 `nativePC`，但出现 `weapon`、`wp`、`pl`、`plugins` 等常见 nativePC 内部目录，则自动补成 `nativePC/...` 部署路径；如果用户直接选择这些内部目录本身，也要保留目录名并映射到 `nativePC/<目录名>/...`。
 - 如果无法识别 `nativePC` 或常见 nativePC 内部目录，但目录内存在文件，应提示用户确认是否按游戏根目录相对路径导入；确认前不能自动把未知目录当作游戏根目录 MOD。
+- 当前启用实现：从 Acumod 本地 MOD 库复制到已配置的 MHW 游戏目录；启用前生成部署计划，目标文件已存在时要求用户确认。
+- 当前禁用实现：只删除该 MOD manifest 中 `deployedFiles` 记录过的游戏目录文件，并保留 Acumod 本地 MOD 库副本。
+- 当前卸载实现：先生成卸载预览；如果该 MOD 有已记录部署文件，先清理游戏目录部署副本；随后删除 Acumod 本地 MOD 库中的该 MOD 目录。
 
 建议功能：
 

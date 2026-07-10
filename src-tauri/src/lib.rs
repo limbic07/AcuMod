@@ -11,11 +11,16 @@ pub fn run() {
             commands::game::detect_game_directory,
             commands::game::get_game_directory_status,
             commands::game::save_game_directory,
+            commands::mod_library::disable_mod,
+            commands::mod_library::enable_mod,
             commands::mod_library::get_mod_library_status,
             commands::mod_library::install_mod_from_archive,
             commands::mod_library::install_mod_from_folder,
             commands::mod_library::list_installed_mods,
+            commands::mod_library::preview_enable_mod,
             commands::mod_library::preview_mod_import,
+            commands::mod_library::preview_uninstall_mod,
+            commands::mod_library::uninstall_mod,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

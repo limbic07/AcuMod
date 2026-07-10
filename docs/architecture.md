@@ -305,3 +305,25 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 7. manifest 的 `source_path` 记录原始压缩包路径，`content_root_path` 记录解包后识别出的内容根。
 
 当前没有新增 Rust 解包依赖。Acumod 采用随安装包分发解包组件的方式，避免要求用户另行安装 7-Zip；代价是发布包会增加几 MB，并且需要随包保留 7-Zip 许可文件。
+
+第六个 MVP 切片是“启用和禁用已安装 MOD”：
+
+1. Vue 在已安装 MOD 列表中提供启用、禁用入口。
+2. `src/api/modLibrary.ts` 调用 `preview_enable_mod`、`enable_mod` 和 `disable_mod`。
+3. Rust service 读取已保存的 MHW 游戏目录，并再次校验 `MonsterHunterWorld.exe`。
+4. 启用前生成部署计划，列出库内源文件、游戏目录目标文件、目标是否已存在，以及是否由 Acumod 记录为其他 MOD 部署。
+5. 如果目标文件已存在且不是同一个 MOD 的已记录部署，前端必须确认后才调用真正启用。
+6. 启用时从 `AcumodData/mods/installed/<mod_id>/content/` 复制文件到 MHW 游戏目录，并把 `deployedFiles` 写回 manifest。
+7. 禁用时只按该 MOD manifest 中的 `deployedFiles` 删除游戏目录文件，然后清空部署记录并标记为未启用。
+
+这个切片仍不解决 MOD 之间的最终覆盖顺序；冲突排序会在后续独立切片中实现。当前规则只保证启停链路可用，并且删除动作有明确记录依据。
+
+第七个 MVP 切片是“卸载已安装 MOD”：
+
+1. Vue 在已安装 MOD 列表中提供卸载入口。
+2. `src/api/modLibrary.ts` 调用 `preview_uninstall_mod` 和 `uninstall_mod`。
+3. Rust service 先读取该 MOD 的 manifest，生成卸载预览：库内文件数量、已记录部署文件数量、是否当前仍启用。
+4. 用户确认后，如果该 MOD 有 `deployedFiles`，Rust service 先复用部署记录清理逻辑删除游戏目录中的已部署文件，并清理由这些文件留下的空目录。
+5. 部署清理完成后，Rust service 删除 `AcumodData/mods/installed/<mod_id>/`，也就是 Acumod 管理的本地 MOD 副本。
+
+卸载不扫描 MHW 游戏目录，不根据 MOD 名称猜测删除文件；它只处理 manifest 中记录过的部署文件和 Acumod 本地库中的对应 MOD 目录。

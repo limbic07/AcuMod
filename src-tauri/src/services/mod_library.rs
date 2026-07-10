@@ -1,7 +1,8 @@
 use std::{
     cmp::Reverse,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env, fs,
+    io::ErrorKind,
     path::{Component, Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -9,6 +10,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+
+use crate::storage::config;
 
 const PREVIEW_FILE_LIMIT: usize = 200;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
@@ -105,6 +108,76 @@ pub struct InstalledModList {
     pub message: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDeploymentPlanFile {
+    pub deploy_relative_path: String,
+    pub source_path: String,
+    pub target_path: String,
+    pub target_exists: bool,
+    pub target_managed_by_current_mod: bool,
+    pub target_managed_by_other_mod: bool,
+    pub target_managed_mod_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDeploymentPlan {
+    pub mod_id: String,
+    pub name: String,
+    pub status: String,
+    pub message: String,
+    pub file_count: usize,
+    pub files: Vec<ModDeploymentPlanFile>,
+    pub warnings: Vec<String>,
+    pub requires_overwrite_confirmation: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployedModFile {
+    pub deploy_relative_path: String,
+    pub deployed_path: String,
+    pub deployed_at_unix_seconds: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDeploymentResult {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub affected_file_count: usize,
+    pub files: Vec<DeployedModFile>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModUninstallPlan {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub deployed_file_count: usize,
+    pub library_file_count: usize,
+    pub deployed_files: Vec<DeployedModFile>,
+    pub library_files: Vec<InstalledModFile>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModUninstallResult {
+    pub mod_id: String,
+    pub name: String,
+    pub removed_deployed_file_count: usize,
+    pub removed_library_file_count: usize,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstalledModManifest {
@@ -119,6 +192,8 @@ struct InstalledModManifest {
     enabled: bool,
     file_count: usize,
     files: Vec<InstalledModFile>,
+    #[serde(default)]
+    deployed_files: Vec<DeployedModFile>,
 }
 
 #[derive(Clone)]
@@ -139,6 +214,13 @@ enum DeployRoot {
 struct ScanResult {
     directories: Vec<PathBuf>,
     warnings: Vec<String>,
+}
+
+struct InstalledManifestContext {
+    mod_path: PathBuf,
+    content_path: PathBuf,
+    manifest_path: PathBuf,
+    manifest: InstalledModManifest,
 }
 
 pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus, String> {
@@ -255,6 +337,55 @@ pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, S
     list_installed_mods_from(&paths.installed_path)
 }
 
+pub fn preview_enable_mod(
+    app: &tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModDeploymentPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    preview_enable_mod_from(&paths.installed_path, &game_root, &mod_id)
+}
+
+pub fn enable_mod(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    confirm_overwrite: bool,
+) -> Result<ModDeploymentResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    enable_mod_from(
+        &paths.installed_path,
+        &game_root,
+        &mod_id,
+        confirm_overwrite,
+    )
+}
+
+pub fn disable_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModDeploymentResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    disable_mod_from(&paths.installed_path, &game_root, &mod_id)
+}
+
+pub fn preview_uninstall_mod(
+    app: &tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModUninstallPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    preview_uninstall_mod_from(&paths.installed_path, &mod_id)
+}
+
+pub fn uninstall_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModUninstallResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    uninstall_mod_from(&paths.installed_path, &game_root, &mod_id)
+}
+
 fn install_mod_from_folder_into(
     raw_path: String,
     allow_game_root: bool,
@@ -364,6 +495,7 @@ fn install_mod_from_folder_into_with_options(
             enabled: false,
             file_count: installed_files.len(),
             files: installed_files.clone(),
+            deployed_files: Vec::new(),
         };
         let manifest_json = serde_json::to_string_pretty(&manifest)
             .map_err(|error| format!("Could not serialize MOD manifest: {error}"))?;
@@ -844,6 +976,524 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
     })
 }
 
+fn preview_enable_mod_from(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+) -> Result<ModDeploymentPlan, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    build_deployment_plan(installed_root, game_root, &context)
+}
+
+fn enable_mod_from(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+    confirm_overwrite: bool,
+) -> Result<ModDeploymentResult, String> {
+    let mut context = load_installed_manifest(installed_root, mod_id)?;
+    let plan = build_deployment_plan(installed_root, game_root, &context)?;
+
+    if plan.requires_overwrite_confirmation && !confirm_overwrite {
+        return Err(
+            "Enable plan requires overwrite confirmation because target files already exist."
+                .to_string(),
+        );
+    }
+
+    let deployed_at = unix_seconds_now()?;
+    let mut deployed_files = Vec::new();
+
+    for file in &context.manifest.files {
+        let source_path = source_path_for_installed_file(&context, file)?;
+        let target_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
+        let target_path = game_root.join(target_relative_path);
+
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "Could not create deployment directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        fs::copy(&source_path, &target_path).map_err(|error| {
+            format!(
+                "Could not deploy {} to {}: {error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+
+        deployed_files.push(DeployedModFile {
+            deploy_relative_path: file.deploy_relative_path.clone(),
+            deployed_path: path_to_string(&target_path),
+            deployed_at_unix_seconds: deployed_at,
+        });
+    }
+
+    context.manifest.enabled = true;
+    context.manifest.deployed_files = deployed_files.clone();
+    save_manifest(&context.manifest_path, &context.manifest)?;
+
+    Ok(ModDeploymentResult {
+        mod_id: context.manifest.id,
+        name: context.manifest.name,
+        enabled: true,
+        affected_file_count: deployed_files.len(),
+        files: deployed_files,
+        warnings: plan.warnings,
+        message: "MOD was enabled and copied to the MHW game directory.".to_string(),
+    })
+}
+
+fn disable_mod_from(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+) -> Result<ModDeploymentResult, String> {
+    let mut context = load_installed_manifest(installed_root, mod_id)?;
+    let deployed_files = context.manifest.deployed_files.clone();
+    let mut warnings = Vec::new();
+    let removed_count = remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
+
+    context.manifest.enabled = false;
+    context.manifest.deployed_files = Vec::new();
+    save_manifest(&context.manifest_path, &context.manifest)?;
+
+    let message = if deployed_files.is_empty() {
+        "MOD was already disabled; no deployment records were found.".to_string()
+    } else {
+        "MOD was disabled and its recorded deployed files were removed.".to_string()
+    };
+
+    Ok(ModDeploymentResult {
+        mod_id: context.manifest.id,
+        name: context.manifest.name,
+        enabled: false,
+        affected_file_count: removed_count,
+        files: deployed_files,
+        warnings,
+        message,
+    })
+}
+
+fn preview_uninstall_mod_from(
+    installed_root: &Path,
+    mod_id: &str,
+) -> Result<ModUninstallPlan, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    let mut warnings = Vec::new();
+
+    if context.manifest.enabled {
+        warnings.push(
+            "This MOD is enabled. Uninstalling it will remove its recorded deployed files first."
+                .to_string(),
+        );
+    }
+
+    Ok(ModUninstallPlan {
+        mod_id: context.manifest.id,
+        name: context.manifest.name,
+        enabled: context.manifest.enabled,
+        deployed_file_count: context.manifest.deployed_files.len(),
+        library_file_count: context.manifest.files.len(),
+        deployed_files: context.manifest.deployed_files,
+        library_files: context.manifest.files,
+        warnings,
+        message: "Uninstall will remove this MOD from the local Acumod library.".to_string(),
+    })
+}
+
+fn uninstall_mod_from(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+) -> Result<ModUninstallResult, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    let removed_library_file_count = context.manifest.files.len();
+    let deployed_files = context.manifest.deployed_files.clone();
+    let mut warnings = Vec::new();
+    let removed_deployed_file_count =
+        remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
+    let mod_id = context.manifest.id;
+    let name = context.manifest.name;
+
+    fs::remove_dir_all(&context.mod_path).map_err(|error| {
+        format!(
+            "Could not remove installed MOD directory {}: {error}",
+            context.mod_path.display()
+        )
+    })?;
+
+    Ok(ModUninstallResult {
+        mod_id,
+        name,
+        removed_deployed_file_count,
+        removed_library_file_count,
+        warnings,
+        message: "MOD was uninstalled from the local Acumod library.".to_string(),
+    })
+}
+
+fn remove_deployed_files(
+    game_root: &Path,
+    deployed_files: &[DeployedModFile],
+    warnings: &mut Vec<String>,
+) -> Result<usize, String> {
+    let mut removed_count = 0;
+
+    for deployed_file in deployed_files {
+        let target_relative_path = relative_string_to_path(&deployed_file.deploy_relative_path)?;
+        let target_path = game_root.join(target_relative_path);
+
+        if !target_path.exists() {
+            warnings.push(format!(
+                "Deployment target was already missing: {}",
+                target_path.display()
+            ));
+            continue;
+        }
+
+        if target_path.is_dir() {
+            return Err(format!(
+                "Refusing to remove a directory during deployment cleanup: {}",
+                target_path.display()
+            ));
+        }
+
+        fs::remove_file(&target_path).map_err(|error| {
+            format!(
+                "Could not remove deployed file {}: {error}",
+                target_path.display()
+            )
+        })?;
+        removed_count += 1;
+        cleanup_empty_parent_directories(&target_path, game_root, warnings);
+    }
+
+    Ok(removed_count)
+}
+
+fn cleanup_empty_parent_directories(
+    file_path: &Path,
+    game_root: &Path,
+    warnings: &mut Vec<String>,
+) {
+    let Some(mut directory) = file_path.parent().map(Path::to_path_buf) else {
+        return;
+    };
+
+    // Only climb through directories that contained a file Acumod just removed.
+    // `remove_dir` is intentionally non-recursive: it succeeds only when the
+    // directory is empty, so manually installed files stop the cleanup safely.
+    while directory.starts_with(game_root) && directory != game_root {
+        match fs::remove_dir(&directory) {
+            Ok(()) => {
+                let Some(parent) = directory.parent() else {
+                    break;
+                };
+                directory = parent.to_path_buf();
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                let Some(parent) = directory.parent() else {
+                    break;
+                };
+                directory = parent.to_path_buf();
+            }
+            Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => break,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not remove empty deployment directory {}: {error}",
+                    directory.display()
+                ));
+                break;
+            }
+        }
+    }
+}
+
+fn build_deployment_plan(
+    installed_root: &Path,
+    game_root: &Path,
+    context: &InstalledManifestContext,
+) -> Result<ModDeploymentPlan, String> {
+    let deployed_index = deployed_file_index(installed_root)?;
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    let mut requires_overwrite_confirmation = false;
+
+    for file in &context.manifest.files {
+        let source_path = source_path_for_installed_file(context, file)?;
+        let target_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
+        let target_path = game_root.join(target_relative_path);
+        let target_key = deployment_key(&target_path);
+        let target_managed_mod_id = deployed_index.get(&target_key).cloned();
+        let target_managed_by_current_mod = target_managed_mod_id
+            .as_deref()
+            .map(|id| id == context.manifest.id)
+            .unwrap_or(false);
+        let target_managed_by_other_mod = target_managed_mod_id
+            .as_deref()
+            .map(|id| id != context.manifest.id)
+            .unwrap_or(false);
+        let target_exists = target_path.exists();
+
+        if target_exists && !target_managed_by_current_mod {
+            requires_overwrite_confirmation = true;
+        }
+
+        if target_managed_by_other_mod {
+            warnings.push(format!(
+                "Target is recorded as deployed by another MOD: {}",
+                target_path.display()
+            ));
+        } else if target_exists && target_managed_mod_id.is_none() {
+            warnings.push(format!(
+                "Target already exists but is not recorded as Acumod-managed: {}",
+                target_path.display()
+            ));
+        }
+
+        files.push(ModDeploymentPlanFile {
+            deploy_relative_path: file.deploy_relative_path.clone(),
+            source_path: path_to_string(&source_path),
+            target_path: path_to_string(&target_path),
+            target_exists,
+            target_managed_by_current_mod,
+            target_managed_by_other_mod,
+            target_managed_mod_id,
+        });
+    }
+
+    let status = if requires_overwrite_confirmation {
+        "needsOverwriteConfirmation"
+    } else {
+        "ready"
+    };
+    let message = if requires_overwrite_confirmation {
+        "Some target files already exist. Confirm before enabling this MOD."
+    } else if context.manifest.enabled {
+        "MOD is already enabled; enabling again will refresh its deployed files."
+    } else {
+        "MOD can be enabled without overwriting untracked files."
+    };
+
+    Ok(ModDeploymentPlan {
+        mod_id: context.manifest.id.clone(),
+        name: context.manifest.name.clone(),
+        status: status.to_string(),
+        message: message.to_string(),
+        file_count: context.manifest.files.len(),
+        files,
+        warnings,
+        requires_overwrite_confirmation,
+    })
+}
+
+fn load_installed_manifest(
+    installed_root: &Path,
+    mod_id: &str,
+) -> Result<InstalledManifestContext, String> {
+    validate_mod_id(mod_id)?;
+    let mod_path = installed_root.join(mod_id);
+
+    if !mod_path.is_dir() {
+        return Err(format!("Installed MOD was not found: {mod_id}"));
+    }
+
+    let installed_root = installed_root.canonicalize().map_err(|error| {
+        format!(
+            "Could not resolve installed MOD root {}: {error}",
+            installed_root.display()
+        )
+    })?;
+    let mod_path = mod_path.canonicalize().map_err(|error| {
+        format!(
+            "Could not resolve installed MOD path {}: {error}",
+            mod_path.display()
+        )
+    })?;
+
+    if !mod_path.starts_with(&installed_root) {
+        return Err(format!(
+            "Installed MOD path escaped the managed library: {}",
+            mod_path.display()
+        ));
+    }
+
+    let content_path = mod_path.join("content");
+    let manifest_path = mod_path.join("manifest.json");
+    let manifest = read_manifest(&manifest_path)?;
+
+    Ok(InstalledManifestContext {
+        mod_path,
+        content_path,
+        manifest_path,
+        manifest,
+    })
+}
+
+fn read_manifest(manifest_path: &Path) -> Result<InstalledModManifest, String> {
+    let manifest_json = fs::read_to_string(manifest_path).map_err(|error| {
+        format!(
+            "Could not read MOD manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+
+    serde_json::from_str::<InstalledModManifest>(&manifest_json).map_err(|error| {
+        format!(
+            "Could not parse MOD manifest {}: {error}",
+            manifest_path.display()
+        )
+    })
+}
+
+fn save_manifest(manifest_path: &Path, manifest: &InstalledModManifest) -> Result<(), String> {
+    let manifest_json = serde_json::to_string_pretty(manifest)
+        .map_err(|error| format!("Could not serialize MOD manifest: {error}"))?;
+
+    fs::write(manifest_path, manifest_json).map_err(|error| {
+        format!(
+            "Could not write MOD manifest {}: {error}",
+            manifest_path.display()
+        )
+    })
+}
+
+fn source_path_for_installed_file(
+    context: &InstalledManifestContext,
+    file: &InstalledModFile,
+) -> Result<PathBuf, String> {
+    let library_relative_path = relative_string_to_path(&file.library_relative_path)?;
+    let source_path = context.mod_path.join(library_relative_path);
+
+    if !source_path.is_file() {
+        return Err(format!(
+            "Installed MOD file is missing from library: {}",
+            source_path.display()
+        ));
+    }
+
+    let content_root = context.content_path.canonicalize().map_err(|error| {
+        format!(
+            "Could not resolve MOD content directory {}: {error}",
+            context.content_path.display()
+        )
+    })?;
+    let source_path = source_path.canonicalize().map_err(|error| {
+        format!(
+            "Could not resolve MOD library file {}: {error}",
+            source_path.display()
+        )
+    })?;
+
+    if !source_path.starts_with(&content_root) {
+        return Err(format!(
+            "Installed MOD file escaped its content directory: {}",
+            source_path.display()
+        ));
+    }
+
+    Ok(source_path)
+}
+
+fn deployed_file_index(installed_root: &Path) -> Result<HashMap<String, String>, String> {
+    let mut deployed_files = HashMap::new();
+
+    if !installed_root.exists() {
+        return Ok(deployed_files);
+    }
+
+    for entry in fs::read_dir(installed_root).map_err(|error| {
+        format!(
+            "Could not read installed MOD directory {}: {error}",
+            installed_root.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not read entry under {}: {error}",
+                installed_root.display()
+            )
+        })?;
+        let mod_path = entry.path();
+
+        if !mod_path.is_dir()
+            || mod_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with('.'))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let manifest_path = mod_path.join("manifest.json");
+
+        if !manifest_path.is_file() {
+            continue;
+        }
+
+        let manifest = read_manifest(&manifest_path)?;
+
+        for deployed_file in manifest.deployed_files {
+            deployed_files.insert(
+                deployment_key(Path::new(&deployed_file.deployed_path)),
+                manifest.id.clone(),
+            );
+        }
+    }
+
+    Ok(deployed_files)
+}
+
+fn resolve_game_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_config = config::load(app)?;
+    let raw_path = app_config
+        .game_directory
+        .ok_or_else(|| "Set a valid MHW game directory before deploying MODs.".to_string())?;
+    let game_root = PathBuf::from(raw_path);
+
+    if !game_root.is_dir() {
+        return Err(format!(
+            "Configured MHW game directory does not exist: {}",
+            game_root.display()
+        ));
+    }
+
+    if !game_root.join("MonsterHunterWorld.exe").is_file() {
+        return Err(format!(
+            "Configured MHW game directory is missing MonsterHunterWorld.exe: {}",
+            game_root.display()
+        ));
+    }
+
+    game_root
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve MHW game directory: {error}"))
+}
+
+fn validate_mod_id(mod_id: &str) -> Result<(), String> {
+    if mod_id.is_empty()
+        || mod_id == "."
+        || mod_id == ".."
+        || mod_id.contains('/')
+        || mod_id.contains('\\')
+        || mod_id.contains(':')
+    {
+        return Err(format!("Unsafe MOD id: {mod_id}"));
+    }
+
+    Ok(())
+}
+
+fn deployment_key(path: &Path) -> String {
+    path_to_string(path).to_lowercase()
+}
+
 fn validate_archive_path(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("Choose a MOD archive before importing.".to_string());
@@ -1139,8 +1789,9 @@ mod tests {
     };
 
     use super::{
-        install_mod_from_folder_into, list_installed_mods_from, preview_mod_import,
-        validate_archive_path,
+        disable_mod_from, enable_mod_from, install_mod_from_folder_into, list_installed_mods_from,
+        preview_enable_mod_from, preview_mod_import, preview_uninstall_mod_from,
+        uninstall_mod_from, validate_archive_path,
     };
 
     #[test]
@@ -1306,6 +1957,181 @@ mod tests {
         assert!(error.contains("Unsupported archive extension"));
 
         cleanup(root);
+    }
+
+    #[test]
+    fn enables_mod_by_copying_files_and_recording_deployment() {
+        let source_root = temp_root("enable_source");
+        let installed_root = temp_root("enable_installed");
+        let game_root = temp_root("enable_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let install_result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+
+        let enable_result =
+            enable_mod_from(&installed_root, &game_root, &install_result.mod_id, false).unwrap();
+
+        assert!(enable_result.enabled);
+        assert_eq!(enable_result.affected_file_count, 1);
+        assert!(game_root
+            .join("nativePC")
+            .join("weapon")
+            .join("sword.mod3")
+            .is_file());
+        let manifest = fs::read_to_string(&install_result.manifest_path).unwrap();
+        assert!(manifest.contains("\"enabled\": true"));
+        assert!(manifest.contains("\"deployedFiles\""));
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn disable_mod_removes_only_recorded_deployed_files() {
+        let source_root = temp_root("disable_source");
+        let installed_root = temp_root("disable_installed");
+        let game_root = temp_root("disable_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(&game_root.join("nativePC").join("manual").join("keep.txt"));
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let install_result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &install_result.mod_id, false).unwrap();
+
+        let disable_result =
+            disable_mod_from(&installed_root, &game_root, &install_result.mod_id).unwrap();
+
+        assert!(!disable_result.enabled);
+        assert_eq!(disable_result.affected_file_count, 1);
+        assert!(!game_root
+            .join("nativePC")
+            .join("weapon")
+            .join("sword.mod3")
+            .exists());
+        assert!(!game_root.join("nativePC").join("weapon").exists());
+        assert!(game_root
+            .join("nativePC")
+            .join("manual")
+            .join("keep.txt")
+            .is_file());
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn enable_preview_requires_confirmation_for_unmanaged_existing_target() {
+        let source_root = temp_root("overwrite_source");
+        let installed_root = temp_root("overwrite_installed");
+        let game_root = temp_root("overwrite_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(&game_root.join("nativePC").join("weapon").join("sword.mod3"));
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let install_result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+
+        let plan =
+            preview_enable_mod_from(&installed_root, &game_root, &install_result.mod_id).unwrap();
+        let error =
+            match enable_mod_from(&installed_root, &game_root, &install_result.mod_id, false) {
+                Ok(_) => panic!("enable should require overwrite confirmation"),
+                Err(error) => error,
+            };
+
+        assert!(plan.requires_overwrite_confirmation);
+        assert_eq!(plan.status, "needsOverwriteConfirmation");
+        assert!(error.contains("requires overwrite confirmation"));
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn uninstalls_disabled_mod_from_local_library() {
+        let source_root = temp_root("uninstall_disabled_source");
+        let installed_root = temp_root("uninstall_disabled_installed");
+        let game_root = temp_root("uninstall_disabled_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let install_result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let mod_path = PathBuf::from(&install_result.mod_path);
+
+        let plan = preview_uninstall_mod_from(&installed_root, &install_result.mod_id).unwrap();
+        let result =
+            uninstall_mod_from(&installed_root, &game_root, &install_result.mod_id).unwrap();
+
+        assert_eq!(plan.library_file_count, 1);
+        assert_eq!(plan.deployed_file_count, 0);
+        assert_eq!(result.removed_library_file_count, 1);
+        assert_eq!(result.removed_deployed_file_count, 0);
+        assert!(!mod_path.exists());
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn uninstalls_enabled_mod_and_removes_recorded_deployment() {
+        let source_root = temp_root("uninstall_enabled_source");
+        let installed_root = temp_root("uninstall_enabled_installed");
+        let game_root = temp_root("uninstall_enabled_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let install_result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &install_result.mod_id, false).unwrap();
+
+        let result =
+            uninstall_mod_from(&installed_root, &game_root, &install_result.mod_id).unwrap();
+
+        assert_eq!(result.removed_library_file_count, 1);
+        assert_eq!(result.removed_deployed_file_count, 1);
+        assert!(!PathBuf::from(&install_result.mod_path).exists());
+        assert!(!game_root
+            .join("nativePC")
+            .join("weapon")
+            .join("sword.mod3")
+            .exists());
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
     }
 
     fn temp_root(name: &str) -> PathBuf {

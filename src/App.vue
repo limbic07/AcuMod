@@ -8,15 +8,25 @@ import {
   type GameDirectoryStatus,
 } from "./api/game";
 import {
+  disableMod,
+  enableMod,
   getModLibraryStatus,
   installModFromArchive,
   installModFromFolder,
   listInstalledMods,
+  previewEnableMod,
   previewModImport,
+  previewUninstallMod,
+  uninstallMod,
   type InstalledModList,
+  type InstalledModSummary,
+  type ModDeploymentPlan,
+  type ModDeploymentResult,
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
+  type ModUninstallPlan,
+  type ModUninstallResult,
 } from "./api/modLibrary";
 
 const appInfo = ref<AppInfo | null>(null);
@@ -25,6 +35,10 @@ const modLibraryStatus = ref<ModLibraryStatus | null>(null);
 const installedModList = ref<InstalledModList | null>(null);
 const importPreview = ref<ModImportPreview | null>(null);
 const installResult = ref<ModInstallResult | null>(null);
+const deploymentPlan = ref<ModDeploymentPlan | null>(null);
+const deploymentResult = ref<ModDeploymentResult | null>(null);
+const uninstallPlan = ref<ModUninstallPlan | null>(null);
+const uninstallResult = ref<ModUninstallResult | null>(null);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
@@ -33,12 +47,14 @@ const gameError = ref("");
 const modLibraryError = ref("");
 const importError = ref("");
 const archiveError = ref("");
+const deploymentError = ref("");
 const isLoadingApp = ref(false);
 const isLoadingGame = ref(false);
 const isLoadingModLibrary = ref(false);
 const isPreviewingImport = ref(false);
 const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
+const activeModAction = ref("");
 
 const statusLabel = computed(() => {
   if (!gameStatus.value) {
@@ -95,6 +111,9 @@ const importStatusClass = computed(() => {
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
+const deploymentPlanFiles = computed(() => deploymentPlan.value?.files.slice(0, 12) ?? []);
+const deployedFiles = computed(() => deploymentResult.value?.files.slice(0, 12) ?? []);
+const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.slice(0, 12) ?? []);
 
 async function loadAppInfo() {
   isLoadingApp.value = true;
@@ -241,6 +260,92 @@ async function installArchive() {
     archiveError.value = error instanceof Error ? error.message : String(error);
   } finally {
     isInstallingArchive.value = false;
+  }
+}
+
+async function enableInstalledMod(mod: InstalledModSummary) {
+  activeModAction.value = mod.id;
+
+  try {
+    deploymentResult.value = null;
+    const plan = await previewEnableMod(mod.id);
+    deploymentPlan.value = plan;
+    deploymentError.value = "";
+
+    let confirmOverwrite = false;
+
+    if (plan.requiresOverwriteConfirmation) {
+      confirmOverwrite = window.confirm(
+        `启用 ${mod.name} 会覆盖 ${plan.fileCount} 个目标文件中的已有文件。是否继续？`,
+      );
+
+      if (!confirmOverwrite) {
+        return;
+      }
+    }
+
+    deploymentResult.value = await enableMod(mod.id, confirmOverwrite);
+    await loadInstalledMods();
+  } catch (error) {
+    deploymentError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    activeModAction.value = "";
+  }
+}
+
+async function disableInstalledMod(mod: InstalledModSummary) {
+  const shouldDisable = window.confirm(
+    `禁用 ${mod.name} 会删除它由 Acumod 记录的已部署文件，MOD 库内副本会保留。是否继续？`,
+  );
+
+  if (!shouldDisable) {
+    return;
+  }
+
+  activeModAction.value = mod.id;
+
+  try {
+    deploymentPlan.value = null;
+    deploymentResult.value = await disableMod(mod.id);
+    deploymentError.value = "";
+    await loadInstalledMods();
+  } catch (error) {
+    deploymentError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    activeModAction.value = "";
+  }
+}
+
+async function uninstallInstalledMod(mod: InstalledModSummary) {
+  activeModAction.value = mod.id;
+
+  try {
+    uninstallResult.value = null;
+    const plan = await previewUninstallMod(mod.id);
+    uninstallPlan.value = plan;
+    deploymentError.value = "";
+
+    const shouldUninstall = window.confirm(
+      `卸载 ${mod.name} 会删除 Acumod 本地 MOD 库副本 ${plan.libraryFileCount} 个文件` +
+        (plan.deployedFileCount > 0
+          ? `，并先清理游戏目录中已记录的 ${plan.deployedFileCount} 个部署文件。`
+          : "。") +
+        "是否继续？",
+    );
+
+    if (!shouldUninstall) {
+      return;
+    }
+
+    uninstallResult.value = await uninstallMod(mod.id);
+    deploymentPlan.value = null;
+    deploymentResult.value = null;
+    await loadModLibraryStatus();
+    await loadInstalledMods();
+  } catch (error) {
+    deploymentError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    activeModAction.value = "";
   }
 }
 
@@ -493,11 +598,107 @@ onMounted(() => {
               <strong>{{ mod.name }}</strong>
               <span>{{ mod.id }}</span>
             </div>
-            <div>
+            <div class="mod-actions">
               <span>{{ mod.fileCount }} files</span>
               <span>{{ mod.enabled ? "已启用" : "未启用" }}</span>
               <span>{{ mod.deployRoot }}</span>
+              <button
+                v-if="!mod.enabled"
+                type="button"
+                class="secondary-button"
+                :disabled="!!activeModAction"
+                @click="enableInstalledMod(mod)"
+              >
+                {{ activeModAction === mod.id ? "启用中" : "启用" }}
+              </button>
+              <button
+                v-else
+                type="button"
+                class="secondary-button danger-button"
+                :disabled="!!activeModAction"
+                @click="disableInstalledMod(mod)"
+              >
+                {{ activeModAction === mod.id ? "禁用中" : "禁用" }}
+              </button>
+              <button
+                type="button"
+                class="secondary-button danger-button"
+                :disabled="!!activeModAction"
+                @click="uninstallInstalledMod(mod)"
+              >
+                {{ activeModAction === mod.id ? "处理中" : "卸载" }}
+              </button>
             </div>
+          </li>
+        </ul>
+      </div>
+
+      <p v-if="deploymentError" class="error">{{ deploymentError }}</p>
+
+      <div v-if="deploymentPlan" class="preview-block">
+        <h3>启用计划</h3>
+        <p class="hint">{{ deploymentPlan.message }}</p>
+        <ul v-if="deploymentPlan.warnings.length" class="compact-list">
+          <li v-for="warning in deploymentPlan.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+        <ul v-if="deploymentPlanFiles.length" class="file-preview">
+          <li v-for="file in deploymentPlanFiles" :key="file.targetPath">
+            <span>{{ file.deployRelativePath }}</span>
+            <strong>{{ file.targetExists ? "目标已存在" : file.targetPath }}</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="deploymentResult" class="preview-block">
+        <h3>启停结果</h3>
+        <p class="hint">{{ deploymentResult.message }}</p>
+        <ul v-if="deploymentResult.warnings.length" class="compact-list">
+          <li v-for="warning in deploymentResult.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+        <ul v-if="deployedFiles.length" class="file-preview">
+          <li v-for="file in deployedFiles" :key="file.deployedPath">
+            <span>{{ file.deployRelativePath }}</span>
+            <strong>{{ file.deployedPath }}</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="uninstallPlan" class="preview-block">
+        <h3>卸载预览</h3>
+        <p class="hint">{{ uninstallPlan.message }}</p>
+        <ul v-if="uninstallPlan.warnings.length" class="compact-list">
+          <li v-for="warning in uninstallPlan.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+        <ul v-if="uninstallLibraryFiles.length" class="file-preview">
+          <li v-for="file in uninstallLibraryFiles" :key="file.libraryRelativePath">
+            <span>{{ file.deployRelativePath }}</span>
+            <strong>{{ file.libraryRelativePath }}</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="uninstallResult" class="preview-block">
+        <h3>卸载结果</h3>
+        <p class="hint">{{ uninstallResult.message }}</p>
+        <dl class="facts compact-facts">
+          <div>
+            <dt>部署文件</dt>
+            <dd>{{ uninstallResult.removedDeployedFileCount }}</dd>
+          </div>
+          <div>
+            <dt>库内文件</dt>
+            <dd>{{ uninstallResult.removedLibraryFileCount }}</dd>
+          </div>
+        </dl>
+        <ul v-if="uninstallResult.warnings.length" class="compact-list">
+          <li v-for="warning in uninstallResult.warnings" :key="warning">
+            <span>{{ warning }}</span>
           </li>
         </ul>
       </div>
@@ -708,6 +909,11 @@ button:disabled {
   background: #ffffff;
 }
 
+.danger-button {
+  border-color: #e4b5ae;
+  color: #b42318;
+}
+
 .facts {
   display: grid;
   gap: 0;
@@ -828,6 +1034,10 @@ dd {
   min-width: 0;
   color: #52645f;
   overflow-wrap: anywhere;
+}
+
+.mod-actions {
+  justify-content: flex-end;
 }
 
 .file-preview span,

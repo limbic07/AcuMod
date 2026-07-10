@@ -73,6 +73,64 @@ export interface InstalledModList {
   message: string;
 }
 
+export interface ModDeploymentPlanFile {
+  deployRelativePath: string;
+  sourcePath: string;
+  targetPath: string;
+  targetExists: boolean;
+  targetManagedByCurrentMod: boolean;
+  targetManagedByOtherMod: boolean;
+  targetManagedModId: string | null;
+}
+
+export interface ModDeploymentPlan {
+  modId: string;
+  name: string;
+  status: string;
+  message: string;
+  fileCount: number;
+  files: ModDeploymentPlanFile[];
+  warnings: string[];
+  requiresOverwriteConfirmation: boolean;
+}
+
+export interface DeployedModFile {
+  deployRelativePath: string;
+  deployedPath: string;
+  deployedAtUnixSeconds: number;
+}
+
+export interface ModDeploymentResult {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  affectedFileCount: number;
+  files: DeployedModFile[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModUninstallPlan {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  deployedFileCount: number;
+  libraryFileCount: number;
+  deployedFiles: DeployedModFile[];
+  libraryFiles: InstalledModFile[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModUninstallResult {
+  modId: string;
+  name: string;
+  removedDeployedFileCount: number;
+  removedLibraryFileCount: number;
+  warnings: string[];
+  message: string;
+}
+
 export function getModLibraryStatus(): Promise<ModLibraryStatus> {
   return invoke<ModLibraryStatus>("get_mod_library_status");
 }
@@ -108,5 +166,39 @@ export function installModFromArchive(
   return invoke<ModInstallResult>("install_mod_from_archive", {
     path,
     allowGameRoot,
+  });
+}
+
+export function previewEnableMod(modId: string): Promise<ModDeploymentPlan> {
+  return invoke<ModDeploymentPlan>("preview_enable_mod", {
+    modId,
+  });
+}
+
+export function enableMod(
+  modId: string,
+  confirmOverwrite: boolean,
+): Promise<ModDeploymentResult> {
+  return invoke<ModDeploymentResult>("enable_mod", {
+    modId,
+    confirmOverwrite,
+  });
+}
+
+export function disableMod(modId: string): Promise<ModDeploymentResult> {
+  return invoke<ModDeploymentResult>("disable_mod", {
+    modId,
+  });
+}
+
+export function previewUninstallMod(modId: string): Promise<ModUninstallPlan> {
+  return invoke<ModUninstallPlan>("preview_uninstall_mod", {
+    modId,
+  });
+}
+
+export function uninstallMod(modId: string): Promise<ModUninstallResult> {
+  return invoke<ModUninstallResult>("uninstall_mod", {
+    modId,
   });
 }

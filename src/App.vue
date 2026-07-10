@@ -15,6 +15,7 @@ import {
   getModConflictReport,
   getModLibraryStatus,
   installModFromArchive,
+  installModFromCandidate,
   installModFromFolder,
   listInstalledMods,
   moveConflictParticipant,
@@ -35,6 +36,7 @@ import {
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
+  type ModelReplacement,
   type ModUninstallPlan,
   type ModUninstallResult,
   type RestoreAllPlan,
@@ -59,6 +61,9 @@ const conflictOrderResult = ref<ApplyConflictOrderResult | null>(null);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
+const candidateImportSourcePath = ref("");
+const candidateOriginalArchivePath = ref<string | null>(null);
+const selectedCandidateRootPath = ref("");
 const appError = ref("");
 const gameError = ref("");
 const modLibraryError = ref("");
@@ -149,6 +154,45 @@ const selectedConflictGroup = computed(() =>
     (group) => group.groupId === selectedConflictGroupId.value,
   ),
 );
+
+function modelReplacementTitle(replacement: ModelReplacement) {
+  if (replacement.modelKind === "weapon") {
+    const modelPart = replacement.modelPart === "accessory" ? "附件模型" : "主模型";
+    return `武器 · ${replacement.subKind} · ${modelPart}`;
+  }
+
+  if (replacement.modelKind === "armor") {
+    return `防具 · ${replacement.subKind}`;
+  }
+
+  return replacement.subKind;
+}
+
+function summarizeModelNames(replacement: ModelReplacement) {
+  if (!replacement.displayNames.length) {
+    return replacement.recognitionSource === "pathPattern"
+      ? "当前 ID 表暂无名称，已按资源路径识别"
+      : "已识别模型 ID，当前无可用游戏名称";
+  }
+
+  const visibleNames = replacement.displayNames.slice(0, 4);
+  const remainingCount = replacement.displayNames.length - visibleNames.length;
+  return remainingCount > 0
+    ? `${visibleNames.join("、")}，另有 ${remainingCount} 个共用模型名称`
+    : visibleNames.join("、");
+}
+
+function summarizeGameIds(replacement: ModelReplacement) {
+  if (!replacement.gameIds.length) {
+    return "";
+  }
+
+  const visibleIds = replacement.gameIds.slice(0, 5);
+  const remainingCount = replacement.gameIds.length - visibleIds.length;
+  return remainingCount > 0
+    ? `游戏 ID ${visibleIds.join(", ")} 等 ${replacement.gameIds.length} 个`
+    : `游戏 ID ${visibleIds.join(", ")}`;
+}
 
 async function loadAppInfo() {
   isLoadingApp.value = true;
@@ -272,6 +316,9 @@ async function previewImportPath(allowGameRoot = false) {
     installResult.value = null;
     const preview = await previewModImport(importPath.value, allowGameRoot);
     importPreview.value = preview;
+    candidateImportSourcePath.value = preview.status === "ambiguous" ? preview.sourcePath : "";
+    candidateOriginalArchivePath.value = null;
+    selectedCandidateRootPath.value = preview.candidates[0]?.rootPath ?? "";
     importError.value = "";
 
     if (preview.requiresGameRootConfirmation) {
@@ -323,9 +370,14 @@ async function installArchive() {
   isInstallingArchive.value = true;
 
   try {
-    installResult.value = await installModFromArchive(archivePath.value, false);
+    const outcome = await installModFromArchive(archivePath.value, false);
+    installResult.value = outcome.installResult;
     archiveError.value = "";
-    importPreview.value = null;
+    importPreview.value = outcome.preview;
+    candidateImportSourcePath.value = outcome.status === "ambiguous" ? outcome.sourcePath : "";
+    candidateOriginalArchivePath.value =
+      outcome.status === "ambiguous" ? outcome.originalArchivePath : null;
+    selectedCandidateRootPath.value = outcome.preview?.candidates[0]?.rootPath ?? "";
     await loadModLibraryStatus();
     await loadInstalledMods();
     await loadConflictReport();
@@ -333,6 +385,34 @@ async function installArchive() {
     archiveError.value = error instanceof Error ? error.message : String(error);
   } finally {
     isInstallingArchive.value = false;
+  }
+}
+
+async function installSelectedCandidate() {
+  if (!candidateImportSourcePath.value || !selectedCandidateRootPath.value) {
+    return;
+  }
+
+  isInstallingMod.value = true;
+
+  try {
+    installResult.value = await installModFromCandidate(
+      candidateImportSourcePath.value,
+      selectedCandidateRootPath.value,
+      candidateOriginalArchivePath.value,
+    );
+    importError.value = "";
+    archiveError.value = "";
+    importPreview.value = null;
+    candidateImportSourcePath.value = "";
+    candidateOriginalArchivePath.value = null;
+    selectedCandidateRootPath.value = "";
+    await refreshModViews();
+    await loadModLibraryStatus();
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isInstallingMod.value = false;
   }
 }
 
@@ -802,12 +882,51 @@ onBeforeUnmount(() => {
         </div>
       </dl>
 
+      <div v-if="installResult?.modelReplacements.length" class="preview-block">
+        <h3>模型替换识别</h3>
+        <ul class="model-replacement-list">
+          <li
+            v-for="replacement in installResult.modelReplacements"
+            :key="`${replacement.modelKind}-${replacement.subKind}-${replacement.modelPart}-${replacement.modelId}`"
+          >
+            <strong>{{ modelReplacementTitle(replacement) }}</strong>
+            <span>{{ summarizeModelNames(replacement) }}</span>
+            <small>
+              {{ replacement.modelId }}
+              <template v-if="summarizeGameIds(replacement)">
+                · {{ summarizeGameIds(replacement) }}
+              </template>
+            </small>
+          </li>
+        </ul>
+      </div>
+
       <div v-if="importPreview?.candidates.length" class="preview-block">
-        <h3>候选内容根</h3>
-        <ul class="compact-list">
+        <div class="section-title-row">
+          <h3>选择 MOD 版本</h3>
+          <button
+            type="button"
+            class="secondary-button"
+            :disabled="isInstallingMod || !selectedCandidateRootPath"
+            @click="installSelectedCandidate"
+          >
+            {{ isInstallingMod ? "导入中" : "导入所选版本" }}
+          </button>
+        </div>
+        <ul class="candidate-list">
           <li v-for="candidate in importPreview.candidates" :key="candidate.rootPath">
-            <span>{{ candidate.rootPath }}</span>
-            <strong>{{ candidate.fileCount }} files</strong>
+            <label>
+              <input
+                v-model="selectedCandidateRootPath"
+                type="radio"
+                name="mod-import-candidate"
+                :value="candidate.rootPath"
+              />
+              <span>
+                <strong>{{ candidate.relativePath || candidate.rootPath }}</strong>
+                <small>{{ candidate.fileCount }} files / {{ candidate.deployRoot }}</small>
+              </span>
+            </label>
           </li>
         </ul>
       </div>
@@ -860,9 +979,24 @@ onBeforeUnmount(() => {
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
         <ul v-if="installedMods.length" class="mod-list">
           <li v-for="(mod, index) in installedMods" :key="mod.id">
-            <div>
+            <div class="mod-summary">
               <strong>#{{ index + 1 }} {{ mod.name }}</strong>
               <span>{{ mod.id }}</span>
+              <ul v-if="mod.modelReplacements.length" class="model-replacement-list compact">
+                <li
+                  v-for="replacement in mod.modelReplacements"
+                  :key="`${replacement.modelKind}-${replacement.subKind}-${replacement.modelPart}-${replacement.modelId}`"
+                >
+                  <strong>{{ modelReplacementTitle(replacement) }}</strong>
+                  <span>{{ summarizeModelNames(replacement) }}</span>
+                  <small>
+                    {{ replacement.modelId }}
+                    <template v-if="summarizeGameIds(replacement)">
+                      · {{ summarizeGameIds(replacement) }}
+                    </template>
+                  </small>
+                </li>
+              </ul>
             </div>
             <div class="mod-actions">
               <span>{{ mod.fileCount }} files</span>
@@ -1414,7 +1548,9 @@ dd {
 .file-preview,
 .compact-list,
 .mod-list,
-.conflict-list {
+.conflict-list,
+.candidate-list,
+.model-replacement-list {
   display: grid;
   gap: 8px;
   margin: 0;
@@ -1424,7 +1560,7 @@ dd {
 
 .file-preview li,
 .compact-list li,
-.mod-list li,
+.mod-list > li,
 .conflict-list > li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 0.55fr);
@@ -1435,11 +1571,82 @@ dd {
   background: #fbfdfc;
 }
 
+.candidate-list li {
+  padding: 0;
+  border: 1px solid #edf1f0;
+  border-radius: 6px;
+  background: #fbfdfc;
+}
+
+.candidate-list label {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.candidate-list input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: #24745b;
+}
+
+.candidate-list label > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.candidate-list strong,
+.candidate-list small {
+  overflow-wrap: anywhere;
+}
+
+.candidate-list small {
+  color: #61756f;
+}
+
+.model-replacement-list li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-left: 3px solid #72a995;
+  background: #f2f8f5;
+}
+
+.model-replacement-list strong,
+.model-replacement-list span,
+.model-replacement-list small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-replacement-list span {
+  color: #334b44;
+}
+
+.model-replacement-list small {
+  color: #61756f;
+}
+
+.model-replacement-list.compact {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.model-replacement-list.compact li {
+  padding: 8px 10px;
+}
+
 .compact-list li {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.mod-list li {
+.mod-list > li {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
@@ -1448,7 +1655,7 @@ dd {
   grid-template-columns: 1fr;
 }
 
-.mod-list li div {
+.mod-list > li > div {
   display: flex;
   min-width: 0;
   gap: 10px;
@@ -1456,7 +1663,7 @@ dd {
   flex-wrap: wrap;
 }
 
-.mod-list li div:first-child {
+.mod-list > li > .mod-summary {
   display: grid;
   gap: 2px;
 }
@@ -1731,7 +1938,7 @@ dd {
   .notice,
   .file-preview li,
   .compact-list li,
-  .mod-list li {
+  .mod-list > li {
     grid-template-columns: 1fr;
   }
 

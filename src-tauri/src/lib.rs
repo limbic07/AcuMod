@@ -17,6 +17,7 @@ pub fn run() {
             commands::mod_library::get_mod_conflict_report,
             commands::mod_library::get_mod_library_status,
             commands::mod_library::install_mod_from_archive,
+            commands::mod_library::install_mod_from_candidate,
             commands::mod_library::install_mod_from_folder,
             commands::mod_library::list_installed_mods,
             commands::mod_library::move_conflict_participant,

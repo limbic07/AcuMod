@@ -136,7 +136,10 @@ src/api/modLibrary.ts
   -> invoke<ModInstallResult>("install_mod_from_folder", { path, allowGameRoot })
 
   installModFromArchive(path, allowGameRoot)
-  -> invoke<ModInstallResult>("install_mod_from_archive", { path, allowGameRoot })
+  -> invoke<ModArchiveImportOutcome>("install_mod_from_archive", { path, allowGameRoot })
+
+  installModFromCandidate(sourcePath, candidateRootPath, originalArchivePath)
+  -> invoke<ModInstallResult>("install_mod_from_candidate", { sourcePath, candidateRootPath, originalArchivePath })
 
   previewEnableMod(modId)
   -> invoke<ModDeploymentPlan>("preview_enable_mod", { modId })
@@ -177,7 +180,9 @@ src-tauri/src/commands/mod_library.rs
   list_installed_mods(app) -> Result<InstalledModList, String>
   preview_mod_import(path, allow_game_root) -> Result<ModImportPreview, String>
   install_mod_from_folder(app, path, allow_game_root) -> Result<ModInstallResult, String>
-  install_mod_from_archive(app, path, allow_game_root) -> Result<ModInstallResult, String>
+  install_mod_from_archive(app, path, allow_game_root) -> Result<ModArchiveImportOutcome, String>
+
+  install_mod_from_candidate(app, source_path, candidate_root_path, original_archive_path) -> Result<ModInstallResult, String>
 
   preview_enable_mod(app, mod_id) -> Result<ModDeploymentPlan, String>
 
@@ -209,11 +214,18 @@ src-tauri/src/services/mod_library.rs
   写入 manifest.json，记录来源、识别方式、部署相对路径和启用状态
   读取 installed/*/manifest.json 生成已安装 MOD 列表
   使用 Acumod 内置 7-Zip 解包组件解包 .zip/.7z/.rar，再复用文件夹导入逻辑
+  多候选时重新校验并只导入用户选择的一个内容根
+  调用 model_recognition service，将模型替换识别结果写入 manifest schema 2
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
   卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
   一键还原时扫描本地 MOD 库 manifest，清理所有记录过的 deployedFiles，并将相关 MOD 标记为未启用
   扫描 deployRelativePath 构建 MOD 冲突关系图，将每个独立冲突组的整体顺序保存到 conflict-orders.json，并应用组内全部冲突文件
+
+src-tauri/src/services/model_recognition.rs
+  读取编译进应用的 references/mhwi-data/curated/model-index.json
+  识别武器模型路径、防具模型 ID 与部位标记、发型路径 ID
+  返回 ModelReplacement DTO；不修改 MOD 文件或部署路径
 ```
 
 ## 薄端到端切片
@@ -271,11 +283,25 @@ Vue UI
 例如“导入压缩包 MOD”：
 
 1. Vue 调用 `installArchive()`。
-2. `src/api/modLibrary.ts` 调用 `invoke<ModInstallResult>("install_mod_from_archive", { path, allowGameRoot })`。
+2. `src/api/modLibrary.ts` 调用 `invoke<ModArchiveImportOutcome>("install_mod_from_archive", { path, allowGameRoot })`。
 3. Rust service 校验 `.zip/.7z/.rar` 扩展名。
 4. Rust service 调用 Acumod 内置 7-Zip 解包组件，解包到 `AcumodData/mods/staging/imports/`。
 5. Rust service 复用文件夹导入识别和本地安装逻辑。
-6. Vue 刷新已安装 MOD 列表。
+6. 如果返回 `ambiguous`，Vue 显示候选列表，再调用 `install_mod_from_candidate` 导入所选分支；否则直接刷新已安装 MOD 列表。
+
+例如“识别模型替换目标”：
+
+1. 导入 service 根据最终 `deployRelativePath` 调用 `recognize_model_replacements()`。
+2. Rust 查询编译进应用的武器、防具精简索引，并保守识别发型路径 ID。
+3. 结果随 `ModInstallResult` 返回并写入 manifest schema 2。
+4. `list_installed_mods` 直接读取新 manifest；旧 schema 1 manifest 根据文件列表即时补算。
+5. Vue 展示模型类型、子类型、模型 ID、游戏 ID 和游戏名称摘要。
+
+重新生成模型索引：
+
+```powershell
+.\scripts\build-mhwi-model-index.ps1
+```
 
 当前压缩包导入不新增 Rust 依赖，但开发和发布包中需要提供 `resources/unpackers/7zip/7z.exe`、`7z.dll` 和 7-Zip 许可文件。用户不需要单独安装 7-Zip。
 

@@ -1,8 +1,8 @@
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
-    ModConflictMoveResult, ModConflictReport, ModDeploymentPlan, ModDeploymentResult,
-    ModImportPreview, ModInstallResult, ModLibraryStatus, ModUninstallPlan, ModUninstallResult,
-    RestoreAllPlan, RestoreAllResult,
+    ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
+    ModDeploymentResult, ModImportPreview, ModInstallResult, ModLibraryStatus, ModUninstallPlan,
+    ModUninstallResult, RestoreAllPlan, RestoreAllResult,
 };
 
 #[tauri::command]
@@ -29,8 +29,23 @@ pub fn install_mod_from_archive(
     app: tauri::AppHandle,
     path: String,
     allow_game_root: bool,
-) -> Result<ModInstallResult, String> {
+) -> Result<ModArchiveImportOutcome, String> {
     mod_library::install_mod_from_archive(&app, path, allow_game_root)
+}
+
+#[tauri::command]
+pub fn install_mod_from_candidate(
+    app: tauri::AppHandle,
+    source_path: String,
+    candidate_root_path: String,
+    original_archive_path: Option<String>,
+) -> Result<ModInstallResult, String> {
+    mod_library::install_mod_from_candidate(
+        &app,
+        source_path,
+        candidate_root_path,
+        original_archive_path,
+    )
 }
 
 #[tauri::command]

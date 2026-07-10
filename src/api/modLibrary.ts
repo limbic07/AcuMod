@@ -18,6 +18,7 @@ export interface ModImportFilePreview {
 
 export interface ModImportCandidate {
   rootPath: string;
+  relativePath: string;
   detectionMethod: string;
   deployRoot: string;
   fileCount: number;
@@ -43,6 +44,18 @@ export interface InstalledModFile {
   libraryRelativePath: string;
 }
 
+export interface ModelReplacement {
+  modelKind: string;
+  subKind: string;
+  modelPart: string;
+  modelId: string;
+  gameIds: string[];
+  variantIds: string[];
+  displayNames: string[];
+  matchedFiles: string[];
+  recognitionSource: string;
+}
+
 export interface ModInstallResult {
   modId: string;
   name: string;
@@ -52,6 +65,16 @@ export interface ModInstallResult {
   manifestPath: string;
   fileCount: number;
   files: InstalledModFile[];
+  modelReplacements: ModelReplacement[];
+  message: string;
+}
+
+export interface ModArchiveImportOutcome {
+  status: string;
+  sourcePath: string;
+  originalArchivePath: string;
+  preview: ModImportPreview | null;
+  installResult: ModInstallResult | null;
   message: string;
 }
 
@@ -66,6 +89,7 @@ export interface InstalledModSummary {
   deployRoot: string;
   detectionMethod: string;
   installedAtUnixSeconds: number;
+  modelReplacements: ModelReplacement[];
 }
 
 export interface InstalledModList {
@@ -235,10 +259,22 @@ export function installModFromFolder(
 export function installModFromArchive(
   path: string,
   allowGameRoot: boolean,
-): Promise<ModInstallResult> {
-  return invoke<ModInstallResult>("install_mod_from_archive", {
+): Promise<ModArchiveImportOutcome> {
+  return invoke<ModArchiveImportOutcome>("install_mod_from_archive", {
     path,
     allowGameRoot,
+  });
+}
+
+export function installModFromCandidate(
+  sourcePath: string,
+  candidateRootPath: string,
+  originalArchivePath: string | null,
+): Promise<ModInstallResult> {
+  return invoke<ModInstallResult>("install_mod_from_candidate", {
+    sourcePath,
+    candidateRootPath,
+    originalArchivePath,
   });
 }
 

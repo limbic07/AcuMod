@@ -13,7 +13,10 @@ use tauri::Manager;
 
 use crate::storage::config;
 
+use super::model_recognition::{recognize_model_replacements, ModelReplacement};
+
 const PREVIEW_FILE_LIMIT: usize = 200;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 2;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -59,6 +62,7 @@ pub struct ModImportFilePreview {
 #[serde(rename_all = "camelCase")]
 pub struct ModImportCandidate {
     pub root_path: String,
+    pub relative_path: String,
     pub detection_method: String,
     pub deploy_root: String,
     pub file_count: usize,
@@ -83,6 +87,18 @@ pub struct ModInstallResult {
     pub manifest_path: String,
     pub file_count: usize,
     pub files: Vec<InstalledModFile>,
+    pub model_replacements: Vec<ModelReplacement>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModArchiveImportOutcome {
+    pub status: String,
+    pub source_path: String,
+    pub original_archive_path: String,
+    pub preview: Option<ModImportPreview>,
+    pub install_result: Option<ModInstallResult>,
     pub message: String,
 }
 
@@ -99,6 +115,7 @@ pub struct InstalledModSummary {
     pub deploy_root: String,
     pub detection_method: String,
     pub installed_at_unix_seconds: u64,
+    pub model_replacements: Vec<ModelReplacement>,
 }
 
 #[derive(Serialize)]
@@ -284,6 +301,8 @@ struct InstalledModManifest {
     file_count: usize,
     files: Vec<InstalledModFile>,
     #[serde(default)]
+    model_replacements: Vec<ModelReplacement>,
+    #[serde(default)]
     deployed_files: Vec<DeployedModFile>,
 }
 
@@ -405,7 +424,7 @@ pub fn install_mod_from_archive(
     app: &tauri::AppHandle,
     raw_path: String,
     allow_game_root: bool,
-) -> Result<ModInstallResult, String> {
+) -> Result<ModArchiveImportOutcome, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let archive_path = normalize_user_path(&raw_path);
@@ -413,7 +432,14 @@ pub fn install_mod_from_archive(
     let archive_name = derive_mod_name(&archive_path);
 
     if let Some(existing) = find_installed_mod_by_name(&paths.installed_path, &archive_name)? {
-        return Ok(existing);
+        return Ok(ModArchiveImportOutcome {
+            status: "alreadyInstalled".to_string(),
+            source_path: String::new(),
+            original_archive_path: path_to_string(&archive_path),
+            preview: None,
+            install_result: Some(existing),
+            message: "A MOD with the same name is already installed.".to_string(),
+        });
     }
 
     let staging_path = paths
@@ -427,22 +453,128 @@ pub fn install_mod_from_archive(
         )
     })?;
 
-    let result = (|| {
-        extract_archive_with_bundled_7zip(app, &archive_path, &staging_path)?;
-        install_mod_from_folder_into_with_options(
-            path_to_string(&staging_path),
-            allow_game_root,
-            &paths.installed_path,
-            Some(archive_name),
-            Some(path_to_string(&archive_path)),
-        )
-    })();
-
-    if result.is_err() {
+    if let Err(error) = extract_archive_with_bundled_7zip(app, &archive_path, &staging_path) {
         let _ = fs::remove_dir_all(&staging_path);
+        return Err(error);
+    }
+    let preview = preview_mod_import(path_to_string(&staging_path), allow_game_root)?;
+
+    if preview.status == "ambiguous" {
+        return Ok(ModArchiveImportOutcome {
+            status: "ambiguous".to_string(),
+            source_path: path_to_string(&staging_path),
+            original_archive_path: path_to_string(&archive_path),
+            message: preview.message.clone(),
+            preview: Some(preview),
+            install_result: None,
+        });
+    }
+
+    let result = install_mod_from_folder_into_with_options(
+        path_to_string(&staging_path),
+        allow_game_root,
+        &paths.installed_path,
+        Some(archive_name),
+        Some(path_to_string(&archive_path)),
+    );
+
+    match result {
+        Ok(install_result) => {
+            let cleanup_message = match fs::remove_dir_all(&staging_path) {
+                Ok(()) => "Archive MOD import completed.".to_string(),
+                Err(error) => format!(
+                    "Archive MOD import completed, but staging cleanup failed at {}: {error}",
+                    staging_path.display()
+                ),
+            };
+
+            Ok(ModArchiveImportOutcome {
+                status: if install_result.already_installed {
+                    "alreadyInstalled".to_string()
+                } else {
+                    "installed".to_string()
+                },
+                source_path: String::new(),
+                original_archive_path: path_to_string(&archive_path),
+                preview: None,
+                install_result: Some(install_result),
+                message: cleanup_message,
+            })
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging_path);
+            Err(error)
+        }
+    }
+}
+
+pub fn install_mod_from_candidate(
+    app: &tauri::AppHandle,
+    source_path: String,
+    candidate_root_path: String,
+    original_archive_path: Option<String>,
+) -> Result<ModInstallResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let normalized_source_path = normalize_user_path(&source_path);
+    let should_cleanup_staging = original_archive_path.is_some()
+        && normalized_source_path
+            .canonicalize()
+            .ok()
+            .zip(paths.import_staging_path.canonicalize().ok())
+            .map(|(source, staging_root)| source.starts_with(staging_root))
+            .unwrap_or(false);
+    let result = install_mod_from_candidate_into(
+        source_path,
+        candidate_root_path,
+        original_archive_path,
+        &paths.installed_path,
+    );
+
+    if result.is_ok() && should_cleanup_staging {
+        let _ = fs::remove_dir_all(&normalized_source_path);
     }
 
     result
+}
+
+fn install_mod_from_candidate_into(
+    source_path: String,
+    candidate_root_path: String,
+    original_archive_path: Option<String>,
+    installed_root: &Path,
+) -> Result<ModInstallResult, String> {
+    let source = canonical_directory(&normalize_user_path(&source_path), "candidate source")?;
+    let candidate = canonical_directory(
+        &normalize_user_path(&candidate_root_path),
+        "candidate content root",
+    )?;
+    let preview = preview_mod_import(path_to_string(&source), false)?;
+    let selected = preview.candidates.iter().any(|entry| {
+        PathBuf::from(&entry.root_path)
+            .canonicalize()
+            .map(|path| path == candidate)
+            .unwrap_or(false)
+    });
+
+    if preview.status != "ambiguous" || !selected {
+        return Err(
+            "The selected content root is not a current candidate of this MOD source.".to_string(),
+        );
+    }
+
+    let original_source = original_archive_path
+        .as_deref()
+        .map(normalize_user_path)
+        .unwrap_or_else(|| source.clone());
+    let preferred_name = derive_mod_name(&original_source);
+    install_mod_from_folder_into_with_options(
+        path_to_string(&candidate),
+        false,
+        installed_root,
+        Some(preferred_name),
+        Some(path_to_string(&original_source)),
+    )
 }
 
 pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, String> {
@@ -657,9 +789,14 @@ fn install_mod_from_folder_into_with_options(
             });
         }
 
+        let model_replacement_paths = installed_files
+            .iter()
+            .map(|file| file.deploy_relative_path.clone())
+            .collect::<Vec<_>>();
+        let model_replacements = recognize_model_replacements(&model_replacement_paths)?;
         let manifest_path = temp_mod_path.join("manifest.json");
         let manifest = InstalledModManifest {
-            schema_version: 1,
+            schema_version: CURRENT_MOD_MANIFEST_SCHEMA_VERSION,
             id: mod_id.clone(),
             name: mod_name.clone(),
             source_path: original_source_path.unwrap_or_else(|| preview.source_path.clone()),
@@ -670,6 +807,7 @@ fn install_mod_from_folder_into_with_options(
             enabled: false,
             file_count: installed_files.len(),
             files: installed_files.clone(),
+            model_replacements: model_replacements.clone(),
             deployed_files: Vec::new(),
         };
         let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -705,6 +843,7 @@ fn install_mod_from_folder_into_with_options(
             manifest_path: path_to_string(&final_mod_path.join("manifest.json")),
             file_count: installed_files.len(),
             files: installed_files,
+            model_replacements,
             message: "MOD was imported into the local Acumod library.".to_string(),
         })
     })();
@@ -729,7 +868,12 @@ fn find_installed_mod_by_name(
             .eq_ignore_ascii_case(mod_name.trim())
     });
 
-    Ok(existing.map(|context| ModInstallResult {
+    let Some(context) = existing else {
+        return Ok(None);
+    };
+    let model_replacements = model_replacements_for_manifest(&context.manifest)?;
+
+    Ok(Some(ModInstallResult {
         mod_id: context.manifest.id,
         name: context.manifest.name,
         already_installed: true,
@@ -738,6 +882,7 @@ fn find_installed_mod_by_name(
         manifest_path: path_to_string(&context.manifest_path),
         file_count: context.manifest.file_count,
         files: context.manifest.files,
+        model_replacements,
         message: "A MOD with the same name is already installed. The existing MOD was kept."
             .to_string(),
     }))
@@ -758,7 +903,7 @@ fn preview_from_candidates(
     shallowest.retain(|candidate| candidate.depth == selected_depth);
 
     if shallowest.len() > 1 {
-        let candidate_dtos = build_candidate_dtos(&shallowest)?;
+        let candidate_dtos = build_candidate_dtos(source_path, &shallowest)?;
 
         return Ok(Some(ModImportPreview {
             source_path: path_to_string(source_path),
@@ -959,12 +1104,20 @@ fn scan_directories(root: &Path) -> Result<ScanResult, String> {
     })
 }
 
-fn build_candidate_dtos(candidates: &[Candidate]) -> Result<Vec<ModImportCandidate>, String> {
+fn build_candidate_dtos(
+    source_path: &Path,
+    candidates: &[Candidate],
+) -> Result<Vec<ModImportCandidate>, String> {
     let mut dtos = Vec::new();
 
     for candidate in candidates {
         dtos.push(ModImportCandidate {
             root_path: path_to_string(&candidate.root_path),
+            relative_path: candidate
+                .root_path
+                .strip_prefix(source_path)
+                .map(path_to_string)
+                .unwrap_or_else(|_| path_to_string(&candidate.root_path)),
             detection_method: candidate.detection_method.to_string(),
             deploy_root: deploy_root_label(&candidate.deploy_root).to_string(),
             file_count: build_file_previews(&candidate.root_path, &candidate.deploy_root)?.len(),
@@ -1145,6 +1298,17 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
                 )
             })?;
 
+        let model_replacements = match model_replacements_for_manifest(&manifest) {
+            Ok(model_replacements) => model_replacements,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not recognize model replacements for {}: {error}",
+                    manifest.name
+                ));
+                Vec::new()
+            }
+        };
+
         mods.push(InstalledModSummary {
             id: manifest.id,
             name: manifest.name,
@@ -1156,6 +1320,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             deploy_root: manifest.deploy_root,
             detection_method: manifest.detection_method,
             installed_at_unix_seconds: manifest.installed_at_unix_seconds,
+            model_replacements,
         });
     }
 
@@ -1177,6 +1342,21 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
         warnings,
         message,
     })
+}
+
+fn model_replacements_for_manifest(
+    manifest: &InstalledModManifest,
+) -> Result<Vec<ModelReplacement>, String> {
+    if manifest.schema_version >= CURRENT_MOD_MANIFEST_SCHEMA_VERSION {
+        return Ok(manifest.model_replacements.clone());
+    }
+
+    let deploy_relative_paths = manifest
+        .files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
+    recognize_model_replacements(&deploy_relative_paths)
 }
 
 fn preview_enable_mod_from(
@@ -2733,6 +2913,15 @@ fn normalize_user_path(path: &str) -> PathBuf {
     PathBuf::from(path.trim().trim_matches('"'))
 }
 
+fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, String> {
+    if !path.is_dir() {
+        return Err(format!("{label} is not a directory: {}", path.display()));
+    }
+
+    path.canonicalize()
+        .map_err(|error| format!("Could not resolve {label} {}: {error}", path.display()))
+}
+
 fn derive_mod_name(source_path: &Path) -> String {
     let name = if source_path.is_file() {
         source_path.file_stem()
@@ -2853,10 +3042,10 @@ mod tests {
 
     use super::{
         apply_conflict_order_from, disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
-        install_mod_from_folder_into, list_installed_mods_from, move_conflict_participant_from,
-        preview_enable_mod_from, preview_mod_import, preview_restore_all_mods_from,
-        preview_uninstall_mod_from, restore_all_mods_from, uninstall_mod_from,
-        validate_archive_path,
+        install_mod_from_candidate_into, install_mod_from_folder_into, list_installed_mods_from,
+        move_conflict_participant_from, preview_enable_mod_from, preview_mod_import,
+        preview_restore_all_mods_from, preview_uninstall_mod_from, restore_all_mods_from,
+        uninstall_mod_from, validate_archive_path,
     };
 
     #[test]
@@ -2966,6 +3155,39 @@ mod tests {
     }
 
     #[test]
+    fn installs_only_the_selected_ambiguous_candidate() {
+        let root = temp_root("candidate_source");
+        let installed_root = temp_root("candidate_target");
+        let option_a = root.join("OptionA").join("nativePC");
+        let option_b = root.join("OptionB").join("nativePC");
+        write_file(&option_a.join("weapon").join("a.mod3"));
+        write_file(&option_b.join("weapon").join("b.mod3"));
+
+        let result = install_mod_from_candidate_into(
+            root_to_string(&root),
+            root_to_string(&option_b),
+            None,
+            &installed_root,
+        )
+        .unwrap();
+        let content_path = PathBuf::from(result.content_path);
+
+        assert!(content_path
+            .join("nativePC")
+            .join("weapon")
+            .join("b.mod3")
+            .is_file());
+        assert!(!content_path
+            .join("nativePC")
+            .join("weapon")
+            .join("a.mod3")
+            .exists());
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
     fn installs_folder_mod_into_library() {
         let root = temp_root("install_source");
         let installed_root = temp_root("install_target");
@@ -2985,6 +3207,75 @@ mod tests {
         let manifest = fs::read_to_string(&result.manifest_path).unwrap();
         assert!(manifest.contains("\"enabled\": false"));
         assert!(manifest.contains("nativePC/weapon/sword.mod3"));
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn stores_model_replacements_in_new_manifest() {
+        let root = temp_root("recognized_install_source");
+        let installed_root = temp_root("recognized_install_target");
+        write_file(
+            &root
+                .join("nativePC")
+                .join("wp")
+                .join("swo")
+                .join("bs_swo001")
+                .join("mod")
+                .join("bs_swo001.mod3"),
+        );
+
+        let result =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let manifest_json = fs::read_to_string(&result.manifest_path).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
+
+        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(result.model_replacements[0].sub_kind, "太刀");
+        assert_eq!(manifest["modelReplacements"][0]["modelKind"], "weapon");
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn recognizes_models_when_listing_legacy_manifest() {
+        let root = temp_root("legacy_recognition_source");
+        let installed_root = temp_root("legacy_recognition_target");
+        write_file(
+            &root
+                .join("nativePC")
+                .join("pl")
+                .join("f_equip")
+                .join("pl001_0000")
+                .join("helm")
+                .join("mod")
+                .join("f_pl001_0000_helm.mod3"),
+        );
+
+        let result =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
+        manifest["schemaVersion"] = serde_json::Value::from(1);
+        manifest
+            .as_object_mut()
+            .unwrap()
+            .remove("modelReplacements");
+        fs::write(
+            &result.manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let list = list_installed_mods_from(&installed_root).unwrap();
+
+        assert_eq!(list.mods[0].model_replacements[0].sub_kind, "头盔");
+        assert!(list.mods[0].model_replacements[0]
+            .display_names
+            .iter()
+            .any(|name| name == "皮制头饰"));
 
         cleanup(root);
         cleanup(installed_root);

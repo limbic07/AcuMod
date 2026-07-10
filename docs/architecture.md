@@ -153,7 +153,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 1. 优先查找 `nativePC` 目录，并把其中的文件映射为 `nativePC/...`。
 2. 如果没有 `nativePC`，但内容根下出现 `weapon`、`wp`、`pl`、`plugins`、`common`、`npc`、`em`、`stage`、`sound`、`ui` 等常见 nativePC 内部目录，则自动补成 `nativePC/...`。
 3. 如果用户直接选择了 nativePC 内部目录本身，例如 `plugins/` 或 `weapon/`，则保留目录名并映射为 `nativePC/plugins/...` 或 `nativePC/weapon/...`。
-4. 如果出现多个同级候选内容根，不自动选择，返回候选列表让用户决定。
+4. 如果出现多个同级候选内容根，不自动选择，返回候选列表；用户选择后 Rust service 会重新扫描源目录并校验该路径仍是候选，只复制所选分支。
 5. 如果无法识别 `nativePC` 或常见内部目录，但目录内存在文件，则提示用户确认是否按游戏根目录相对路径导入。确认前不能自动执行。
 
 这个规则覆盖两类常见情况：
@@ -183,7 +183,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 MHW 的模型替换 MOD 通常可以通过文件路径和文件 ID 判断它替换的是哪一个游戏内模型。Acumod 需要内置维护一份 MHW 文件 ID 表，把低层文件 ID 映射成用户能理解的名称。MVP 先覆盖武器、防具、发型替换；同一个 MOD 可能识别出多个替换目标。第一版只做识别和展示，不提供替换目标选择或改绑。
 
-建议识别链路：
+当前识别链路：
 
 ```text
 MOD 文件列表
@@ -200,6 +200,10 @@ MOD 文件列表
 - 具体类型：例如太刀、大剑、弓等。
 - 原始目标 ID。
 - 原始目标游戏内名称。
+
+当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 武器和防具表生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 使用边界匹配处理武器模型路径，使用模型 ID 加装备部位标记处理防具路径。一个模型可能被多个游戏装备共用，因此 DTO 保留名称和 ID 数组，UI 只摘要展示前几项。
+
+新导入 MOD 使用 manifest schema 2 持久化 `modelReplacements`。旧 schema 1 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。当前数据包没有发型名称表，所以发型仅按路径模式返回模型 ID，`recognitionSource` 为 `pathPattern`。
 
 后续如果支持同类型模型替换目标选择，应作为独立功能设计。该功能不能修改 MOD 库中的原始文件，应在部署阶段生成新的部署计划。MVP 暂不做任何模型改绑，包括通过路径、文件名或文件内容进行改绑。
 
@@ -349,3 +353,13 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 6. 每次成功启用 MOD 后，Rust service 把它追加到相关冲突组顺序末尾并立即按该顺序协调冲突文件，因此实际启用顺序就是初始覆盖顺序。
 
 冲突覆盖不额外创建备份，因为各 MOD 的原始文件已保存在 Acumod 本地 MOD 库中。若游戏目录目标文件存在但没有 Acumod 部署记录，应用前仍会要求用户确认覆盖。
+
+第十个 MVP 切片是“多候选分支导入和模型替换识别”：
+
+1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
+2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
+3. 生成脚本从 MHWI `15.10.00` 武器、防具表生成约 510 KB 的精简 JSON 索引，不把完整原始数据包编入应用。
+4. Rust `model_recognition` service 根据目标部署路径返回 `ModelReplacement`，新 manifest 持久化结果，旧 manifest 读取时兼容补算。
+5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
+
+这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容。

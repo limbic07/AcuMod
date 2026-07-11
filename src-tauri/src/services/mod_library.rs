@@ -18,7 +18,7 @@ use crate::storage::config;
 use super::model_recognition::{recognize_model_replacements, ModelReplacement};
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 5;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 6;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -113,6 +113,7 @@ pub struct InstalledModSummary {
     pub content_path: String,
     pub manifest_path: String,
     pub file_count: usize,
+    pub files: Vec<InstalledModFile>,
     pub enabled: bool,
     pub deploy_root: String,
     pub detection_method: String,
@@ -168,6 +169,18 @@ pub struct ModDeploymentResult {
     pub name: String,
     pub enabled: bool,
     pub affected_file_count: usize,
+    pub files: Vec<DeployedModFile>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDisablePlan {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub file_count: usize,
     pub files: Vec<DeployedModFile>,
     pub warnings: Vec<String>,
     pub message: String,
@@ -661,6 +674,15 @@ pub fn disable_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModDeployme
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
     disable_mod_from(&paths.installed_path, &game_root, &mod_id)
+}
+
+pub fn preview_disable_mod(
+    app: &tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModDisablePlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    preview_disable_mod_from(&paths.installed_path, &mod_id)
 }
 
 pub fn preview_uninstall_mod(
@@ -1363,6 +1385,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             content_path: path_to_string(&mod_path.join("content")),
             manifest_path: path_to_string(&manifest_path),
             file_count: manifest.file_count,
+            files: manifest.files,
             enabled: manifest.enabled,
             deploy_root: manifest.deploy_root,
             detection_method: manifest.detection_method,
@@ -1413,6 +1436,39 @@ fn preview_enable_mod_from(
 ) -> Result<ModDeploymentPlan, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
     build_deployment_plan(installed_root, game_root, &context)
+}
+
+fn preview_disable_mod_from(installed_root: &Path, mod_id: &str) -> Result<ModDisablePlan, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    let files = context.manifest.deployed_files.clone();
+    let warnings = files
+        .iter()
+        .filter(|file| !Path::new(&file.deployed_path).is_file())
+        .map(|file| {
+            format!(
+                "Recorded deployed file is already missing: {}",
+                file.deployed_path
+            )
+        })
+        .collect::<Vec<_>>();
+    let message = if files.is_empty() {
+        "MOD is already disabled; no deployed files will be removed.".to_string()
+    } else {
+        format!(
+            "Disabling this MOD will remove {} recorded file(s) from the game directory; the local library copy will be kept.",
+            files.len()
+        )
+    };
+
+    Ok(ModDisablePlan {
+        mod_id: context.manifest.id,
+        name: context.manifest.name,
+        enabled: context.manifest.enabled,
+        file_count: files.len(),
+        files,
+        warnings,
+        message,
+    })
 }
 
 fn enable_mod_from(
@@ -3148,9 +3204,9 @@ mod tests {
         apply_conflict_order_from, clear_import_staging, disable_mod_from, enable_mod_from,
         get_mod_conflict_report_from, install_mod_from_candidate_into,
         install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
-        move_conflict_participant_from, preview_enable_mod_from, preview_mod_import,
-        preview_restore_all_mods_from, preview_uninstall_mod_from, restore_all_mods_from,
-        uninstall_mod_from, validate_archive_path,
+        move_conflict_participant_from, preview_disable_mod_from, preview_enable_mod_from,
+        preview_mod_import, preview_restore_all_mods_from, preview_uninstall_mod_from,
+        restore_all_mods_from, uninstall_mod_from, validate_archive_path,
     };
 
     #[test]
@@ -3371,7 +3427,7 @@ mod tests {
         let manifest_json = fs::read_to_string(&result.manifest_path).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
 
-        assert_eq!(manifest["schemaVersion"], 5);
+        assert_eq!(manifest["schemaVersion"], 6);
         assert_eq!(result.model_replacements[0].sub_kind, "太刀");
         assert_eq!(manifest["modelReplacements"][0]["modelKind"], "weapon");
 
@@ -3422,9 +3478,9 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_model_recognition_when_listing_schema_four_manifest() {
-        let root = temp_root("schema_four_hair_source");
-        let installed_root = temp_root("schema_four_hair_target");
+    fn refreshes_model_recognition_when_listing_schema_five_manifest() {
+        let root = temp_root("schema_five_hair_source");
+        let installed_root = temp_root("schema_five_hair_target");
         write_file(
             &root
                 .join("nativePC")
@@ -3439,7 +3495,7 @@ mod tests {
             install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
         let mut manifest: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
-        manifest["schemaVersion"] = serde_json::Value::from(4);
+        manifest["schemaVersion"] = serde_json::Value::from(5);
         manifest["modelReplacements"] = serde_json::json!([]);
         fs::write(
             &result.manifest_path,
@@ -3494,6 +3550,11 @@ mod tests {
             root.file_name().unwrap().to_string_lossy()
         );
         assert_eq!(list.mods[0].file_count, 1);
+        assert_eq!(list.mods[0].files.len(), 1);
+        assert_eq!(
+            list.mods[0].files[0].deploy_relative_path,
+            "nativePC/weapon/sword.mod3"
+        );
         assert!(!list.mods[0].enabled);
 
         cleanup(root);
@@ -3582,6 +3643,38 @@ mod tests {
             .join("manual")
             .join("keep.txt")
             .is_file());
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn disable_preview_lists_only_recorded_deployed_files() {
+        let source_root = temp_root("disable_preview_source");
+        let installed_root = temp_root("disable_preview_installed");
+        let game_root = temp_root("disable_preview_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let install_result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &install_result.mod_id, false).unwrap();
+
+        let plan = preview_disable_mod_from(&installed_root, &install_result.mod_id).unwrap();
+
+        assert!(plan.enabled);
+        assert_eq!(plan.file_count, 1);
+        assert_eq!(
+            plan.files[0].deploy_relative_path,
+            "nativePC/weapon/sword.mod3"
+        );
+        assert!(plan.warnings.is_empty());
 
         cleanup(source_root);
         cleanup(installed_root);

@@ -21,6 +21,7 @@ import {
   moveConflictParticipant,
   openInstalledModFolder,
   previewApplyConflictOrder,
+  previewDisableMod,
   previewEnableMod,
   previewModImport,
   previewRestoreAllMods,
@@ -34,6 +35,7 @@ import {
   type ModConflictReport,
   type ModDeploymentPlan,
   type ModDeploymentResult,
+  type ModDisablePlan,
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
@@ -52,6 +54,7 @@ const importPreview = ref<ModImportPreview | null>(null);
 const installResult = ref<ModInstallResult | null>(null);
 const deploymentPlan = ref<ModDeploymentPlan | null>(null);
 const deploymentResult = ref<ModDeploymentResult | null>(null);
+const disablePlan = ref<ModDisablePlan | null>(null);
 const uninstallPlan = ref<ModUninstallPlan | null>(null);
 const uninstallResult = ref<ModUninstallResult | null>(null);
 const restorePlan = ref<RestoreAllPlan | null>(null);
@@ -147,10 +150,19 @@ const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ??
 const installedMods = computed(() => installedModList.value?.mods ?? []);
 const deploymentPlanFiles = computed(() => deploymentPlan.value?.files.slice(0, 12) ?? []);
 const deployedFiles = computed(() => deploymentResult.value?.files.slice(0, 12) ?? []);
+const disablePlanFiles = computed(() => disablePlan.value?.files.slice(0, 12) ?? []);
 const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.slice(0, 12) ?? []);
 const restorePlanMods = computed(() => restorePlan.value?.mods.slice(0, 12) ?? []);
 const restoreResultMods = computed(() => restoreResult.value?.mods.slice(0, 12) ?? []);
 const conflictGroups = computed(() => conflictReport.value?.groups ?? []);
+const conflictingModIds = computed(
+  () =>
+    new Set(
+      conflictGroups.value.flatMap((group) =>
+        group.participants.map((participant) => participant.modId),
+      ),
+    ),
+);
 const selectedConflictGroup = computed(() =>
   conflictGroups.value.find(
     (group) => group.groupId === selectedConflictGroupId.value,
@@ -165,6 +177,14 @@ function modelReplacementTitle(replacement: ModelReplacement) {
 
   if (replacement.modelKind === "armor") {
     return `防具 · ${replacement.subKind}`;
+  }
+
+  if (replacement.modelKind === "palicoWeapon") {
+    return "随从武器";
+  }
+
+  if (replacement.modelKind === "palicoArmor") {
+    return `随从防具 · ${replacement.subKind}`;
   }
 
   return replacement.subKind;
@@ -469,6 +489,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
 
   try {
     deploymentResult.value = null;
+    disablePlan.value = null;
     const plan = await previewEnableMod(mod.id);
     deploymentPlan.value = plan;
     deploymentError.value = "";
@@ -496,20 +517,24 @@ async function enableInstalledMod(mod: InstalledModSummary) {
 }
 
 async function disableInstalledMod(mod: InstalledModSummary) {
-  const shouldDisable = window.confirm(
-    `禁用 ${mod.name} 会删除它由 Acumod 记录的已部署文件，MOD 库内副本会保留。是否继续？`,
-  );
-
-  if (!shouldDisable) {
-    return;
-  }
-
   activeModAction.value = mod.id;
 
   try {
     deploymentPlan.value = null;
-    deploymentResult.value = await disableMod(mod.id);
+    deploymentResult.value = null;
+    const plan = await previewDisableMod(mod.id);
+    disablePlan.value = plan;
     deploymentError.value = "";
+
+    const shouldDisable = window.confirm(
+      `禁用 ${mod.name} 会删除游戏目录中已记录的 ${plan.fileCount} 个部署文件，MOD 库内副本会保留。是否继续？`,
+    );
+
+    if (!shouldDisable) {
+      return;
+    }
+
+    deploymentResult.value = await disableMod(mod.id);
     await loadInstalledMods();
     await loadConflictReport();
   } catch (error) {
@@ -556,6 +581,7 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
     uninstallResult.value = await uninstallMod(mod.id);
     deploymentPlan.value = null;
     deploymentResult.value = null;
+    disablePlan.value = null;
     await loadModLibraryStatus();
     await loadInstalledMods();
     await loadConflictReport();
@@ -590,6 +616,7 @@ async function restoreAllInstalledMods() {
     restoreResult.value = await restoreAllMods();
     deploymentPlan.value = null;
     deploymentResult.value = null;
+    disablePlan.value = null;
     uninstallPlan.value = null;
     uninstallResult.value = null;
     await loadInstalledMods();
@@ -1012,10 +1039,20 @@ onBeforeUnmount(() => {
                   </small>
                 </li>
               </ul>
+              <details class="installed-file-details">
+                <summary>文件列表 ({{ mod.files.length }})</summary>
+                <ul class="file-preview installed-file-preview">
+                  <li v-for="file in mod.files" :key="file.libraryRelativePath">
+                    <span>{{ file.deployRelativePath }}</span>
+                    <strong>{{ file.libraryRelativePath }}</strong>
+                  </li>
+                </ul>
+              </details>
             </div>
             <div class="mod-actions">
               <span>{{ mod.fileCount }} files</span>
               <span>{{ mod.enabled ? "已启用" : "未启用" }}</span>
+              <span v-if="conflictingModIds.has(mod.id)" class="conflict-state">存在冲突</span>
               <span>{{ mod.deployRoot }}</span>
               <button
                 type="button"
@@ -1071,6 +1108,22 @@ onBeforeUnmount(() => {
           <li v-for="file in deploymentPlanFiles" :key="file.targetPath">
             <span>{{ file.deployRelativePath }}</span>
             <strong>{{ file.targetExists ? "目标已存在" : file.targetPath }}</strong>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="disablePlan" class="preview-block">
+        <h3>禁用预览</h3>
+        <p class="hint">{{ disablePlan.message }}</p>
+        <ul v-if="disablePlan.warnings.length" class="compact-list">
+          <li v-for="warning in disablePlan.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+        <ul v-if="disablePlanFiles.length" class="file-preview">
+          <li v-for="file in disablePlanFiles" :key="file.deployedPath">
+            <span>{{ file.deployRelativePath }}</span>
+            <strong>{{ file.deployedPath }}</strong>
           </li>
         </ul>
       </div>
@@ -1692,6 +1745,23 @@ dd {
   gap: 2px;
 }
 
+.installed-file-details {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.installed-file-details summary {
+  width: fit-content;
+  color: #345b50;
+  cursor: pointer;
+}
+
+.installed-file-preview {
+  max-height: 240px;
+  margin-top: 8px;
+  overflow: auto;
+}
+
 .mod-list li span {
   min-width: 0;
   color: #52645f;
@@ -1700,6 +1770,11 @@ dd {
 
 .mod-actions {
   justify-content: flex-end;
+}
+
+.mod-actions .conflict-state {
+  color: #9a3412;
+  font-weight: 700;
 }
 
 .conflict-list ul {

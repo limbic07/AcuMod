@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "title": "Monster Hunter World Modding Wiki - Weapon IDs",
+      "url": "https://github.com/AniBullet/MonsterHunterWorldModding/wiki/Weapon-IDs",
+      "note": "The weapon table identifies slg as the Slinger folder and lists slg001 as Slinger. Acumod combines that with the documented wp weapon root."
+    },
+    {
+      "title": "MHW Voice Changer",
+      "url": "https://github.com/NathanCruz98/MHWVoiceChanger",
+      "license": "MIT",
+      "note": "The MAIN table in MHWCharacterVoices.db maps the 20 female and 20 male character-creation voice numbers to exact nbnk file names."
+    }
+  ],
+  "slingerModels": [
+    {
+      "modelPath": "wp/slg/slg001",
+      "modelId": "slg001",
+      "gameIds": ["slg001"],
+      "displayNames": ["投射器"]
+    }
+  ],
+  "voiceModels": [
+    { "fileName": "pl_act_vo_f_11_m.nbnk", "gender": "female", "voiceNumber": "1" },
+    { "fileName": "pl_act_vo_f_01_m.nbnk", "gender": "female", "voiceNumber": "2" },
+    { "fileName": "pl_act_vo_f_20_m.nbnk", "gender": "female", "voiceNumber": "3" },
+    { "fileName": "pl_act_vo_f_02_m.nbnk", "gender": "female", "voiceNumber": "4" },
+    { "fileName": "pl_act_vo_f_18_m.nbnk", "gender": "female", "voiceNumber": "5" },
+    { "fileName": "pl_act_vo_f_14_m.nbnk", "gender": "female", "voiceNumber": "6" },
+    { "fileName": "pl_act_vo_f_03_m.nbnk", "gender": "female", "voiceNumber": "7" },
+    { "fileName": "pl_act_vo_f_13_m.nbnk", "gender": "female", "voiceNumber": "8" },
+    { "fileName": "pl_act_vo_f_05_m.nbnk", "gender": "female", "voiceNumber": "9" },
+    { "fileName": "pl_act_vo_f_15_m.nbnk", "gender": "female", "voiceNumber": "10" },
+    { "fileName": "pl_act_vo_f_19_m.nbnk", "gender": "female", "voiceNumber": "11" },
+    { "fileName": "pl_act_vo_f_08_m.nbnk", "gender": "female", "voiceNumber": "12" },
+    { "fileName": "pl_act_vo_f_10_m.nbnk", "gender": "female", "voiceNumber": "13" },
+    { "fileName": "pl_act_vo_f_09_m.nbnk", "gender": "female", "voiceNumber": "14" },
+    { "fileName": "pl_act_vo_f_16_m.nbnk", "gender": "female", "voiceNumber": "15" },
+    { "fileName": "pl_act_vo_f_07_m.nbnk", "gender": "female", "voiceNumber": "16" },
+    { "fileName": "pl_act_vo_f_12_m.nbnk", "gender": "female", "voiceNumber": "17" },
+    { "fileName": "pl_act_vo_f_06_m.nbnk", "gender": "female", "voiceNumber": "18" },
+    { "fileName": "pl_act_vo_f_04_m.nbnk", "gender": "female", "voiceNumber": "19" },
+    { "fileName": "pl_act_vo_f_17_m.nbnk", "gender": "female", "voiceNumber": "20" },
+    { "fileName": "pl_act_vo_m_11_m.nbnk", "gender": "male", "voiceNumber": "1" },
+    { "fileName": "pl_act_vo_m_18_m.nbnk", "gender": "male", "voiceNumber": "2" },
+    { "fileName": "pl_act_vo_m_04_m.nbnk", "gender": "male", "voiceNumber": "3" },
+    { "fileName": "pl_act_vo_m_01_m.nbnk", "gender": "male", "voiceNumber": "4" },
+    { "fileName": "pl_act_vo_m_06_m.nbnk", "gender": "male", "voiceNumber": "5" },
+    { "fileName": "pl_act_vo_m_05_m.nbnk", "gender": "male", "voiceNumber": "6" },
+    { "fileName": "pl_act_vo_m_12_m.nbnk", "gender": "male", "voiceNumber": "7" },
+    { "fileName": "pl_act_vo_m_02_m.nbnk", "gender": "male", "voiceNumber": "8" },
+    { "fileName": "pl_act_vo_m_14_m.nbnk", "gender": "male", "voiceNumber": "9" },
+    { "fileName": "pl_act_vo_m_10_m.nbnk", "gender": "male", "voiceNumber": "10" },
+    { "fileName": "pl_act_vo_m_13_m.nbnk", "gender": "male", "voiceNumber": "11" },
+    { "fileName": "pl_act_vo_m_08_m.nbnk", "gender": "male", "voiceNumber": "12" },
+    { "fileName": "pl_act_vo_m_15_m.nbnk", "gender": "male", "voiceNumber": "13" },
+    { "fileName": "pl_act_vo_m_03_m.nbnk", "gender": "male", "voiceNumber": "14" },
+    { "fileName": "pl_act_vo_m_16_m.nbnk", "gender": "male", "voiceNumber": "15" },
+    { "fileName": "pl_act_vo_m_07_m.nbnk", "gender": "male", "voiceNumber": "16" },
+    { "fileName": "pl_act_vo_m_17_m.nbnk", "gender": "male", "voiceNumber": "17" },
+    { "fileName": "pl_act_vo_m_09_m.nbnk", "gender": "male", "voiceNumber": "18" },
+    { "fileName": "pl_act_vo_m_19_m.nbnk", "gender": "male", "voiceNumber": "19" },
+    { "fileName": "pl_act_vo_m_20_m.nbnk", "gender": "male", "voiceNumber": "20" }
+  ]
+}

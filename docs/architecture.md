@@ -183,7 +183,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 ## MHW 模型替换识别
 
-MHW 的模型替换 MOD 通常可以通过文件路径和文件 ID 判断它替换的是哪一个游戏内模型。Acumod 需要内置维护一份 MHW 文件 ID 表，把低层文件 ID 映射成用户能理解的名称。MVP 先覆盖武器、防具、发型替换；同一个 MOD 可能识别出多个替换目标。第一版只做识别和展示，不提供替换目标选择或改绑。
+MHW 的替换 MOD 通常可以通过资源路径和文件 ID 判断它替换的是哪一个游戏内对象。Acumod 内置维护精简 ID 索引，把底层 ID 映射成用户能理解的名称。MVP 覆盖武器、防具、发型、随从武器、随从防具、猎虫、挂件、NPC、投射器和人物语音；同一个 MOD 可能识别出多个目标。第一版只做识别和展示，不提供替换目标选择或改绑。
 
 当前识别链路：
 
@@ -198,14 +198,14 @@ MOD 文件列表
 
 模型替换信息建议包含：
 
-- 模型类型：武器、防具、发型。
+- 替换类型：武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器或人物语音。
 - 具体类型：例如太刀、大剑、弓等。
 - 原始目标 ID。
 - 原始目标游戏内名称。
 
-当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 武器、防具表及 curated 发型表生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 使用边界匹配处理武器和发型模型路径，使用模型 ID 加装备部位标记处理防具路径。一个模型可能被多个游戏装备共用，因此 DTO 保留名称和 ID 数组，UI 只摘要展示前几项。
+当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 对模型目录做组件边界匹配；一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组，UI 摘要展示名称并允许展开 MOD 文件列表。
 
-新导入 MOD 使用 manifest schema 5 持久化 `modelReplacements`。旧 schema 1/2/3/4 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别，文件名不参与匹配。发型命中内置映射时优先返回数字槽位和官方简体中文名称，`recognitionSource` 为 `idTable`；未知 `hairNNN` 目录仍返回模型 ID，`recognitionSource` 为 `pathPattern`。
+新导入 MOD 使用 manifest schema 6 持久化 `modelReplacements`。旧 schema 1 至 5 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。发型和投射器的未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
 
 后续如果支持同类型模型替换目标选择，应作为独立功能设计。该功能不能修改 MOD 库中的原始文件，应在部署阶段生成新的部署计划。MVP 暂不做任何模型改绑，包括通过路径、文件名或文件内容进行改绑。
 
@@ -316,12 +316,12 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 第六个 MVP 切片是“启用和禁用已安装 MOD”：
 
 1. Vue 在已安装 MOD 列表中提供启用、禁用入口。
-2. `src/api/modLibrary.ts` 调用 `preview_enable_mod`、`enable_mod` 和 `disable_mod`。
+2. `src/api/modLibrary.ts` 调用 `preview_enable_mod`、`enable_mod`、`preview_disable_mod` 和 `disable_mod`。
 3. Rust service 读取已保存的 MHW 游戏目录，并再次校验 `MonsterHunterWorld.exe`。
 4. 启用前生成部署计划，列出库内源文件、游戏目录目标文件、目标是否已存在，以及是否由 Acumod 记录为其他 MOD 部署。
 5. 如果目标文件已存在且不是同一个 MOD 的已记录部署，前端必须确认后才调用真正启用。
 6. 启用时从 `AcumodData/mods/installed/<mod_id>/content/` 复制文件到 MHW 游戏目录，并把 `deployedFiles` 写回 manifest。
-7. 禁用时只按该 MOD manifest 中的 `deployedFiles` 删除游戏目录文件，然后清空部署记录并标记为未启用。
+7. 禁用前返回实际 `deployedFiles` 供 UI 预览；确认后只按这些记录删除游戏目录文件，然后清空部署记录并标记为未启用。
 
 这个切片仍不解决 MOD 之间的最终覆盖顺序；冲突排序会在后续独立切片中实现。当前规则只保证启停链路可用，并且删除动作有明确记录依据。
 
@@ -360,8 +360,10 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
-3. 生成脚本从 MHWI `15.10.00` 武器、防具表及 curated 发型表生成约 510 KB 的精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 根据目标部署路径的文件夹部分返回 `ModelReplacement`，schema 5 manifest 持久化结果，schema 1/2/3/4 manifest 读取时兼容补算。
+3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
+4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 6 manifest 持久化结果，schema 1 至 5 manifest 读取时兼容补算。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容。
+
+MVP 收尾补充了已安装 MOD 的完整文件列表、主列表冲突状态，以及禁用操作的 Rust 端文件预览。至此 `docs/features.md` 中的 MVP 完成标准已全部形成可操作 UI 和受控 Rust service 链路。

@@ -1,8 +1,8 @@
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
-    ModDeploymentResult, ModImportPreview, ModInstallResult, ModLibraryStatus, ModUninstallPlan,
-    ModUninstallResult, RestoreAllPlan, RestoreAllResult,
+    ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
+    ModUninstallPlan, ModUninstallResult, RestoreAllPlan, RestoreAllResult,
 };
 
 #[tauri::command]
@@ -78,6 +78,14 @@ pub fn enable_mod(
 #[tauri::command]
 pub fn disable_mod(app: tauri::AppHandle, mod_id: String) -> Result<ModDeploymentResult, String> {
     mod_library::disable_mod(&app, mod_id)
+}
+
+#[tauri::command]
+pub fn preview_disable_mod(
+    app: tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModDisablePlan, String> {
+    mod_library::preview_disable_mod(&app, mod_id)
 }
 
 #[tauri::command]

@@ -23,6 +23,7 @@ pub fn run() {
             commands::mod_library::move_conflict_participant,
             commands::mod_library::open_installed_mod_folder,
             commands::mod_library::preview_apply_conflict_order,
+            commands::mod_library::preview_disable_mod,
             commands::mod_library::preview_enable_mod,
             commands::mod_library::preview_mod_import,
             commands::mod_library::preview_restore_all_mods,

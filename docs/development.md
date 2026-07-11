@@ -300,9 +300,9 @@ Vue UI
 例如“识别模型替换目标”：
 
 1. 导入 service 根据最终 `deployRelativePath` 调用 `recognize_model_replacements()`。
-2. Rust 查询编译进应用的武器、防具、发型精简索引；Wiki 未收录的发型编号仅返回路径 ID。
-3. 结果随 `ModInstallResult` 返回并写入 manifest schema 5。
-4. `list_installed_mods` 直接读取新 manifest；旧 schema 1/2/3/4 manifest 根据文件列表即时补算。
+2. Rust 查询编译进应用的武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器和人物语音精简索引；规范目录中的未知发型或投射器编号仅返回路径 ID。
+3. 结果随 `ModInstallResult` 返回并写入 manifest schema 6。
+4. `list_installed_mods` 直接读取新 manifest；旧 schema 1 至 5 manifest 根据文件列表即时补算。
 5. Vue 展示模型类型、子类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 重新生成模型索引：
@@ -320,7 +320,7 @@ Vue UI
 3. Rust service 根据 manifest 文件列表生成 `源文件 -> MHW 目标文件` 映射，并检查目标是否已存在。
 4. 如果需要覆盖确认，Vue 弹出确认，再调用 `enable_mod`。
 5. Rust service 将库内文件复制到 MHW 游戏目录，并把 `deployedFiles` 写回 manifest。
-6. 禁用时 Vue 调用 `disable_mod`，Rust service 只删除该 MOD manifest 中记录过的部署文件。
+6. 禁用时 Vue 先调用 `preview_disable_mod` 展示记录过的部署文件，确认后再调用 `disable_mod`。
 
 例如“卸载已安装 MOD”：
 

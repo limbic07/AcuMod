@@ -85,6 +85,7 @@ export interface InstalledModSummary {
   contentPath: string;
   manifestPath: string;
   fileCount: number;
+  files: InstalledModFile[];
   enabled: boolean;
   deployRoot: string;
   detectionMethod: string;
@@ -130,6 +131,16 @@ export interface ModDeploymentResult {
   name: string;
   enabled: boolean;
   affectedFileCount: number;
+  files: DeployedModFile[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModDisablePlan {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  fileCount: number;
   files: DeployedModFile[];
   warnings: string[];
   message: string;
@@ -302,6 +313,12 @@ export function enableMod(
 
 export function disableMod(modId: string): Promise<ModDeploymentResult> {
   return invoke<ModDeploymentResult>("disable_mod", {
+    modId,
+  });
+}
+
+export function previewDisableMod(modId: string): Promise<ModDisablePlan> {
+  return invoke<ModDisablePlan>("preview_disable_mod", {
     modId,
   });
 }

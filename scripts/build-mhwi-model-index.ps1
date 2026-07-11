@@ -1,6 +1,7 @@
 ﻿param(
     [string]$RawPackagePath,
     [string]$HairSourcePath,
+    [string]$ExtendedAssetSourcePath,
     [string]$OutputPath
 )
 
@@ -21,19 +22,38 @@ if ([string]::IsNullOrWhiteSpace($HairSourcePath)) {
     $HairSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/hairstyles.json"
 }
 
-$weaponCsvPath = Join-Path $RawPackagePath "csv/02_weapons.csv"
-$armorCsvPath = Join-Path $RawPackagePath "csv/03_armor.csv"
-
-if (-not (Test-Path -LiteralPath $weaponCsvPath -PathType Leaf)) {
-    throw "Weapon data was not found: $weaponCsvPath"
+if ([string]::IsNullOrWhiteSpace($ExtendedAssetSourcePath)) {
+    $ExtendedAssetSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/extended-assets.json"
 }
 
-if (-not (Test-Path -LiteralPath $armorCsvPath -PathType Leaf)) {
-    throw "Armor data was not found: $armorCsvPath"
+$weaponCsvPath = Join-Path $RawPackagePath "csv/02_weapons.csv"
+$armorCsvPath = Join-Path $RawPackagePath "csv/03_armor.csv"
+$palicoWeaponCsvPath = Join-Path $RawPackagePath "csv/09_palico_weapons.csv"
+$palicoArmorCsvPath = Join-Path $RawPackagePath "csv/10_palico_armor.csv"
+$pendantCsvPath = Join-Path $RawPackagePath "csv/12_pendants.csv"
+$kinsectCsvPath = Join-Path $RawPackagePath "csv/13_kinsects.csv"
+$npcCsvPath = Join-Path $RawPackagePath "csv/17_npc.csv"
+
+foreach ($requiredDataPath in @(
+        $weaponCsvPath,
+        $armorCsvPath,
+        $palicoWeaponCsvPath,
+        $palicoArmorCsvPath,
+        $pendantCsvPath,
+        $kinsectCsvPath,
+        $npcCsvPath
+    )) {
+    if (-not (Test-Path -LiteralPath $requiredDataPath -PathType Leaf)) {
+        throw "Required MHWI data was not found: $requiredDataPath"
+    }
 }
 
 if (-not (Test-Path -LiteralPath $HairSourcePath -PathType Leaf)) {
     throw "Curated hairstyle data was not found: $HairSourcePath"
+}
+
+if (-not (Test-Path -LiteralPath $ExtendedAssetSourcePath -PathType Leaf)) {
+    throw "Curated extended asset data was not found: $ExtendedAssetSourcePath"
 }
 
 function Normalize-ModelPath {
@@ -73,9 +93,28 @@ function Get-SortedNames {
         ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique)
 }
 
+function Get-SortedTextIds {
+    param([object[]]$Values)
+
+    return @($Values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique)
+}
+
+function Get-ModelId {
+    param([string]$ModelPath)
+
+    return ($ModelPath -split '/')[-1]
+}
+
 $weaponRows = Import-Csv -LiteralPath $weaponCsvPath -Encoding utf8
 $armorRows = Import-Csv -LiteralPath $armorCsvPath -Encoding utf8
+$palicoWeaponRows = Import-Csv -LiteralPath $palicoWeaponCsvPath -Encoding utf8
+$palicoArmorRows = Import-Csv -LiteralPath $palicoArmorCsvPath -Encoding utf8
+$pendantRows = Import-Csv -LiteralPath $pendantCsvPath -Encoding utf8
+$kinsectRows = Import-Csv -LiteralPath $kinsectCsvPath -Encoding utf8
+$npcRows = Import-Csv -LiteralPath $npcCsvPath -Encoding utf8
 $hairSource = Get-Content -LiteralPath $HairSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
+$extendedAssetSource = Get-Content -LiteralPath $ExtendedAssetSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
 
 $weaponModelRows = foreach ($row in $weaponRows) {
     $mainModelPath = Normalize-ModelPath $row.主模型地址
@@ -186,14 +225,170 @@ if (($hairModels.modelPath | Sort-Object -Unique).Count -ne $hairModels.Count) {
     throw "Curated hairstyle model paths must be unique."
 }
 
+$assetModelRows = @(
+    $palicoWeaponRows | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.模型地址
+        if ($null -ne $modelPath) {
+            [pscustomobject]@{
+                modelKind = "palicoWeapon"
+                subKind = "随从武器"
+                modelPart = "model"
+                modelPath = $modelPath
+                modelId = Get-ModelId $modelPath
+                gameId = [string]$_.武器ID
+                displayName = $_.武器名称
+            }
+        }
+    }
+
+    $palicoArmorRows | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.模型地址
+        if ($null -ne $modelPath) {
+            [pscustomobject]@{
+                modelKind = "palicoArmor"
+                subKind = [string]$_.部位名称
+                modelPart = "model"
+                modelPath = $modelPath
+                modelId = ($modelPath -split '/')[2]
+                gameId = [string]$_.防具ID
+                displayName = $_.防具名称
+            }
+        }
+    }
+
+    $kinsectRows | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.模型地址
+        if ($null -ne $modelPath) {
+            [pscustomobject]@{
+                modelKind = "kinsect"
+                subKind = "猎虫"
+                modelPart = "model"
+                modelPath = $modelPath
+                modelId = Get-ModelId $modelPath
+                gameId = [string]$_.猎虫ID
+                displayName = $_.猎虫名称
+            }
+        }
+    }
+
+    $pendantRows | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.模型地址
+        if ($null -ne $modelPath) {
+            [pscustomobject]@{
+                modelKind = "pendant"
+                subKind = "挂件"
+                modelPart = "model"
+                modelPath = $modelPath
+                modelId = Get-ModelId $modelPath
+                gameId = [string]$_.吊坠ID
+                displayName = $_.吊坠名称
+            }
+        }
+    }
+
+    $npcRows | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.模型地址
+        if ($null -ne $modelPath) {
+            [pscustomobject]@{
+                modelKind = "npc"
+                subKind = "NPC"
+                modelPart = "model"
+                modelPath = $modelPath
+                modelId = Get-ModelId $modelPath
+                gameId = [string]$_.NPC代码
+                displayName = $_.NPC名称
+            }
+        }
+    }
+
+    $extendedAssetSource.slingerModels | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.modelPath
+        if ($null -eq $modelPath -or $modelPath -notmatch '^wp/slg/slg[0-9]{3}$') {
+            throw "Invalid slinger model path: $($_.modelPath)"
+        }
+
+        foreach ($gameId in $_.gameIds) {
+            foreach ($displayName in $_.displayNames) {
+                [pscustomobject]@{
+                    modelKind = "slinger"
+                    subKind = "投射器"
+                    modelPart = "model"
+                    modelPath = $modelPath
+                    modelId = [string]$_.modelId
+                    gameId = [string]$gameId
+                    displayName = [string]$displayName
+                }
+            }
+        }
+    }
+)
+
+$assetModels = @($assetModelRows |
+    Group-Object modelKind, subKind, modelPart, modelPath, modelId |
+    ForEach-Object {
+        $first = $_.Group[0]
+        $gameIds = if ($first.modelKind -in @("npc", "slinger")) {
+            @(Get-SortedTextIds @($_.Group.gameId))
+        }
+        else {
+            @(Get-SortedIds @($_.Group.gameId))
+        }
+
+        [pscustomobject]@{
+            modelKind = $first.modelKind
+            subKind = $first.subKind
+            modelPart = $first.modelPart
+            modelPath = $first.modelPath
+            modelId = $first.modelId
+            gameIds = @($gameIds)
+            variantIds = @()
+            displayNames = @(Get-SortedNames @($_.Group.displayName))
+        }
+    } |
+    Sort-Object modelKind, modelPath, subKind)
+
+$voiceModels = @($extendedAssetSource.voiceModels |
+    ForEach-Object {
+        $genderLabel = switch ([string]$_.gender) {
+            "female" { "女性" }
+            "male" { "男性" }
+            default { throw "Unsupported character voice gender: $($_.gender)" }
+        }
+        $fileName = ([string]$_.fileName).ToLowerInvariant()
+        if ($fileName -notmatch '^pl_act_vo_[fm]_[0-9]{2}_m\.nbnk$') {
+            throw "Invalid character voice file name: $($_.fileName)"
+        }
+
+        [pscustomobject]@{
+            fileName = $fileName
+            modelId = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+            gender = [string]$_.gender
+            voiceNumber = [string]$_.voiceNumber
+            displayNames = @("${genderLabel}语音 $($_.voiceNumber) 号")
+        }
+    } |
+    Sort-Object gender, { [int]$_.voiceNumber })
+
 $index = [ordered]@{
-    schemaVersion = 3
+    schemaVersion = 4
     gameVersion = "15.10.00"
-    sourceFiles = @("02_weapons.csv", "03_armor.csv", "curated/sources/hairstyles.json")
-    sourceReferences = @($hairSource.source)
+    sourceFiles = @(
+        "02_weapons.csv",
+        "03_armor.csv",
+        "09_palico_weapons.csv",
+        "10_palico_armor.csv",
+        "12_pendants.csv",
+        "13_kinsects.csv",
+        "17_npc.csv",
+        "curated/sources/hairstyles.json",
+        "curated/sources/extended-assets.json"
+    )
+    sourceReferences = @($hairSource.source) + @($extendedAssetSource.sources)
     weaponModels = $weaponModels
     armorModels = $armorModels
     hairModels = $hairModels
+    assetModels = $assetModels
+    voiceModels = $voiceModels
 }
 
 $outputDirectory = Split-Path -Parent $OutputPath
@@ -201,5 +396,5 @@ $outputDirectory = Split-Path -Parent $OutputPath
 $json = $index | ConvertTo-Json -Depth 8 -Compress
 [System.IO.File]::WriteAllText($OutputPath, $json, [System.Text.UTF8Encoding]::new($false))
 
-Write-Output "Generated $($weaponModels.Count) weapon, $($armorModels.Count) armor, and $($hairModels.Count) hairstyle model entries."
+Write-Output "Generated $($weaponModels.Count) weapon, $($armorModels.Count) armor, $($hairModels.Count) hairstyle, $($assetModels.Count) extended asset, and $($voiceModels.Count) voice entries."
 Write-Output "Output: $OutputPath"

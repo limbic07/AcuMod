@@ -30,6 +30,8 @@ struct ModelIndex {
     weapon_models: Vec<WeaponModelEntry>,
     armor_models: Vec<ArmorModelEntry>,
     hair_models: Vec<HairModelEntry>,
+    asset_models: Vec<AssetModelEntry>,
+    voice_models: Vec<VoiceModelEntry>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +60,29 @@ struct HairModelEntry {
     model_path: String,
     model_id: String,
     game_ids: Vec<String>,
+    display_names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetModelEntry {
+    model_kind: String,
+    sub_kind: String,
+    model_part: String,
+    model_path: String,
+    model_id: String,
+    game_ids: Vec<String>,
+    variant_ids: Vec<String>,
+    display_names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceModelEntry {
+    file_name: String,
+    model_id: String,
+    gender: String,
+    voice_number: String,
     display_names: Vec<String>,
 }
 
@@ -123,6 +148,9 @@ pub fn recognize_model_replacements(
         &recognized_armor_models,
     );
     add_hair_matches(&mut replacements, &normalized_files, &index.hair_models);
+    add_asset_matches(&mut replacements, &normalized_files, &index.asset_models);
+    add_unknown_slinger_matches(&mut replacements, &normalized_files, &index.asset_models);
+    add_voice_matches(&mut replacements, &normalized_files, &index.voice_models);
 
     replacements.sort_by(|left, right| {
         model_kind_order(&left.model_kind)
@@ -281,6 +309,114 @@ fn add_hair_matches(
     }
 }
 
+fn add_asset_matches(
+    replacements: &mut Vec<ModelReplacement>,
+    normalized_files: &[(String, String)],
+    asset_models: &[AssetModelEntry],
+) {
+    for entry in asset_models {
+        let matched_files = matching_files(normalized_files, &entry.model_path, |_| true);
+
+        if matched_files.is_empty() {
+            continue;
+        }
+
+        replacements.push(ModelReplacement {
+            model_kind: entry.model_kind.clone(),
+            sub_kind: entry.sub_kind.clone(),
+            model_part: entry.model_part.clone(),
+            model_id: entry.model_id.clone(),
+            game_ids: entry.game_ids.clone(),
+            variant_ids: entry.variant_ids.clone(),
+            display_names: entry.display_names.clone(),
+            matched_files,
+            recognition_source: "idTable".to_string(),
+        });
+    }
+}
+
+fn add_unknown_slinger_matches(
+    replacements: &mut Vec<ModelReplacement>,
+    normalized_files: &[(String, String)],
+    asset_models: &[AssetModelEntry],
+) {
+    let known_ids = asset_models
+        .iter()
+        .filter(|entry| entry.model_kind == "slinger")
+        .map(|entry| entry.model_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut matches = BTreeMap::<String, Vec<String>>::new();
+
+    for (normalized, original) in normalized_files {
+        let Some(slinger_id) = extract_slinger_id(normalized) else {
+            continue;
+        };
+
+        if known_ids.contains(slinger_id.as_str()) {
+            continue;
+        }
+
+        matches
+            .entry(slinger_id)
+            .or_default()
+            .push(original.clone());
+    }
+
+    for (slinger_id, mut matched_files) in matches {
+        sort_and_deduplicate(&mut matched_files);
+        replacements.push(ModelReplacement {
+            model_kind: "slinger".to_string(),
+            sub_kind: "投射器".to_string(),
+            model_part: "model".to_string(),
+            model_id: slinger_id,
+            game_ids: Vec::new(),
+            variant_ids: Vec::new(),
+            display_names: Vec::new(),
+            matched_files,
+            recognition_source: "pathPattern".to_string(),
+        });
+    }
+}
+
+fn add_voice_matches(
+    replacements: &mut Vec<ModelReplacement>,
+    normalized_files: &[(String, String)],
+    voice_models: &[VoiceModelEntry],
+) {
+    for entry in voice_models {
+        let matched_files = normalized_files
+            .iter()
+            .filter(|(normalized, _)| {
+                directory_contains_path(parent_directory(normalized), "sound/wwise/windows")
+                    && file_name(normalized) == entry.file_name
+            })
+            .map(|(_, original)| original.clone())
+            .collect::<Vec<_>>();
+
+        if matched_files.is_empty() {
+            continue;
+        }
+
+        let gender = match entry.gender.as_str() {
+            "female" => "女性",
+            "male" => "男性",
+            _ => "未知性别",
+        };
+
+        replacements.push(ModelReplacement {
+            model_kind: "voice".to_string(),
+            sub_kind: format!("人物语音 · {gender}"),
+            model_part: "soundBank".to_string(),
+            model_id: entry.model_id.clone(),
+            game_ids: vec![entry.voice_number.clone()],
+            variant_ids: Vec::new(),
+            display_names: entry.display_names.clone(),
+            matched_files,
+            recognition_source: "idTable".to_string(),
+        });
+    }
+}
+
 fn detect_armor_part(path: &str) -> Option<&'static str> {
     const ARMOR_PART_MARKERS: &[(&str, &[&str])] = &[
         ("头盔", &["helm", "head"]),
@@ -317,10 +453,31 @@ fn extract_hair_id(path: &str) -> Option<String> {
     })
 }
 
+fn extract_slinger_id(path: &str) -> Option<String> {
+    let directory_components = parent_directory(path).split('/').collect::<Vec<_>>();
+
+    directory_components.windows(3).find_map(|components| {
+        let slinger_id = components[2];
+        let numeric_id = slinger_id.strip_prefix("slg")?;
+
+        (components[0] == "wp"
+            && components[1] == "slg"
+            && numeric_id.len() == 3
+            && numeric_id
+                .chars()
+                .all(|character| character.is_ascii_digit()))
+        .then(|| slinger_id.to_string())
+    })
+}
+
 fn parent_directory(path: &str) -> &str {
     path.rsplit_once('/')
         .map(|(directory, _)| directory)
         .unwrap_or("")
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 fn directory_contains_path(directory_path: &str, expected_path: &str) -> bool {
@@ -353,7 +510,14 @@ fn model_kind_order(model_kind: &str) -> u8 {
         "weapon" => 0,
         "armor" => 1,
         "hair" => 2,
-        _ => 3,
+        "palicoWeapon" => 3,
+        "palicoArmor" => 4,
+        "kinsect" => 5,
+        "pendant" => 6,
+        "npc" => 7,
+        "slinger" => 8,
+        "voice" => 9,
+        _ => 10,
     }
 }
 
@@ -495,6 +659,109 @@ mod tests {
     fn ignores_armor_ids_that_only_appear_in_file_names() {
         let paths =
             vec!["nativePC/pl/f_equip/unrelated/helm/mod/f_pl001_0000_helm.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+
+        assert!(replacements.is_empty());
+    }
+
+    #[test]
+    fn recognizes_extended_model_categories_from_directory_ids() {
+        let paths = vec![
+            "nativePC/otomo/wp/ot_we001/mod/ot_we001.mod3".to_string(),
+            "nativePC/otomo/equip/ot001/helm/mod/ot001_helm.mod3".to_string(),
+            "nativePC/wp/mus/mus001/mod/mus001.mod3".to_string(),
+            "nativePC/pl/charm/charm002/mod/charm002.mod3".to_string(),
+            "nativePC/npc/npc001/mod/npc001.mod3".to_string(),
+            "nativePC/wp/slg/slg001/mod/slg001.mod3".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "palicoWeapon"
+                && replacement
+                    .display_names
+                    .iter()
+                    .any(|name| name == "橡子猫铲")
+        }));
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "palicoArmor"
+                && replacement
+                    .display_names
+                    .iter()
+                    .any(|name| name == "皮制猫头饰")
+        }));
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "kinsect"
+                && replacement
+                    .display_names
+                    .iter()
+                    .any(|name| name == "克里多隆虫1")
+        }));
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "pendant"
+                && replacement
+                    .display_names
+                    .iter()
+                    .any(|name| name == "公会奖章·铜之支援队")
+        }));
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "npc"
+                && replacement
+                    .display_names
+                    .iter()
+                    .any(|name| name == "总司令")
+        }));
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "slinger"
+                && replacement
+                    .display_names
+                    .iter()
+                    .any(|name| name == "投射器")
+        }));
+    }
+
+    #[test]
+    fn recognizes_unknown_slinger_id_from_verified_directory_shape() {
+        let paths = vec!["nativePC/wp/slg/slg999/mod/slg999.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let slinger = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "slinger")
+            .unwrap();
+
+        assert_eq!(slinger.model_id, "slg999");
+        assert_eq!(slinger.recognition_source, "pathPattern");
+    }
+
+    #[test]
+    fn recognizes_character_creation_voice_number_from_exact_sound_bank_name() {
+        let paths = vec![
+            "nativePC/sound/wwise/Windows/pl_act_vo_f_07_m.nbnk".to_string(),
+            "nativePC/sound/wwise/Windows/pl_act_vo_m_07_m.nbnk".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "voice"
+                && replacement.sub_kind == "人物语音 · 女性"
+                && replacement.game_ids == ["16"]
+                && replacement.display_names == ["女性语音 16 号"]
+        }));
+        assert!(replacements.iter().any(|replacement| {
+            replacement.model_kind == "voice"
+                && replacement.sub_kind == "人物语音 · 男性"
+                && replacement.game_ids == ["16"]
+                && replacement.display_names == ["男性语音 16 号"]
+        }));
+    }
+
+    #[test]
+    fn ignores_voice_file_name_outside_the_wwise_windows_directory() {
+        let paths = vec!["nativePC/plugins/pl_act_vo_f_07_m.nbnk".to_string()];
 
         let replacements = recognize_model_replacements(&paths).unwrap();
 

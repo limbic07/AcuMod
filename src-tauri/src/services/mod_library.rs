@@ -18,7 +18,7 @@ use crate::storage::config;
 use super::model_recognition::{recognize_model_replacements, ModelReplacement};
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 6;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 7;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -3427,7 +3427,7 @@ mod tests {
         let manifest_json = fs::read_to_string(&result.manifest_path).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
 
-        assert_eq!(manifest["schemaVersion"], 6);
+        assert_eq!(manifest["schemaVersion"], 7);
         assert_eq!(result.model_replacements[0].sub_kind, "太刀");
         assert_eq!(manifest["modelReplacements"][0]["modelKind"], "weapon");
 
@@ -3478,9 +3478,9 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_model_recognition_when_listing_schema_five_manifest() {
-        let root = temp_root("schema_five_hair_source");
-        let installed_root = temp_root("schema_five_hair_target");
+    fn refreshes_model_recognition_when_listing_schema_six_manifest() {
+        let root = temp_root("schema_six_hair_source");
+        let installed_root = temp_root("schema_six_hair_target");
         write_file(
             &root
                 .join("nativePC")
@@ -3495,7 +3495,7 @@ mod tests {
             install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
         let mut manifest: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
-        manifest["schemaVersion"] = serde_json::Value::from(5);
+        manifest["schemaVersion"] = serde_json::Value::from(6);
         manifest["modelReplacements"] = serde_json::json!([]);
         fs::write(
             &result.manifest_path,

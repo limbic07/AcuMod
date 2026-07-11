@@ -19,6 +19,12 @@
       "modelId": "slg001",
       "gameIds": ["slg001"],
       "displayNames": ["投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg000_0000",
+      "modelId": "slg000_0000",
+      "gameIds": ["slg000_0000"],
+      "displayNames": ["通用投射器/飞翔爪"]
     }
   ],
   "voiceModels": [

@@ -203,9 +203,9 @@ MOD 文件列表
 - 原始目标 ID。
 - 原始目标游戏内名称。
 
-当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 对模型目录做组件边界匹配；一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组，UI 摘要展示名称并允许展开 MOD 文件列表。
+当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型命中多个部位时，后端合并为一个套装 DTO 并返回部位列表。
 
-新导入 MOD 使用 manifest schema 6 持久化 `modelReplacements`。旧 schema 1 至 5 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。发型和投射器的未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
+新导入 MOD 使用 manifest schema 7 持久化 `modelReplacements`。旧 schema 1 至 6 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。投射器接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录；未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
 
 后续如果支持同类型模型替换目标选择，应作为独立功能设计。该功能不能修改 MOD 库中的原始文件，应在部署阶段生成新的部署计划。MVP 暂不做任何模型改绑，包括通过路径、文件名或文件内容进行改绑。
 
@@ -361,7 +361,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 6 manifest 持久化结果，schema 1 至 5 manifest 读取时兼容补算。
+4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 7 manifest 持久化结果，schema 1 至 6 manifest 读取时兼容补算；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容。

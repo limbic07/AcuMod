@@ -176,6 +176,10 @@ function modelReplacementTitle(replacement: ModelReplacement) {
   }
 
   if (replacement.modelKind === "armor") {
+    if (replacement.modelPart === "set") {
+      return "防具套装";
+    }
+
     return `防具 · ${replacement.subKind}`;
   }
 
@@ -214,6 +218,12 @@ function summarizeGameIds(replacement: ModelReplacement) {
   return remainingCount > 0
     ? `游戏 ID ${visibleIds.join(", ")} 等 ${replacement.gameIds.length} 个`
     : `游戏 ID ${visibleIds.join(", ")}`;
+}
+
+function summarizeAffectedParts(replacement: ModelReplacement) {
+  return replacement.affectedParts.length
+    ? `替换部位：${replacement.affectedParts.join("、")}`
+    : "";
 }
 
 async function loadAppInfo() {
@@ -925,7 +935,7 @@ onBeforeUnmount(() => {
       </dl>
 
       <div v-if="installResult?.modelReplacements.length" class="preview-block">
-        <h3>模型替换识别</h3>
+        <h3>游戏内替换目标</h3>
         <ul class="model-replacement-list">
           <li
             v-for="replacement in installResult.modelReplacements"
@@ -937,6 +947,9 @@ onBeforeUnmount(() => {
               {{ replacement.modelId }}
               <template v-if="summarizeGameIds(replacement)">
                 · {{ summarizeGameIds(replacement) }}
+              </template>
+              <template v-if="summarizeAffectedParts(replacement)">
+                · {{ summarizeAffectedParts(replacement) }}
               </template>
             </small>
           </li>
@@ -1035,6 +1048,9 @@ onBeforeUnmount(() => {
                     {{ replacement.modelId }}
                     <template v-if="summarizeGameIds(replacement)">
                       · {{ summarizeGameIds(replacement) }}
+                    </template>
+                    <template v-if="summarizeAffectedParts(replacement)">
+                      · {{ summarizeAffectedParts(replacement) }}
                     </template>
                   </small>
                 </li>

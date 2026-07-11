@@ -20,6 +20,8 @@ pub struct ModelReplacement {
     pub game_ids: Vec<String>,
     pub variant_ids: Vec<String>,
     pub display_names: Vec<String>,
+    #[serde(default)]
+    pub affected_parts: Vec<String>,
     pub matched_files: Vec<String>,
     pub recognition_source: String,
 }
@@ -97,7 +99,8 @@ pub fn recognize_model_replacements(
     let mut replacements = Vec::new();
 
     for entry in &index.weapon_models {
-        let matched_files = matching_files(&normalized_files, &entry.model_path, |_| true);
+        let matched_files =
+            matching_files_in_nativepc_root(&normalized_files, &entry.model_path, |_| true);
 
         if matched_files.is_empty() {
             continue;
@@ -111,6 +114,7 @@ pub fn recognize_model_replacements(
             game_ids: entry.weapon_ids.clone(),
             variant_ids: Vec::new(),
             display_names: entry.display_names.clone(),
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -119,7 +123,7 @@ pub fn recognize_model_replacements(
     let mut recognized_armor_models = HashSet::new();
 
     for entry in &index.armor_models {
-        let matched_files = matching_files(&normalized_files, &entry.model_path, |path| {
+        let matched_files = matching_armor_files(&normalized_files, &entry.model_path, |path| {
             detect_armor_part(path) == Some(entry.armor_part.as_str())
         });
 
@@ -136,6 +140,7 @@ pub fn recognize_model_replacements(
             game_ids: entry.armor_ids.clone(),
             variant_ids: entry.layered_armor_ids.clone(),
             display_names: entry.display_names.clone(),
+            affected_parts: vec![entry.armor_part.clone()],
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -151,6 +156,7 @@ pub fn recognize_model_replacements(
     add_asset_matches(&mut replacements, &normalized_files, &index.asset_models);
     add_unknown_slinger_matches(&mut replacements, &normalized_files, &index.asset_models);
     add_voice_matches(&mut replacements, &normalized_files, &index.voice_models);
+    merge_armor_set_matches(&mut replacements);
 
     replacements.sort_by(|left, right| {
         model_kind_order(&left.model_kind)
@@ -175,7 +181,7 @@ fn model_index() -> Result<&'static ModelIndex, String> {
     }
 }
 
-fn matching_files<F>(
+fn matching_files_in_nativepc_root<F>(
     normalized_files: &[(String, String)],
     model_path: &str,
     include: F,
@@ -186,8 +192,39 @@ where
     normalized_files
         .iter()
         .filter(|(normalized, _)| {
-            let directory_path = parent_directory(normalized);
-            directory_contains_path(directory_path, model_path) && include(directory_path)
+            let Some(directory_path) = nativepc_relative_directory(normalized) else {
+                return false;
+            };
+
+            directory_starts_with_path(directory_path, model_path) && include(directory_path)
+        })
+        .map(|(_, original)| original.clone())
+        .collect()
+}
+
+fn matching_armor_files<F>(
+    normalized_files: &[(String, String)],
+    model_id: &str,
+    include: F,
+) -> Vec<String>
+where
+    F: Fn(&str) -> bool,
+{
+    normalized_files
+        .iter()
+        .filter(|(normalized, _)| {
+            let Some(directory_path) = nativepc_relative_directory(normalized) else {
+                return false;
+            };
+
+            let is_equipment_model =
+                directory_starts_with_path(directory_path, &format!("pl/f_equip/{model_id}"))
+                    || directory_starts_with_path(
+                        directory_path,
+                        &format!("pl/m_equip/{model_id}"),
+                    );
+
+            is_equipment_model && include(directory_path)
         })
         .map(|(_, original)| original.clone())
         .collect()
@@ -213,7 +250,7 @@ fn add_unknown_part_armor_matches<'a>(
             continue;
         }
 
-        let matched_files = matching_files(normalized_files, model_path, |path| {
+        let matched_files = matching_armor_files(normalized_files, model_path, |path| {
             detect_armor_part(path).is_none()
         });
 
@@ -245,6 +282,7 @@ fn add_unknown_part_armor_matches<'a>(
             game_ids,
             variant_ids,
             display_names,
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -259,7 +297,8 @@ fn add_hair_matches(
     let mut recognized_ids = HashSet::new();
 
     for entry in hair_models {
-        let matched_files = matching_files(normalized_files, &entry.model_path, |_| true);
+        let matched_files =
+            matching_files_in_nativepc_root(normalized_files, &entry.model_path, |_| true);
 
         if matched_files.is_empty() {
             continue;
@@ -274,6 +313,7 @@ fn add_hair_matches(
             game_ids: entry.game_ids.clone(),
             variant_ids: Vec::new(),
             display_names: entry.display_names.clone(),
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -303,6 +343,7 @@ fn add_hair_matches(
             game_ids: Vec::new(),
             variant_ids: Vec::new(),
             display_names: Vec::new(),
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "pathPattern".to_string(),
         });
@@ -315,7 +356,7 @@ fn add_asset_matches(
     asset_models: &[AssetModelEntry],
 ) {
     for entry in asset_models {
-        let matched_files = matching_files(normalized_files, &entry.model_path, |_| true);
+        let matched_files = matching_asset_files(normalized_files, entry);
 
         if matched_files.is_empty() {
             continue;
@@ -329,10 +370,33 @@ fn add_asset_matches(
             game_ids: entry.game_ids.clone(),
             variant_ids: entry.variant_ids.clone(),
             display_names: entry.display_names.clone(),
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
     }
+}
+
+fn matching_asset_files(
+    normalized_files: &[(String, String)],
+    entry: &AssetModelEntry,
+) -> Vec<String> {
+    if entry.model_path.contains('/') {
+        return matching_files_in_nativepc_root(normalized_files, &entry.model_path, |_| true);
+    }
+
+    normalized_files
+        .iter()
+        .filter(|(normalized, _)| {
+            let Some(directory_path) = nativepc_relative_directory(normalized) else {
+                return false;
+            };
+
+            !directory_starts_with_path(directory_path, "vfx")
+                && directory_has_component(directory_path, &entry.model_path)
+        })
+        .map(|(_, original)| original.clone())
+        .collect()
 }
 
 fn add_unknown_slinger_matches(
@@ -372,6 +436,7 @@ fn add_unknown_slinger_matches(
             game_ids: Vec::new(),
             variant_ids: Vec::new(),
             display_names: Vec::new(),
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "pathPattern".to_string(),
         });
@@ -387,8 +452,9 @@ fn add_voice_matches(
         let matched_files = normalized_files
             .iter()
             .filter(|(normalized, _)| {
-                directory_contains_path(parent_directory(normalized), "sound/wwise/windows")
-                    && file_name(normalized) == entry.file_name
+                nativepc_relative_directory(normalized).is_some_and(|directory| {
+                    directory_starts_with_path(directory, "sound/wwise/windows")
+                }) && file_name(normalized) == entry.file_name
             })
             .map(|(_, original)| original.clone())
             .collect::<Vec<_>>();
@@ -411,9 +477,86 @@ fn add_voice_matches(
             game_ids: vec![entry.voice_number.clone()],
             variant_ids: Vec::new(),
             display_names: entry.display_names.clone(),
+            affected_parts: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
+    }
+}
+
+fn merge_armor_set_matches(replacements: &mut Vec<ModelReplacement>) {
+    let mut armor_sets = BTreeMap::<String, Vec<ModelReplacement>>::new();
+    let mut remaining_replacements = Vec::new();
+
+    for replacement in std::mem::take(replacements) {
+        if replacement.model_kind == "armor"
+            && replacement.recognition_source == "idTable"
+            && is_armor_part(&replacement.sub_kind)
+        {
+            armor_sets
+                .entry(replacement.model_id.clone())
+                .or_default()
+                .push(replacement);
+        } else {
+            remaining_replacements.push(replacement);
+        }
+    }
+
+    for (_, mut set_parts) in armor_sets {
+        set_parts.sort_by_key(|replacement| armor_part_order(&replacement.sub_kind));
+
+        if set_parts.len() == 1 {
+            remaining_replacements.push(set_parts.pop().expect("armor set has one part"));
+            continue;
+        }
+
+        let mut combined = set_parts.remove(0);
+        let mut game_ids = combined.game_ids.clone();
+        let mut variant_ids = combined.variant_ids.clone();
+        let mut display_names = combined.display_names.clone();
+        let mut matched_files = combined.matched_files.clone();
+        let mut affected_parts = vec![combined.sub_kind.clone()];
+
+        for part in set_parts {
+            game_ids.extend(part.game_ids);
+            variant_ids.extend(part.variant_ids);
+            display_names.extend(part.display_names);
+            matched_files.extend(part.matched_files);
+            affected_parts.push(part.sub_kind);
+        }
+
+        sort_and_deduplicate(&mut game_ids);
+        sort_and_deduplicate(&mut variant_ids);
+        sort_and_deduplicate(&mut display_names);
+        sort_and_deduplicate(&mut matched_files);
+        affected_parts.sort_by_key(|part| armor_part_order(part));
+        affected_parts.dedup();
+
+        combined.sub_kind = "防具套装".to_string();
+        combined.model_part = "set".to_string();
+        combined.game_ids = game_ids;
+        combined.variant_ids = variant_ids;
+        combined.display_names = display_names;
+        combined.affected_parts = affected_parts;
+        combined.matched_files = matched_files;
+        remaining_replacements.push(combined);
+    }
+
+    *replacements = remaining_replacements;
+}
+
+fn is_armor_part(part: &str) -> bool {
+    matches!(part, "头盔" | "铠甲" | "护手" | "腰甲" | "护腿")
+}
+
+fn armor_part_order(part: &str) -> u8 {
+    match part {
+        "头盔" => 0,
+        "铠甲" => 1,
+        "护手" => 2,
+        "腰甲" => 3,
+        "护腿" => 4,
+        _ => 5,
     }
 }
 
@@ -437,37 +580,44 @@ fn detect_armor_part(path: &str) -> Option<&'static str> {
 }
 
 fn extract_hair_id(path: &str) -> Option<String> {
-    let directory_components = parent_directory(path).split('/').collect::<Vec<_>>();
+    let directory_components = nativepc_relative_directory(path)?
+        .split('/')
+        .collect::<Vec<_>>();
 
-    directory_components.windows(3).find_map(|components| {
-        let hair_id = components[2];
+    directory_components.get(2).and_then(|hair_id| {
         let numeric_id = hair_id.strip_prefix("hair")?;
 
-        (components[0] == "pl"
-            && components[1] == "hair"
+        (directory_components[0] == "pl"
+            && directory_components[1] == "hair"
             && numeric_id.len() == 3
             && numeric_id
                 .chars()
                 .all(|character| character.is_ascii_digit()))
-        .then(|| hair_id.to_string())
+        .then(|| (*hair_id).to_string())
     })
 }
 
 fn extract_slinger_id(path: &str) -> Option<String> {
-    let directory_components = parent_directory(path).split('/').collect::<Vec<_>>();
+    let directory_components = nativepc_relative_directory(path)?
+        .split('/')
+        .collect::<Vec<_>>();
+    let slinger_id = *directory_components.get(2)?;
+    let numeric_id = slinger_id.strip_prefix("slg")?;
+    let is_legacy_id = numeric_id.len() == 3
+        && numeric_id
+            .chars()
+            .all(|character| character.is_ascii_digit());
+    let is_full_id = numeric_id.split_once('_').is_some_and(|(model, variant)| {
+        model.len() == 3
+            && variant.len() == 4
+            && model.chars().all(|character| character.is_ascii_digit())
+            && variant.chars().all(|character| character.is_ascii_digit())
+    });
 
-    directory_components.windows(3).find_map(|components| {
-        let slinger_id = components[2];
-        let numeric_id = slinger_id.strip_prefix("slg")?;
-
-        (components[0] == "wp"
-            && components[1] == "slg"
-            && numeric_id.len() == 3
-            && numeric_id
-                .chars()
-                .all(|character| character.is_ascii_digit()))
+    (directory_components[0] == "wp"
+        && directory_components[1] == "slg"
+        && (is_legacy_id || is_full_id))
         .then(|| slinger_id.to_string())
-    })
 }
 
 fn parent_directory(path: &str) -> &str {
@@ -480,14 +630,17 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn directory_contains_path(directory_path: &str, expected_path: &str) -> bool {
+fn nativepc_relative_directory(path: &str) -> Option<&str> {
+    parent_directory(path).strip_prefix("nativepc/")
+}
+
+fn directory_starts_with_path(directory_path: &str, expected_path: &str) -> bool {
     let directory_components = directory_path.split('/').collect::<Vec<_>>();
     let expected_components = expected_path.split('/').collect::<Vec<_>>();
 
     !expected_components.is_empty()
-        && directory_components
-            .windows(expected_components.len())
-            .any(|components| components == expected_components)
+        && directory_components.len() >= expected_components.len()
+        && directory_components[..expected_components.len()] == expected_components
 }
 
 fn directory_has_component(directory_path: &str, expected_component: &str) -> bool {
@@ -666,6 +819,50 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_armor_sets_and_slinger_without_treating_vfx_assets_as_targets() {
+        let paths = vec![
+            "nativePC/pl/f_equip/pl105_0000/helm/mod/f_helm105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/wst/mod/f_wst105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/leg/mod/f_leg105_0000.mod3".to_string(),
+            "nativePC/wp/slg/slg000_0000/mod/slg000_0000.mod3".to_string(),
+            "nativePC/vfx/mod/wp/caxe/caxe030/md_caxe030_016.mod3".to_string(),
+            "nativePC/vfx/mod/pl/pl126_0000/md_pl126_000.mod3".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let armor_set = replacements
+            .iter()
+            .find(|replacement| {
+                replacement.model_kind == "armor" && replacement.model_id == "pl105_0000"
+            })
+            .unwrap();
+        let slinger = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "slinger")
+            .unwrap();
+
+        assert_eq!(armor_set.sub_kind, "防具套装");
+        assert_eq!(
+            armor_set.affected_parts,
+            ["头盔", "铠甲", "护手", "腰甲", "护腿"]
+        );
+        assert!(armor_set
+            .display_names
+            .iter()
+            .any(|name| name.contains("冰狼")));
+        assert_eq!(slinger.model_id, "slg000_0000");
+        assert_eq!(slinger.display_names, ["通用投射器/飞翔爪"]);
+        assert!(!replacements
+            .iter()
+            .any(|replacement| replacement.model_kind == "weapon"));
+        assert!(!replacements
+            .iter()
+            .any(|replacement| replacement.model_id == "pl126_0000"));
+    }
+
+    #[test]
     fn recognizes_extended_model_categories_from_directory_ids() {
         let paths = vec![
             "nativePC/otomo/wp/ot_we001/mod/ot_we001.mod3".to_string(),
@@ -724,7 +921,7 @@ mod tests {
 
     #[test]
     fn recognizes_unknown_slinger_id_from_verified_directory_shape() {
-        let paths = vec!["nativePC/wp/slg/slg999/mod/slg999.mod3".to_string()];
+        let paths = vec!["nativePC/wp/slg/slg999_0000/mod/slg999_0000.mod3".to_string()];
 
         let replacements = recognize_model_replacements(&paths).unwrap();
         let slinger = replacements
@@ -732,7 +929,7 @@ mod tests {
             .find(|replacement| replacement.model_kind == "slinger")
             .unwrap();
 
-        assert_eq!(slinger.model_id, "slg999");
+        assert_eq!(slinger.model_id, "slg999_0000");
         assert_eq!(slinger.recognition_source, "pathPattern");
     }
 

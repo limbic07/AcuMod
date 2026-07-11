@@ -52,6 +52,7 @@ export interface ModelReplacement {
   gameIds: string[];
   variantIds: string[];
   displayNames: string[];
+  affectedParts: string[];
   matchedFiles: string[];
   recognitionSource: string;
 }

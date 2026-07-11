@@ -301,8 +301,8 @@ Vue UI
 
 1. 导入 service 根据最终 `deployRelativePath` 调用 `recognize_model_replacements()`。
 2. Rust 查询编译进应用的武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器和人物语音精简索引；规范目录中的未知发型或投射器编号仅返回路径 ID。
-3. 结果随 `ModInstallResult` 返回并写入 manifest schema 6。
-4. `list_installed_mods` 直接读取新 manifest；旧 schema 1 至 5 manifest 根据文件列表即时补算。
+3. 结果随 `ModInstallResult` 返回并写入 manifest schema 7。
+4. `list_installed_mods` 直接读取新 manifest；旧 schema 1 至 6 manifest 根据文件列表即时补算。武器和防具只在规范资源根目录识别，`vfx/mod` 中的同名模型只作为附属资源保留。
 5. Vue 展示模型类型、子类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 重新生成模型索引：

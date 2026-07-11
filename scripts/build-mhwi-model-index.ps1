@@ -303,7 +303,7 @@ $assetModelRows = @(
 
     $extendedAssetSource.slingerModels | ForEach-Object {
         $modelPath = Normalize-ModelPath $_.modelPath
-        if ($null -eq $modelPath -or $modelPath -notmatch '^wp/slg/slg[0-9]{3}$') {
+        if ($null -eq $modelPath -or $modelPath -notmatch '^wp/slg/slg[0-9]{3}(?:_[0-9]{4})?$') {
             throw "Invalid slinger model path: $($_.modelPath)"
         }
 
@@ -370,7 +370,7 @@ $voiceModels = @($extendedAssetSource.voiceModels |
     Sort-Object gender, { [int]$_.voiceNumber })
 
 $index = [ordered]@{
-    schemaVersion = 4
+    schemaVersion = 5
     gameVersion = "15.10.00"
     sourceFiles = @(
         "02_weapons.csv",

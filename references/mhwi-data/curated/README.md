@@ -11,7 +11,7 @@
 - `09_palico_weapons.csv`、`10_palico_armor.csv`：随从武器和防具模型路径、ID 与中文名称。
 - `12_pendants.csv`、`13_kinsects.csv`、`17_npc.csv`：挂件、猎虫和 NPC 模型 ID 与中文名称。
 - `sources/hairstyles.json`：发型模型路径、角色创建界面槽位、Wiki 英文原名和官方简体中文名称，来源记录在文件内。
-- `sources/extended-assets.json`：投射器模型目录，以及男女各 20 个角色创建语音序号与 `.nbnk` 文件名映射。
+- `sources/extended-assets.json`：投射器模型目录（含通用 `slg000_0000`）以及男女各 20 个角色创建语音序号与 `.nbnk` 文件名映射。
 
 生成命令：
 
@@ -19,7 +19,7 @@
 .\scripts\build-mhwi-model-index.ps1
 ```
 
-脚本会过滤 `Unavailable`、`Invalid Message` 和 `dummy` 名称，按模型路径和类型合并共用同一模型的游戏内容。当前索引包含 906 条武器、1233 条防具、89 条发型、479 条扩展模型映射和 40 条人物语音映射，并通过 Rust `include_str!` 编译进应用。
+脚本会过滤 `Unavailable`、`Invalid Message` 和 `dummy` 名称，按模型路径和类型合并共用同一模型的游戏内容。当前索引包含 906 条武器、1233 条防具、89 条发型、480 条扩展模型映射和 40 条人物语音映射，并通过 Rust `include_str!` 编译进应用。
 
 主要字段：
 

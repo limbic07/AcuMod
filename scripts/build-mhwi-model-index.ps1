@@ -1,5 +1,6 @@
 ﻿param(
     [string]$RawPackagePath,
+    [string]$HairSourcePath,
     [string]$OutputPath
 )
 
@@ -16,6 +17,10 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $repositoryRoot "references/mhwi-data/curated/model-index.json"
 }
 
+if ([string]::IsNullOrWhiteSpace($HairSourcePath)) {
+    $HairSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/hairstyles.json"
+}
+
 $weaponCsvPath = Join-Path $RawPackagePath "csv/02_weapons.csv"
 $armorCsvPath = Join-Path $RawPackagePath "csv/03_armor.csv"
 
@@ -25,6 +30,10 @@ if (-not (Test-Path -LiteralPath $weaponCsvPath -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath $armorCsvPath -PathType Leaf)) {
     throw "Armor data was not found: $armorCsvPath"
+}
+
+if (-not (Test-Path -LiteralPath $HairSourcePath -PathType Leaf)) {
+    throw "Curated hairstyle data was not found: $HairSourcePath"
 }
 
 function Normalize-ModelPath {
@@ -66,6 +75,7 @@ function Get-SortedNames {
 
 $weaponRows = Import-Csv -LiteralPath $weaponCsvPath -Encoding utf8
 $armorRows = Import-Csv -LiteralPath $armorCsvPath -Encoding utf8
+$hairSource = Get-Content -LiteralPath $HairSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
 
 $weaponModelRows = foreach ($row in $weaponRows) {
     $mainModelPath = Normalize-ModelPath $row.主模型地址
@@ -139,12 +149,51 @@ $armorModels = @($armorModelRows |
     } |
     Sort-Object { [int]$_.armorPartId }, modelPath)
 
+$hairModels = @($hairSource.hairstyles |
+    ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.modelPath
+        if ($null -eq $modelPath -or $modelPath -notmatch '/hair[0-9]+$') {
+            throw "Invalid hairstyle model path: $($_.modelPath)"
+        }
+
+        $hairstyleId = [string]$_.hairstyleId
+        $hasNumericSlot = $hairstyleId -match '^\d+-\d+$'
+        $displayNames = @()
+
+        if ($hasNumericSlot) {
+            $displayNames += "发型 $hairstyleId"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($_.displayName)) {
+            $displayNames += ([string]$_.displayName).Trim()
+        }
+
+        [pscustomobject]@{
+            modelPath = $modelPath
+            modelId = Split-Path -Leaf $modelPath
+            gameIds = @($(if ($hasNumericSlot) { $hairstyleId }))
+            displayNames = @($displayNames)
+            category = [string]$_.category
+        }
+    } |
+    Sort-Object modelPath)
+
+if ($hairModels.Count -ne $hairSource.hairstyles.Count) {
+    throw "Some curated hairstyle entries were not generated."
+}
+
+if (($hairModels.modelPath | Sort-Object -Unique).Count -ne $hairModels.Count) {
+    throw "Curated hairstyle model paths must be unique."
+}
+
 $index = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 3
     gameVersion = "15.10.00"
-    sourceFiles = @("02_weapons.csv", "03_armor.csv")
+    sourceFiles = @("02_weapons.csv", "03_armor.csv", "curated/sources/hairstyles.json")
+    sourceReferences = @($hairSource.source)
     weaponModels = $weaponModels
     armorModels = $armorModels
+    hairModels = $hairModels
 }
 
 $outputDirectory = Split-Path -Parent $OutputPath
@@ -152,5 +201,5 @@ $outputDirectory = Split-Path -Parent $OutputPath
 $json = $index | ConvertTo-Json -Depth 8 -Compress
 [System.IO.File]::WriteAllText($OutputPath, $json, [System.Text.UTF8Encoding]::new($false))
 
-Write-Output "Generated $($weaponModels.Count) weapon model entries and $($armorModels.Count) armor model entries."
+Write-Output "Generated $($weaponModels.Count) weapon, $($armorModels.Count) armor, and $($hairModels.Count) hairstyle model entries."
 Write-Output "Output: $OutputPath"

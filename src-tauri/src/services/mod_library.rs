@@ -5,18 +5,20 @@ use std::{
     io::ErrorKind,
     path::{Component, Path, PathBuf},
     process::Command,
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::storage::config;
 
 use super::model_recognition::{recognize_model_replacements, ModelReplacement};
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 2;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 5;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -354,6 +356,7 @@ struct InstalledManifestContext {
 pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
+    initialize_import_staging(&paths)?;
 
     Ok(ModLibraryStatus {
         software_data_path: path_to_string(&paths.software_data_path),
@@ -427,6 +430,8 @@ pub fn install_mod_from_archive(
 ) -> Result<ModArchiveImportOutcome, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
+    initialize_import_staging(&paths)?;
+    clear_import_staging(&paths.import_staging_path)?;
     let archive_path = normalize_user_path(&raw_path);
     let archive_path = validate_archive_path(&archive_path)?;
     let archive_name = derive_mod_name(&archive_path);
@@ -531,11 +536,25 @@ pub fn install_mod_from_candidate(
         &paths.installed_path,
     );
 
-    if result.is_ok() && should_cleanup_staging {
-        let _ = fs::remove_dir_all(&normalized_source_path);
-    }
+    match result {
+        Ok(mut install_result) => {
+            if should_cleanup_staging {
+                match fs::remove_dir_all(&normalized_source_path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => {
+                        install_result.message = format!(
+                            "MOD was installed, but archive staging cleanup failed at {}: {error}",
+                            normalized_source_path.display()
+                        );
+                    }
+                }
+            }
 
-    result
+            Ok(install_result)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn install_mod_from_candidate_into(
@@ -581,6 +600,34 @@ pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, S
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     list_installed_mods_from(&paths.installed_path)
+}
+
+pub fn open_installed_mod_folder(app: &tauri::AppHandle, mod_id: String) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let content_path = installed_mod_content_path(&paths.installed_path, &mod_id)?;
+
+    app.opener()
+        .open_path(path_to_string(&content_path), None::<String>)
+        .map_err(|error| {
+            format!(
+                "Could not open installed MOD folder {}: {error}",
+                content_path.display()
+            )
+        })
+}
+
+fn installed_mod_content_path(installed_root: &Path, mod_id: &str) -> Result<PathBuf, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+
+    if !context.content_path.is_dir() {
+        return Err(format!(
+            "Installed MOD content directory does not exist: {}",
+            context.content_path.display()
+        ));
+    }
+
+    Ok(context.content_path)
 }
 
 pub fn preview_enable_mod(
@@ -3018,6 +3065,63 @@ fn ensure_library_directories(paths: &LibraryPaths) -> Result<(), String> {
     Ok(())
 }
 
+fn initialize_import_staging(paths: &LibraryPaths) -> Result<(), String> {
+    static INITIALIZATION: OnceLock<Result<(), String>> = OnceLock::new();
+
+    match INITIALIZATION.get_or_init(|| clear_import_staging(&paths.import_staging_path)) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+fn clear_import_staging(import_staging_path: &Path) -> Result<(), String> {
+    fs::create_dir_all(import_staging_path).map_err(|error| {
+        format!(
+            "Could not create archive staging root {}: {error}",
+            import_staging_path.display()
+        )
+    })?;
+
+    for entry in fs::read_dir(import_staging_path).map_err(|error| {
+        format!(
+            "Could not read archive staging root {}: {error}",
+            import_staging_path.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Could not read an entry under archive staging root {}: {error}",
+                import_staging_path.display()
+            )
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "Could not inspect staging entry {}: {error}",
+                path.display()
+            )
+        })?;
+
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            fs::remove_dir_all(&path).map_err(|error| {
+                format!(
+                    "Could not remove archive staging directory {}: {error}",
+                    path.display()
+                )
+            })?;
+        } else {
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "Could not remove archive staging file {}: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 fn software_data_path() -> Result<PathBuf, String> {
     let executable_path = env::current_exe()
         .map_err(|error| format!("Could not resolve executable path: {error}"))?;
@@ -3041,8 +3145,9 @@ mod tests {
     };
 
     use super::{
-        apply_conflict_order_from, disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
-        install_mod_from_candidate_into, install_mod_from_folder_into, list_installed_mods_from,
+        apply_conflict_order_from, clear_import_staging, disable_mod_from, enable_mod_from,
+        get_mod_conflict_report_from, install_mod_from_candidate_into,
+        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
         move_conflict_participant_from, preview_enable_mod_from, preview_mod_import,
         preview_restore_all_mods_from, preview_uninstall_mod_from, restore_all_mods_from,
         uninstall_mod_from, validate_archive_path,
@@ -3213,6 +3318,41 @@ mod tests {
     }
 
     #[test]
+    fn resolves_only_the_installed_content_folder_for_opening() {
+        let root = temp_root("open_folder_source");
+        let installed_root = temp_root("open_folder_target");
+        write_file(&root.join("nativePC").join("weapon").join("sword.mod3"));
+
+        let result =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let content_path = installed_mod_content_path(&installed_root, &result.mod_id).unwrap();
+
+        assert_eq!(
+            content_path.canonicalize().unwrap(),
+            PathBuf::from(&result.content_path).canonicalize().unwrap()
+        );
+        assert!(content_path.join("nativePC/weapon/sword.mod3").is_file());
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn clears_only_archive_import_staging_contents() {
+        let root = temp_root("clear_import_staging");
+        let import_staging = root.join("mods").join("staging").join("imports");
+        write_file(&import_staging.join("old-import").join("nativePC/mod.bin"));
+        write_file(&import_staging.join("stale-marker.txt"));
+
+        clear_import_staging(&import_staging).unwrap();
+
+        assert!(import_staging.is_dir());
+        assert_eq!(fs::read_dir(&import_staging).unwrap().count(), 0);
+
+        cleanup(root);
+    }
+
+    #[test]
     fn stores_model_replacements_in_new_manifest() {
         let root = temp_root("recognized_install_source");
         let installed_root = temp_root("recognized_install_target");
@@ -3231,7 +3371,7 @@ mod tests {
         let manifest_json = fs::read_to_string(&result.manifest_path).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
 
-        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["schemaVersion"], 5);
         assert_eq!(result.model_replacements[0].sub_kind, "太刀");
         assert_eq!(manifest["modelReplacements"][0]["modelKind"], "weapon");
 
@@ -3276,6 +3416,43 @@ mod tests {
             .display_names
             .iter()
             .any(|name| name == "皮制头饰"));
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn refreshes_model_recognition_when_listing_schema_four_manifest() {
+        let root = temp_root("schema_four_hair_source");
+        let installed_root = temp_root("schema_four_hair_target");
+        write_file(
+            &root
+                .join("nativePC")
+                .join("pl")
+                .join("hair")
+                .join("hair100")
+                .join("mod")
+                .join("hair100.mod3"),
+        );
+
+        let result =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
+        manifest["schemaVersion"] = serde_json::Value::from(4);
+        manifest["modelReplacements"] = serde_json::json!([]);
+        fs::write(
+            &result.manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let list = list_installed_mods_from(&installed_root).unwrap();
+        let hair = &list.mods[0].model_replacements[0];
+
+        assert_eq!(hair.model_id, "hair100");
+        assert_eq!(hair.game_ids, ["1-1"]);
+        assert_eq!(hair.display_names, ["发型 1-1"]);
 
         cleanup(root);
         cleanup(installed_root);

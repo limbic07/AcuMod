@@ -29,6 +29,7 @@ pub struct ModelReplacement {
 struct ModelIndex {
     weapon_models: Vec<WeaponModelEntry>,
     armor_models: Vec<ArmorModelEntry>,
+    hair_models: Vec<HairModelEntry>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +49,15 @@ struct ArmorModelEntry {
     armor_part: String,
     armor_ids: Vec<String>,
     layered_armor_ids: Vec<String>,
+    display_names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HairModelEntry {
+    model_path: String,
+    model_id: String,
+    game_ids: Vec<String>,
     display_names: Vec<String>,
 }
 
@@ -112,7 +122,7 @@ pub fn recognize_model_replacements(
         &index.armor_models,
         &recognized_armor_models,
     );
-    add_hair_path_matches(&mut replacements, &normalized_files);
+    add_hair_matches(&mut replacements, &normalized_files, &index.hair_models);
 
     replacements.sort_by(|left, right| {
         model_kind_order(&left.model_kind)
@@ -148,7 +158,8 @@ where
     normalized_files
         .iter()
         .filter(|(normalized, _)| {
-            contains_bounded_token(normalized, model_path) && include(normalized)
+            let directory_path = parent_directory(normalized);
+            directory_contains_path(directory_path, model_path) && include(directory_path)
         })
         .map(|(_, original)| original.clone())
         .collect()
@@ -212,16 +223,44 @@ fn add_unknown_part_armor_matches<'a>(
     }
 }
 
-fn add_hair_path_matches(
+fn add_hair_matches(
     replacements: &mut Vec<ModelReplacement>,
     normalized_files: &[(String, String)],
+    hair_models: &[HairModelEntry],
 ) {
+    let mut recognized_ids = HashSet::new();
+
+    for entry in hair_models {
+        let matched_files = matching_files(normalized_files, &entry.model_path, |_| true);
+
+        if matched_files.is_empty() {
+            continue;
+        }
+
+        recognized_ids.insert(entry.model_id.as_str());
+        replacements.push(ModelReplacement {
+            model_kind: "hair".to_string(),
+            sub_kind: "发型".to_string(),
+            model_part: "model".to_string(),
+            model_id: entry.model_id.clone(),
+            game_ids: entry.game_ids.clone(),
+            variant_ids: Vec::new(),
+            display_names: entry.display_names.clone(),
+            matched_files,
+            recognition_source: "idTable".to_string(),
+        });
+    }
+
     let mut matches = BTreeMap::<String, Vec<String>>::new();
 
     for (normalized, original) in normalized_files {
         let Some(hair_id) = extract_hair_id(normalized) else {
             continue;
         };
+
+        if recognized_ids.contains(hair_id.as_str()) {
+            continue;
+        }
 
         matches.entry(hair_id).or_default().push(original.clone());
     }
@@ -256,58 +295,48 @@ fn detect_armor_part(path: &str) -> Option<&'static str> {
         .find(|(_, markers)| {
             markers
                 .iter()
-                .any(|marker| contains_bounded_token(path, marker))
+                .any(|marker| directory_has_component(path, marker))
         })
         .map(|(armor_part, _)| *armor_part)
 }
 
 fn extract_hair_id(path: &str) -> Option<String> {
-    let components = path.split('/').collect::<Vec<_>>();
+    let directory_components = parent_directory(path).split('/').collect::<Vec<_>>();
 
-    for (index, component) in components.iter().enumerate() {
-        let stem = component.split('.').next().unwrap_or(component);
-        let Some(hair_start) = stem.find("hair") else {
-            continue;
-        };
+    directory_components.windows(3).find_map(|components| {
+        let hair_id = components[2];
+        let numeric_id = hair_id.strip_prefix("hair")?;
 
-        let before_is_boundary = hair_start == 0
-            || !stem.as_bytes()[hair_start.saturating_sub(1)].is_ascii_alphanumeric();
-
-        if !before_is_boundary {
-            continue;
-        }
-
-        let token = stem[hair_start..]
-            .chars()
-            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
-            .collect::<String>();
-
-        if token != "hair" {
-            return Some(token);
-        }
-
-        if let Some(next_component) = components.get(index + 1) {
-            let next_stem = next_component.split('.').next().unwrap_or(next_component);
-
-            if next_stem.starts_with("hair") {
-                return Some(next_stem.to_string());
-            }
-        }
-
-        return Some("hair".to_string());
-    }
-
-    None
+        (components[0] == "pl"
+            && components[1] == "hair"
+            && numeric_id.len() == 3
+            && numeric_id
+                .chars()
+                .all(|character| character.is_ascii_digit()))
+        .then(|| hair_id.to_string())
+    })
 }
 
-fn contains_bounded_token(value: &str, token: &str) -> bool {
-    value.match_indices(token).any(|(start, _)| {
-        let end = start + token.len();
-        let before_is_boundary = start == 0 || !value.as_bytes()[start - 1].is_ascii_alphanumeric();
-        let after_is_boundary =
-            end == value.len() || !value.as_bytes()[end].is_ascii_alphanumeric();
-        before_is_boundary && after_is_boundary
-    })
+fn parent_directory(path: &str) -> &str {
+    path.rsplit_once('/')
+        .map(|(directory, _)| directory)
+        .unwrap_or("")
+}
+
+fn directory_contains_path(directory_path: &str, expected_path: &str) -> bool {
+    let directory_components = directory_path.split('/').collect::<Vec<_>>();
+    let expected_components = expected_path.split('/').collect::<Vec<_>>();
+
+    !expected_components.is_empty()
+        && directory_components
+            .windows(expected_components.len())
+            .any(|components| components == expected_components)
+}
+
+fn directory_has_component(directory_path: &str, expected_component: &str) -> bool {
+    directory_path
+        .split('/')
+        .any(|component| component == expected_component)
 }
 
 fn normalize_path(path: &str) -> String {
@@ -381,8 +410,8 @@ mod tests {
     }
 
     #[test]
-    fn reports_hair_path_id_without_inventing_a_name() {
-        let paths = vec!["nativePC/pl/hair/hair001/mod/hair001.mod3".to_string()];
+    fn recognizes_base_hairstyle_slot_from_bundled_id_table() {
+        let paths = vec!["nativePC/pl/hair/hair100/mod/hair100.mod3".to_string()];
 
         let replacements = recognize_model_replacements(&paths).unwrap();
         let hair = replacements
@@ -390,9 +419,86 @@ mod tests {
             .find(|replacement| replacement.model_kind == "hair")
             .unwrap();
 
-        assert_eq!(hair.model_id, "hair001");
+        assert_eq!(hair.model_id, "hair100");
+        assert_eq!(hair.game_ids, ["1-1"]);
+        assert_eq!(hair.display_names, ["发型 1-1"]);
+        assert_eq!(hair.recognition_source, "idTable");
+    }
+
+    #[test]
+    fn recognizes_named_hairstyle_from_bundled_id_table() {
+        let paths = vec!["nativePC/pl/hair/hair120/mod/hair120.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let hair = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "hair")
+            .unwrap();
+
+        assert_eq!(hair.model_id, "hair120");
+        assert_eq!(hair.game_ids, ["11-2"]);
+        assert_eq!(hair.display_names, ["发型 11-2", "优美"]);
+        assert_eq!(hair.recognition_source, "idTable");
+    }
+
+    #[test]
+    fn recognizes_collaboration_hairstyle_without_inventing_a_game_id() {
+        let paths = vec!["nativePC/pl/hair/hair404/mod/hair404.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let hair = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "hair")
+            .unwrap();
+
+        assert_eq!(hair.model_id, "hair404");
+        assert!(hair.game_ids.is_empty());
+        assert_eq!(hair.display_names, ["希里"]);
+    }
+
+    #[test]
+    fn keeps_path_pattern_fallback_for_unknown_hairstyle_ids() {
+        let paths = vec!["nativePC/pl/hair/hair999/mod/hair999.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let hair = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "hair")
+            .unwrap();
+
+        assert_eq!(hair.model_id, "hair999");
+        assert!(hair.game_ids.is_empty());
         assert!(hair.display_names.is_empty());
         assert_eq!(hair.recognition_source, "pathPattern");
+    }
+
+    #[test]
+    fn ignores_hairstyle_texture_names_outside_a_model_id_directory() {
+        let paths = vec![
+            "nativePC/pl/hair/hair404/mod/hair404.mod3".to_string(),
+            "nativePC/pl/hair/hair_BM.tex".to_string(),
+            "nativePC/pl/hair/hair_NM.tex".to_string(),
+            "nativePC/pl/hair/hair_RMT.tex".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let hair_replacements = replacements
+            .iter()
+            .filter(|replacement| replacement.model_kind == "hair")
+            .collect::<Vec<_>>();
+
+        assert_eq!(hair_replacements.len(), 1);
+        assert_eq!(hair_replacements[0].model_id, "hair404");
+    }
+
+    #[test]
+    fn ignores_armor_ids_that_only_appear_in_file_names() {
+        let paths =
+            vec!["nativePC/pl/f_equip/unrelated/helm/mod/f_pl001_0000_helm.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+
+        assert!(replacements.is_empty());
     }
 
     #[test]

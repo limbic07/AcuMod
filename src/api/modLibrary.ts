@@ -236,6 +236,12 @@ export function listInstalledMods(): Promise<InstalledModList> {
   return invoke<InstalledModList>("list_installed_mods");
 }
 
+export function openInstalledModFolder(modId: string): Promise<void> {
+  return invoke<void>("open_installed_mod_folder", {
+    modId,
+  });
+}
+
 export function previewModImport(
   path: string,
   allowGameRoot: boolean,

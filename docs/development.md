@@ -224,7 +224,7 @@ src-tauri/src/services/mod_library.rs
 
 src-tauri/src/services/model_recognition.rs
   读取编译进应用的 references/mhwi-data/curated/model-index.json
-  识别武器模型路径、防具模型 ID 与部位标记、发型路径 ID
+  识别武器模型路径、防具模型 ID 与部位标记、发型路径及 Wiki ID 映射
   返回 ModelReplacement DTO；不修改 MOD 文件或部署路径
 ```
 
@@ -280,6 +280,13 @@ Vue UI
 4. Rust service 读取每个 `manifest.json`。
 5. Vue 显示 MOD 名称、ID、文件数、启用状态和部署根。
 
+例如“打开已安装 MOD 文件夹”：
+
+1. Vue 在对应 MOD 行点击“打开文件夹”。
+2. `src/api/modLibrary.ts` 调用 `invoke<void>("open_installed_mod_folder", { modId })`。
+3. Rust command 校验 `modId` 并读取该 MOD 的 manifest，不接受前端直接传入任意文件系统路径。
+4. Rust service 通过已启用的 opener plugin 在系统资源管理器打开 `installed/<mod_id>/content/`。
+
 例如“导入压缩包 MOD”：
 
 1. Vue 调用 `installArchive()`。
@@ -288,13 +295,14 @@ Vue UI
 4. Rust service 调用 Acumod 内置 7-Zip 解包组件，解包到 `AcumodData/mods/staging/imports/`。
 5. Rust service 复用文件夹导入识别和本地安装逻辑。
 6. 如果返回 `ambiguous`，Vue 显示候选列表，再调用 `install_mod_from_candidate` 导入所选分支；否则直接刷新已安装 MOD 列表。
+7. 成功安装后删除解压暂存；多分支压缩包只把所选候选复制到 `installed/<mod_id>/content/`。
 
 例如“识别模型替换目标”：
 
 1. 导入 service 根据最终 `deployRelativePath` 调用 `recognize_model_replacements()`。
-2. Rust 查询编译进应用的武器、防具精简索引，并保守识别发型路径 ID。
-3. 结果随 `ModInstallResult` 返回并写入 manifest schema 2。
-4. `list_installed_mods` 直接读取新 manifest；旧 schema 1 manifest 根据文件列表即时补算。
+2. Rust 查询编译进应用的武器、防具、发型精简索引；Wiki 未收录的发型编号仅返回路径 ID。
+3. 结果随 `ModInstallResult` 返回并写入 manifest schema 5。
+4. `list_installed_mods` 直接读取新 manifest；旧 schema 1/2/3/4 manifest 根据文件列表即时补算。
 5. Vue 展示模型类型、子类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 重新生成模型索引：

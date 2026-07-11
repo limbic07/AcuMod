@@ -19,6 +19,7 @@ import {
   installModFromFolder,
   listInstalledMods,
   moveConflictParticipant,
+  openInstalledModFolder,
   previewApplyConflictOrder,
   previewEnableMod,
   previewModImport,
@@ -77,6 +78,7 @@ const isPreviewingImport = ref(false);
 const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
 const activeModAction = ref("");
+const openingModFolderId = ref("");
 const isRestoringAll = ref(false);
 const isApplyingConflict = ref(false);
 const isConflictManagerOpen = ref(false);
@@ -514,6 +516,19 @@ async function disableInstalledMod(mod: InstalledModSummary) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
     activeModAction.value = "";
+  }
+}
+
+async function showInstalledModFolder(mod: InstalledModSummary) {
+  openingModFolderId.value = mod.id;
+
+  try {
+    await openInstalledModFolder(mod.id);
+    modLibraryError.value = "";
+  } catch (error) {
+    modLibraryError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    openingModFolderId.value = "";
   }
 }
 
@@ -1002,6 +1017,15 @@ onBeforeUnmount(() => {
               <span>{{ mod.fileCount }} files</span>
               <span>{{ mod.enabled ? "已启用" : "未启用" }}</span>
               <span>{{ mod.deployRoot }}</span>
+              <button
+                type="button"
+                class="secondary-button"
+                :disabled="openingModFolderId === mod.id"
+                title="在资源管理器中打开软件保存的 MOD 文件夹"
+                @click="showInstalledModFolder(mod)"
+              >
+                {{ openingModFolderId === mod.id ? "打开中" : "打开文件夹" }}
+              </button>
               <button
                 v-if="!mod.enabled"
                 type="button"

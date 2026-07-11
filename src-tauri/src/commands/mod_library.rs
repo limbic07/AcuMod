@@ -54,6 +54,11 @@ pub fn list_installed_mods(app: tauri::AppHandle) -> Result<InstalledModList, St
 }
 
 #[tauri::command]
+pub fn open_installed_mod_folder(app: tauri::AppHandle, mod_id: String) -> Result<(), String> {
+    mod_library::open_installed_mod_folder(&app, mod_id)
+}
+
+#[tauri::command]
 pub fn preview_enable_mod(
     app: tauri::AppHandle,
     mod_id: String,

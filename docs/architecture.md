@@ -144,6 +144,8 @@ AppData/
 
 MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装包时，需要确保软件目录对普通用户可写；如果安装到 `Program Files` 等受限目录，应提供 MOD 库位置设置或选择用户可写安装位置。
 
+`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
+
 ## MOD 导入目录识别
 
 文件夹导入和压缩包导入应共用同一套目录识别规则。压缩包只负责先解包到暂存目录；解包后的目录树仍然走同一个识别入口。
@@ -201,9 +203,9 @@ MOD 文件列表
 - 原始目标 ID。
 - 原始目标游戏内名称。
 
-当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 武器和防具表生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 使用边界匹配处理武器模型路径，使用模型 ID 加装备部位标记处理防具路径。一个模型可能被多个游戏装备共用，因此 DTO 保留名称和 ID 数组，UI 只摘要展示前几项。
+当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 武器、防具表及 curated 发型表生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 使用边界匹配处理武器和发型模型路径，使用模型 ID 加装备部位标记处理防具路径。一个模型可能被多个游戏装备共用，因此 DTO 保留名称和 ID 数组，UI 只摘要展示前几项。
 
-新导入 MOD 使用 manifest schema 2 持久化 `modelReplacements`。旧 schema 1 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。当前数据包没有发型名称表，所以发型仅按路径模式返回模型 ID，`recognitionSource` 为 `pathPattern`。
+新导入 MOD 使用 manifest schema 5 持久化 `modelReplacements`。旧 schema 1/2/3/4 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别，文件名不参与匹配。发型命中内置映射时优先返回数字槽位和官方简体中文名称，`recognitionSource` 为 `idTable`；未知 `hairNNN` 目录仍返回模型 ID，`recognitionSource` 为 `pathPattern`。
 
 后续如果支持同类型模型替换目标选择，应作为独立功能设计。该功能不能修改 MOD 库中的原始文件，应在部署阶段生成新的部署计划。MVP 暂不做任何模型改绑，包括通过路径、文件名或文件内容进行改绑。
 
@@ -358,8 +360,8 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
-3. 生成脚本从 MHWI `15.10.00` 武器、防具表生成约 510 KB 的精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 根据目标部署路径返回 `ModelReplacement`，新 manifest 持久化结果，旧 manifest 读取时兼容补算。
+3. 生成脚本从 MHWI `15.10.00` 武器、防具表及 curated 发型表生成约 510 KB 的精简 JSON 索引，不把完整原始数据包编入应用。
+4. Rust `model_recognition` service 根据目标部署路径的文件夹部分返回 `ModelReplacement`，schema 5 manifest 持久化结果，schema 1/2/3/4 manifest 读取时兼容补算。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容。

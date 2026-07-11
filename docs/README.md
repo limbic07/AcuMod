@@ -30,13 +30,16 @@ MVP 已具备游戏目录校验、文件夹与 `.zip/.7z/.rar` 导入、拖拽�
 
 内置 `15.10.00` 索引可识别武器、防具、发型、随从武器、随从防具、猎虫、挂件、NPC、投射器和人物语音替换；同一 MOD 可显示多个目标。第一版只识别和展示，不修改 MOD 的替换目标。
 
+下一阶段先进行 UI 架构重构：在不改变既有导入、部署和冲突排序调用链的前提下，建立侧边导航、页面工作区和悬浮式 AI 助手容器。AI Agent 仍属于后续能力，不在本阶段接入模型或文件操作。
+
 ## 文档阅读顺序
 
 1. `docs/README.md`：文档入口、当前阶段、已确认技术事实。
 2. `docs/architecture.md`：前端、Tauri command、Rust service、DTO 和 AI 边界。
-3. `docs/features.md`：MVP 范围、传统 MOD 管理器、下载和 AI Agent 的功能拆分。
-4. `docs/development.md`：开发命令、目录约定、端到端切片检查清单。
-5. `docs/security.md`：文件操作安全、用户确认机制、AI 执行边界。
+3. `docs/ui-design.md`：页面信息架构、工作区职责和悬浮 AI 窗口边界。
+4. `docs/features.md`：MVP 范围、传统 MOD 管理器、下载和 AI Agent 的功能拆分。
+5. `docs/development.md`：开发命令、目录约定、端到端切片检查清单。
+6. `docs/security.md`：文件操作安全、用户确认机制、AI 执行边界。
 
 ## 已确认技术事实
 

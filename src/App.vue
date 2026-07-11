@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
+import AppTopbar from "./components/AppTopbar.vue";
+import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
 import { getAppInfo, type AppInfo } from "./api/app";
 import {
   detectGameDirectory,
@@ -84,7 +87,8 @@ const activeModAction = ref("");
 const openingModFolderId = ref("");
 const isRestoringAll = ref(false);
 const isApplyingConflict = ref(false);
-const isConflictManagerOpen = ref(false);
+const activeView = ref<WorkspaceView>("library");
+const isAgentPanelOpen = ref(false);
 const selectedConflictGroupId = ref("");
 const isDragActive = ref(false);
 const isHandlingDrop = ref(false);
@@ -148,6 +152,9 @@ const importStatusClass = computed(() => {
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
+const enabledModCount = computed(
+  () => installedMods.value.filter((installedMod) => installedMod.enabled).length,
+);
 const deploymentPlanFiles = computed(() => deploymentPlan.value?.files.slice(0, 12) ?? []);
 const deployedFiles = computed(() => deploymentResult.value?.files.slice(0, 12) ?? []);
 const disablePlanFiles = computed(() => disablePlan.value?.files.slice(0, 12) ?? []);
@@ -192,6 +199,58 @@ function modelReplacementTitle(replacement: ModelReplacement) {
   }
 
   return replacement.subKind;
+}
+
+function modelKindLabel(modelKind: string) {
+  const labels: Record<string, string> = {
+    weapon: "武器",
+    armor: "防具",
+    hair: "发型",
+    palicoWeapon: "随从武器",
+    palicoArmor: "随从防具",
+    kinsect: "猎虫",
+    pendant: "挂件",
+    npc: "NPC",
+    slinger: "投射器",
+    voice: "人物语音",
+  };
+
+  return labels[modelKind] ?? modelKind;
+}
+
+function summarizeModCategories(mod: InstalledModSummary) {
+  const categories = [
+    ...new Set(mod.modelReplacements.map((replacement) => modelKindLabel(replacement.modelKind))),
+  ];
+
+  return categories.length ? categories.join("、") : "未识别";
+}
+
+function summarizeModReplacements(mod: InstalledModSummary) {
+  if (!mod.modelReplacements.length) {
+    return "未识别到游戏内替换目标";
+  }
+
+  const summaries = mod.modelReplacements.map((replacement) => {
+    const target = summarizeModelNames(replacement);
+    return `${modelKindLabel(replacement.modelKind)}：${target}`;
+  });
+  const visibleSummaries = summaries.slice(0, 2);
+  const remainingCount = summaries.length - visibleSummaries.length;
+
+  return remainingCount > 0
+    ? `${visibleSummaries.join("；")}；另有 ${remainingCount} 项`
+    : visibleSummaries.join("；");
+}
+
+function summarizeModNote(mod: InstalledModSummary) {
+  const notes = [mod.enabled ? "已启用" : "未启用"];
+
+  if (conflictingModIds.value.has(mod.id)) {
+    notes.push("存在冲突");
+  }
+
+  return notes.join("；");
 }
 
 function summarizeModelNames(replacement: ModelReplacement) {
@@ -289,6 +348,25 @@ async function refreshModViews() {
   await loadConflictReport();
 }
 
+async function refreshCurrentWorkspace() {
+  if (activeView.value === "settings") {
+    await Promise.all([loadGameStatus(), loadAppInfo()]);
+    return;
+  }
+
+  if (activeView.value === "import") {
+    await loadModLibraryStatus();
+    return;
+  }
+
+  if (activeView.value === "conflicts") {
+    await loadConflictReport();
+    return;
+  }
+
+  await refreshModViews();
+}
+
 function openConflictManager() {
   if (!selectedConflictGroupId.value && conflictGroups.value.length) {
     selectedConflictGroupId.value = conflictGroups.value[0].groupId;
@@ -297,11 +375,16 @@ function openConflictManager() {
   conflictActionError.value = "";
   conflictOrderPlan.value = null;
   conflictOrderResult.value = null;
-  isConflictManagerOpen.value = true;
+  activeView.value = "conflicts";
 }
 
-function closeConflictManager() {
-  isConflictManagerOpen.value = false;
+function selectWorkspace(view: WorkspaceView) {
+  if (view === "conflicts") {
+    openConflictManager();
+    return;
+  }
+
+  activeView.value = view;
 }
 
 function selectConflict(groupId: string) {
@@ -732,16 +815,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main v-if="!isConflictManagerOpen" class="app-shell">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Acumod</p>
-        <h1>MHW MOD Manager</h1>
-      </div>
-      <span class="status-pill" :class="statusClass">{{ statusLabel }}</span>
-    </header>
+  <main class="app-shell">
+    <AppSidebar
+      :active-view="activeView"
+      :game-status-label="statusLabel"
+      :game-status-class="statusClass"
+      :conflict-count="conflictGroups.length"
+      @select="selectWorkspace"
+    />
 
-    <section class="panel">
+    <div class="app-workspace">
+      <AppTopbar
+        :active-view="activeView"
+        :mod-count="installedMods.length"
+        :enabled-mod-count="enabledModCount"
+        :is-refreshing="isLoadingGame || isLoadingApp || isLoadingModLibrary"
+        :agent-open="isAgentPanelOpen"
+        @refresh="refreshCurrentWorkspace"
+        @toggle-agent="isAgentPanelOpen = !isAgentPanelOpen"
+      />
+
+      <div class="workspace-content">
+        <div v-show="activeView === 'settings'" class="workspace-page">
+          <section class="panel">
       <div class="panel-heading">
         <div>
           <h2>游戏目录</h2>
@@ -790,9 +886,33 @@ onBeforeUnmount(() => {
           <dd>{{ gameStatus.configPath }}</dd>
         </div>
       </dl>
-    </section>
+          </section>
 
-    <section class="panel">
+          <section class="panel secondary">
+            <div class="panel-heading compact">
+              <div>
+                <h2>应用信息</h2>
+                <p v-if="isLoadingApp">Loading app info...</p>
+                <p v-else-if="appError" class="error">{{ appError }}</p>
+                <p v-else>{{ appInfo?.backend ?? "No backend response yet." }}</p>
+              </div>
+            </div>
+
+            <dl v-if="appInfo" class="facts compact-facts">
+              <div>
+                <dt>Name</dt>
+                <dd>{{ appInfo.name }}</dd>
+              </div>
+              <div>
+                <dt>Version</dt>
+                <dd>{{ appInfo.version }}</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+
+        <div v-show="activeView === 'import'" class="workspace-page">
+          <section class="panel">
       <div class="panel-heading">
         <div>
           <h2>MOD 导入识别预览</h2>
@@ -1006,6 +1126,19 @@ onBeforeUnmount(() => {
         </ul>
       </div>
 
+      <div v-if="importPreview?.warnings.length" class="preview-block">
+        <h3>警告</h3>
+        <ul class="compact-list">
+          <li v-for="warning in importPreview.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+      </div>
+          </section>
+        </div>
+
+        <div v-show="activeView === 'library'" class="workspace-page">
+          <section class="panel">
       <div class="preview-block">
         <div class="section-title-row">
           <h3>已安装 MOD</h3>
@@ -1032,82 +1165,87 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
-        <ul v-if="installedMods.length" class="mod-list">
-          <li v-for="(mod, index) in installedMods" :key="mod.id">
-            <div class="mod-summary">
-              <strong>#{{ index + 1 }} {{ mod.name }}</strong>
-              <span>{{ mod.id }}</span>
-              <ul v-if="mod.modelReplacements.length" class="model-replacement-list compact">
-                <li
-                  v-for="replacement in mod.modelReplacements"
-                  :key="`${replacement.modelKind}-${replacement.subKind}-${replacement.modelPart}-${replacement.modelId}`"
-                >
-                  <strong>{{ modelReplacementTitle(replacement) }}</strong>
-                  <span>{{ summarizeModelNames(replacement) }}</span>
-                  <small>
-                    {{ replacement.modelId }}
-                    <template v-if="summarizeGameIds(replacement)">
-                      · {{ summarizeGameIds(replacement) }}
-                    </template>
-                    <template v-if="summarizeAffectedParts(replacement)">
-                      · {{ summarizeAffectedParts(replacement) }}
-                    </template>
-                  </small>
-                </li>
-              </ul>
-              <details class="installed-file-details">
-                <summary>文件列表 ({{ mod.files.length }})</summary>
-                <ul class="file-preview installed-file-preview">
-                  <li v-for="file in mod.files" :key="file.libraryRelativePath">
-                    <span>{{ file.deployRelativePath }}</span>
-                    <strong>{{ file.libraryRelativePath }}</strong>
-                  </li>
-                </ul>
-              </details>
-            </div>
-            <div class="mod-actions">
-              <span>{{ mod.fileCount }} files</span>
-              <span>{{ mod.enabled ? "已启用" : "未启用" }}</span>
-              <span v-if="conflictingModIds.has(mod.id)" class="conflict-state">存在冲突</span>
-              <span>{{ mod.deployRoot }}</span>
-              <button
-                type="button"
-                class="secondary-button"
-                :disabled="openingModFolderId === mod.id"
-                title="在资源管理器中打开软件保存的 MOD 文件夹"
-                @click="showInstalledModFolder(mod)"
-              >
-                {{ openingModFolderId === mod.id ? "打开中" : "打开文件夹" }}
-              </button>
-              <button
-                v-if="!mod.enabled"
-                type="button"
-                class="secondary-button"
-                :disabled="!!activeModAction"
-                @click="enableInstalledMod(mod)"
-              >
-                {{ activeModAction === mod.id ? "启用中" : "启用" }}
-              </button>
-              <button
-                v-else
-                type="button"
-                class="secondary-button danger-button"
-                :disabled="!!activeModAction"
-                @click="disableInstalledMod(mod)"
-              >
-                {{ activeModAction === mod.id ? "禁用中" : "禁用" }}
-              </button>
-              <button
-                type="button"
-                class="secondary-button danger-button"
-                :disabled="!!activeModAction"
-                @click="uninstallInstalledMod(mod)"
-              >
-                {{ activeModAction === mod.id ? "处理中" : "卸载" }}
-              </button>
-            </div>
-          </li>
-        </ul>
+        <div v-if="installedMods.length" class="mod-table-scroll">
+          <table class="mod-table">
+            <thead>
+              <tr>
+                <th scope="col">序号</th>
+                <th scope="col">名字</th>
+                <th scope="col">类别</th>
+                <th scope="col">替换信息</th>
+                <th scope="col">备注</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(mod, index) in installedMods" :key="mod.id">
+                <td class="mod-index">{{ index + 1 }}</td>
+                <td class="mod-name" :title="mod.id">
+                  <strong>{{ mod.name }}</strong>
+                </td>
+                <td :title="summarizeModCategories(mod)">{{ summarizeModCategories(mod) }}</td>
+                <td class="replacement-summary" :title="summarizeModReplacements(mod)">
+                  {{ summarizeModReplacements(mod) }}
+                </td>
+                <td :class="{ 'conflict-state': conflictingModIds.has(mod.id) }">
+                  {{ summarizeModNote(mod) }}
+                </td>
+                <td class="mod-actions">
+                  <div class="mod-action-buttons">
+                    <button
+                      type="button"
+                      class="icon-button"
+                      :class="{ busy: openingModFolderId === mod.id }"
+                      :disabled="openingModFolderId === mod.id"
+                      :aria-label="openingModFolderId === mod.id ? '正在打开文件夹' : '打开文件夹'"
+                      :data-tooltip="openingModFolderId === mod.id ? '正在打开文件夹' : '打开文件夹'"
+                      @click="showInstalledModFolder(mod)"
+                    >
+                      <span v-if="openingModFolderId === mod.id" aria-hidden="true">&#8987;</span>
+                      <span v-else aria-hidden="true">&#128194;</span>
+                    </button>
+                    <button
+                      v-if="!mod.enabled"
+                      type="button"
+                      class="icon-button"
+                      :class="{ busy: activeModAction === mod.id }"
+                      :disabled="!!activeModAction"
+                      :aria-label="activeModAction === mod.id ? '正在启用 MOD' : '启用 MOD'"
+                      :data-tooltip="activeModAction === mod.id ? '正在启用 MOD' : '启用 MOD'"
+                      @click="enableInstalledMod(mod)"
+                    >
+                      <span aria-hidden="true">&#9654;</span>
+                    </button>
+                    <button
+                      v-else
+                      type="button"
+                      class="icon-button warning-icon"
+                      :class="{ busy: activeModAction === mod.id }"
+                      :disabled="!!activeModAction"
+                      :aria-label="activeModAction === mod.id ? '正在禁用 MOD' : '禁用 MOD'"
+                      :data-tooltip="activeModAction === mod.id ? '正在禁用 MOD' : '禁用 MOD'"
+                      @click="disableInstalledMod(mod)"
+                    >
+                      <span aria-hidden="true">&#9632;</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-button danger-icon"
+                      :class="{ busy: activeModAction === mod.id }"
+                      :disabled="!!activeModAction"
+                      :aria-label="activeModAction === mod.id ? '正在卸载 MOD' : '卸载 MOD'"
+                      :data-tooltip="activeModAction === mod.id ? '正在卸载 MOD' : '卸载 MOD'"
+                      @click="uninstallInstalledMod(mod)"
+                    >
+                      <span aria-hidden="true">&#128465;</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="empty-table-state">当前没有已安装的 MOD。</p>
       </div>
 
       <p v-if="deploymentError" class="error">{{ deploymentError }}</p>
@@ -1237,48 +1375,10 @@ onBeforeUnmount(() => {
         </ul>
       </div>
 
-      <div v-if="importPreview?.warnings.length" class="preview-block">
-        <h3>警告</h3>
-        <ul class="compact-list">
-          <li v-for="warning in importPreview.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-      </div>
-    </section>
-
-    <section class="panel secondary">
-      <div class="panel-heading compact">
-        <div>
-          <h2>应用信息</h2>
-          <p v-if="isLoadingApp">Loading app info...</p>
-          <p v-else-if="appError" class="error">{{ appError }}</p>
-          <p v-else>{{ appInfo?.backend ?? "No backend response yet." }}</p>
+          </section>
         </div>
-      </div>
 
-      <dl v-if="appInfo" class="facts compact-facts">
-        <div>
-          <dt>Name</dt>
-          <dd>{{ appInfo.name }}</dd>
-        </div>
-        <div>
-          <dt>Version</dt>
-          <dd>{{ appInfo.version }}</dd>
-        </div>
-      </dl>
-    </section>
-  </main>
-
-  <main v-else class="conflict-workspace">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Acumod</p>
-        <h1>冲突管理</h1>
-      </div>
-      <button type="button" class="secondary-button" @click="closeConflictManager">返回 MOD 库</button>
-    </header>
-
+        <div v-show="activeView === 'conflicts'" class="workspace-page conflict-workspace">
     <section class="conflict-layout">
       <aside class="conflict-sidebar">
         <div class="conflict-sidebar-heading">
@@ -1368,6 +1468,15 @@ onBeforeUnmount(() => {
         <p v-else class="hint">当前没有需要处理的 MOD 冲突组。</p>
       </section>
     </section>
+        </div>
+      </div>
+    </div>
+
+    <FloatingAgentPanel
+      :open="isAgentPanelOpen"
+      @open-panel="isAgentPanelOpen = true"
+      @close="isAgentPanelOpen = false"
+    />
   </main>
 
   <div v-if="isDragActive" class="drag-overlay">
@@ -1392,27 +1501,28 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .app-shell {
-  width: min(980px, calc(100vw - 40px));
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
   min-height: 100vh;
+  background: #f4f7f6;
+}
+
+.app-workspace {
+  display: grid;
+  min-width: 0;
+  min-height: 100vh;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-content {
+  min-width: 0;
+  padding: 24px 28px 48px;
+  overflow: auto;
+}
+
+.workspace-page {
+  width: min(1180px, 100%);
   margin: 0 auto;
-  padding: 40px 0;
-}
-
-.topbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
-.eyebrow {
-  margin: 0 0 8px;
-  color: #24745b;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 h1,
@@ -1462,7 +1572,7 @@ h2 {
   border: 1px solid #d9e2df;
   border-radius: 8px;
   background: #ffffff;
-  box-shadow: 0 18px 48px rgba(34, 47, 62, 0.08);
+  box-shadow: 0 8px 24px rgba(34, 47, 62, 0.05);
 }
 
 .panel + .panel {
@@ -1739,6 +1849,172 @@ dd {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.mod-table-scroll {
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid #dfe7e3;
+  border-radius: 6px;
+}
+
+.mod-table {
+  width: 100%;
+  min-width: 940px;
+  border-collapse: collapse;
+  background: #ffffff;
+}
+
+.mod-table th,
+.mod-table td {
+  padding: 12px;
+  border-bottom: 1px solid #e7eeeb;
+  color: #435650;
+  font-size: 0.86rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.mod-table th {
+  color: #61756f;
+  background: #f7faf8;
+  font-size: 0.76rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.mod-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.mod-table tbody tr:hover {
+  background: #f9fcfa;
+}
+
+.mod-table td:nth-child(1) {
+  width: 56px;
+}
+
+.mod-table td:nth-child(2) {
+  min-width: 180px;
+}
+
+.mod-table td:nth-child(3) {
+  width: 130px;
+}
+
+.mod-table td:nth-child(4) {
+  min-width: 300px;
+}
+
+.mod-table td:nth-child(5) {
+  width: 150px;
+}
+
+.mod-table td:nth-child(6) {
+  width: 140px;
+}
+
+.mod-index {
+  color: #72837e !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.mod-name strong {
+  color: #17211f;
+  overflow-wrap: anywhere;
+}
+
+.replacement-summary {
+  color: #334b44 !important;
+  line-height: 1.45;
+}
+
+.mod-table .conflict-state {
+  color: #9a3412;
+  font-weight: 700;
+}
+
+.mod-actions {
+  white-space: nowrap;
+}
+
+.mod-action-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.icon-button {
+  position: relative;
+  display: grid;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  place-items: center;
+  border-color: #cbd8d4;
+  border-radius: 5px;
+  color: #24745b;
+  background: #ffffff;
+  font-size: 0.86rem;
+}
+
+.icon-button:hover:not(:disabled),
+.icon-button:focus-visible {
+  border-color: #8cbca8;
+  color: #17613f;
+  background: #edf5f1;
+}
+
+.icon-button.warning-icon {
+  color: #9a5b00;
+}
+
+.icon-button.danger-icon {
+  color: #b42318;
+  font-size: 1rem;
+}
+
+.icon-button.busy span {
+  animation: subtle-pulse 1.1s ease-in-out infinite;
+}
+
+.icon-button[data-tooltip]::after {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  top: calc(100% + 7px);
+  display: none;
+  padding: 5px 7px;
+  border: 1px solid #cbd8d4;
+  border-radius: 4px;
+  color: #ffffff;
+  background: #17211f;
+  content: attr(data-tooltip);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.icon-button[data-tooltip]:hover::after,
+.icon-button[data-tooltip]:focus-visible::after {
+  display: block;
+}
+
+.empty-table-state {
+  margin: 12px 0 0;
+  padding: 20px 12px;
+  border: 1px dashed #cbd8d4;
+  border-radius: 6px;
+  color: #61756f;
+  text-align: center;
+}
+
+@keyframes subtle-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .mod-list > li {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1784,15 +2060,6 @@ dd {
   overflow-wrap: anywhere;
 }
 
-.mod-actions {
-  justify-content: flex-end;
-}
-
-.mod-actions .conflict-state {
-  color: #9a3412;
-  font-weight: 700;
-}
-
 .conflict-list ul {
   display: grid;
   gap: 6px;
@@ -1831,10 +2098,10 @@ dd {
 }
 
 .conflict-workspace {
-  width: min(1180px, calc(100vw - 40px));
-  min-height: 100vh;
+  width: min(1180px, 100%);
+  min-height: 0;
   margin: 0 auto;
-  padding: 40px 0;
+  padding: 0;
 }
 
 .conflict-layout {
@@ -2019,15 +2286,18 @@ dd {
   background: #ffffff;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .app-shell {
-    width: min(100% - 24px, 980px);
-    padding: 24px 0;
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-content {
+    padding: 16px 12px 40px;
   }
 
   .conflict-workspace {
-    width: min(100% - 24px, 1180px);
-    padding: 24px 0;
+    width: 100%;
+    padding: 0;
   }
 
   .conflict-layout {
@@ -2047,7 +2317,6 @@ dd {
     grid-column: 1 / -1;
   }
 
-  .topbar,
   .panel-heading,
   .path-row,
   .notice,
@@ -2057,7 +2326,6 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .topbar,
   .panel-heading,
   .notice {
     display: grid;

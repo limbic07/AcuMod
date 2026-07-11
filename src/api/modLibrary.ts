@@ -82,6 +82,9 @@ export interface ModArchiveImportOutcome {
 export interface InstalledModSummary {
   id: string;
   name: string;
+  originalName: string;
+  note: string;
+  categories: string[];
   modPath: string;
   contentPath: string;
   manifestPath: string;
@@ -198,12 +201,20 @@ export interface ModConflictParticipant {
   order: number;
 }
 
+export interface SharedModelTarget {
+  modelKind: string;
+  subKind: string;
+  modelId: string;
+  displayNames: string[];
+}
+
 export interface ModConflictGroup {
   groupId: string;
   participantCount: number;
   conflictFileCount: number;
   enabledParticipantCount: number;
   participants: ModConflictParticipant[];
+  sharedModelTargets: SharedModelTarget[];
 }
 
 export interface ModConflictReport {
@@ -240,12 +251,110 @@ export interface ApplyConflictOrderResult {
   message: string;
 }
 
+export interface ModMetadataUpdateResult {
+  modId: string;
+  name: string;
+  originalName: string;
+  note: string;
+  message: string;
+}
+
+export interface ModProfileSummary {
+  id: string;
+  name: string;
+  createdAtUnixSeconds: number;
+  enabledModCount: number;
+  conflictOrderCount: number;
+  isActive: boolean;
+}
+
+export interface ModProfileList {
+  activeProfileId: string;
+  profiles: ModProfileSummary[];
+  message: string;
+}
+
+export interface ProfileSwitchModItem {
+  modId: string;
+  name: string;
+  fileCount: number;
+}
+
+export interface ProfileSwitchPlan {
+  profileId: string;
+  profileName: string;
+  currentProfileId: string;
+  currentProfileName: string;
+  enableMods: ProfileSwitchModItem[];
+  disableMods: ProfileSwitchModItem[];
+  missingModIds: string[];
+  conflictGroupCount: number;
+  requiresOverwriteConfirmation: boolean;
+  warnings: string[];
+  message: string;
+}
+
+export interface ProfileSwitchResult {
+  profileId: string;
+  profileName: string;
+  enabledModCount: number;
+  disabledModCount: number;
+  appliedConflictGroupCount: number;
+  warnings: string[];
+  message: string;
+}
+
 export function getModLibraryStatus(): Promise<ModLibraryStatus> {
   return invoke<ModLibraryStatus>("get_mod_library_status");
 }
 
 export function listInstalledMods(): Promise<InstalledModList> {
   return invoke<InstalledModList>("list_installed_mods");
+}
+
+export function updateModMetadata(
+  modId: string,
+  displayName: string,
+  note: string,
+): Promise<ModMetadataUpdateResult> {
+  return invoke<ModMetadataUpdateResult>("update_mod_metadata", {
+    modId,
+    displayName,
+    note,
+  });
+}
+
+export function listModProfiles(): Promise<ModProfileList> {
+  return invoke<ModProfileList>("list_mod_profiles");
+}
+
+export function createModProfile(name: string): Promise<ModProfileSummary> {
+  return invoke<ModProfileSummary>("create_mod_profile", { name });
+}
+
+export function renameModProfile(
+  profileId: string,
+  name: string,
+): Promise<ModProfileSummary> {
+  return invoke<ModProfileSummary>("rename_mod_profile", { profileId, name });
+}
+
+export function deleteModProfile(profileId: string): Promise<void> {
+  return invoke<void>("delete_mod_profile", { profileId });
+}
+
+export function previewSwitchModProfile(profileId: string): Promise<ProfileSwitchPlan> {
+  return invoke<ProfileSwitchPlan>("preview_switch_mod_profile", { profileId });
+}
+
+export function switchModProfile(
+  profileId: string,
+  confirmOverwrite: boolean,
+): Promise<ProfileSwitchResult> {
+  return invoke<ProfileSwitchResult>("switch_mod_profile", {
+    profileId,
+    confirmOverwrite,
+  });
 }
 
 export function openInstalledModFolder(modId: string): Promise<void> {

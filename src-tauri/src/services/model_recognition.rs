@@ -154,6 +154,7 @@ pub fn recognize_model_replacements(
     );
     add_hair_matches(&mut replacements, &normalized_files, &index.hair_models);
     add_asset_matches(&mut replacements, &normalized_files, &index.asset_models);
+    add_path_pattern_asset_matches(&mut replacements, &normalized_files, &index.asset_models);
     add_unknown_slinger_matches(&mut replacements, &normalized_files, &index.asset_models);
     add_voice_matches(&mut replacements, &normalized_files, &index.voice_models);
     merge_armor_set_matches(&mut replacements);
@@ -375,6 +376,171 @@ fn add_asset_matches(
             recognition_source: "idTable".to_string(),
         });
     }
+}
+
+// These resource roots are stable enough to classify, but the bundled data has no
+// authoritative Chinese name for every ID. Keep the underlying ID visible instead
+// of inventing a game name from an incomplete community table.
+fn add_path_pattern_asset_matches(
+    replacements: &mut Vec<ModelReplacement>,
+    normalized_files: &[(String, String)],
+    asset_models: &[AssetModelEntry],
+) {
+    let known_models = asset_models
+        .iter()
+        .map(|entry| (entry.model_kind.as_str(), entry.model_id.as_str()))
+        .collect::<HashSet<_>>();
+    let mut matches = BTreeMap::<(String, String, String), Vec<String>>::new();
+
+    for (normalized, original) in normalized_files {
+        let Some((model_kind, sub_kind, model_id)) = detect_path_pattern_asset(normalized) else {
+            continue;
+        };
+
+        if known_models.contains(&(model_kind.as_str(), model_id.as_str())) {
+            continue;
+        }
+
+        matches
+            .entry((model_kind, sub_kind, model_id))
+            .or_default()
+            .push(original.clone());
+    }
+
+    for ((model_kind, sub_kind, model_id), mut matched_files) in matches {
+        sort_and_deduplicate(&mut matched_files);
+        replacements.push(ModelReplacement {
+            model_kind,
+            sub_kind: sub_kind.clone(),
+            model_part: "model".to_string(),
+            game_ids: vec![model_id.clone()],
+            variant_ids: Vec::new(),
+            display_names: vec![format!("{sub_kind} {model_id}")],
+            model_id,
+            affected_parts: Vec::new(),
+            matched_files,
+            recognition_source: "pathPattern".to_string(),
+        });
+    }
+}
+
+fn detect_path_pattern_asset(path: &str) -> Option<(String, String, String)> {
+    let directory = nativepc_relative_directory(path)?;
+
+    if directory_has_component(directory, "vfx") {
+        return None;
+    }
+
+    let components = directory.split('/').collect::<Vec<_>>();
+
+    for window in components.windows(2) {
+        let [root, model_id] = window else {
+            continue;
+        };
+
+        if matches!(*root, "m_face" | "f_face") && is_face_model_id(model_id) {
+            let sub_kind = if *root == "m_face" {
+                "男性脸型"
+            } else {
+                "女性脸型"
+            };
+            return Some((
+                "face".to_string(),
+                sub_kind.to_string(),
+                format!("{root}/{model_id}"),
+            ));
+        }
+
+        if *root == "em" && is_monster_model_id(model_id) {
+            return Some((
+                "monster".to_string(),
+                "怪物".to_string(),
+                (*model_id).to_string(),
+            ));
+        }
+
+        if *root == "pg" && is_poogie_model_id(model_id) {
+            return Some((
+                "poogie".to_string(),
+                "噗吱猪服装".to_string(),
+                (*model_id).to_string(),
+            ));
+        }
+
+        if *root == "ft" && is_furniture_model_id(model_id) {
+            return Some((
+                "furniture".to_string(),
+                "家具".to_string(),
+                (*model_id).to_string(),
+            ));
+        }
+
+        if *root == "acc" && is_prefixed_numeric_id(model_id, "acc", 3) {
+            return Some((
+                "playerAccessory".to_string(),
+                "玩家附件".to_string(),
+                (*model_id).to_string(),
+            ));
+        }
+    }
+
+    for component in components {
+        if is_prefixed_numeric_id(component, "ot_acc", 3) {
+            return Some((
+                "palicoAccessory".to_string(),
+                "随从附件".to_string(),
+                component.to_string(),
+            ));
+        }
+    }
+
+    None
+}
+
+fn is_face_model_id(value: &str) -> bool {
+    is_prefixed_numeric_id(value, "face", 3)
+}
+
+fn is_poogie_model_id(value: &str) -> bool {
+    is_prefixed_numeric_id(value, "pg", 3)
+}
+
+fn is_prefixed_numeric_id(value: &str, prefix: &str, digit_count: usize) -> bool {
+    value.strip_prefix(prefix).is_some_and(|suffix| {
+        suffix.len() == digit_count && suffix.chars().all(|value| value.is_ascii_digit())
+    })
+}
+
+fn is_monster_model_id(value: &str) -> bool {
+    let numeric_suffix = value
+        .strip_prefix("ems")
+        .or_else(|| value.strip_prefix("em"));
+    let Some(numeric_suffix) = numeric_suffix else {
+        return false;
+    };
+    let mut segments = numeric_suffix.split('_');
+    let Some(base_id) = segments.next() else {
+        return false;
+    };
+
+    if base_id.len() != 3 || !base_id.chars().all(|value| value.is_ascii_digit()) {
+        return false;
+    }
+
+    segments.all(|segment| {
+        !segment.is_empty()
+            && segment
+                .chars()
+                .all(|value| value.is_ascii_digit() || value.is_ascii_lowercase())
+    })
+}
+
+fn is_furniture_model_id(value: &str) -> bool {
+    value.starts_with("ft")
+        && value.len() > 2
+        && value
+            .chars()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '_')
 }
 
 fn matching_asset_files(
@@ -670,7 +836,13 @@ fn model_kind_order(model_kind: &str) -> u8 {
         "npc" => 7,
         "slinger" => 8,
         "voice" => 9,
-        _ => 10,
+        "face" => 10,
+        "monster" => 11,
+        "poogie" => 12,
+        "furniture" => 13,
+        "playerAccessory" => 14,
+        "palicoAccessory" => 15,
+        _ => 16,
     }
 }
 
@@ -756,6 +928,63 @@ mod tests {
         assert_eq!(hair.game_ids, ["11-2"]);
         assert_eq!(hair.display_names, ["发型 11-2", "优美"]);
         assert_eq!(hair.recognition_source, "idTable");
+    }
+
+    #[test]
+    fn recognizes_face_from_a_stable_resource_path() {
+        let paths = vec!["nativePC/pl/f_face/face003/mod/f_face003.mod3".to_string()];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let face = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "face")
+            .unwrap();
+
+        assert_eq!(face.sub_kind, "女性脸型");
+        assert_eq!(face.model_id, "f_face/face003");
+        assert_eq!(face.recognition_source, "pathPattern");
+    }
+
+    #[test]
+    fn recognizes_monster_and_poogie_from_the_bundled_index() {
+        let paths = vec![
+            "nativePC/em/em100/mod/em100.mod3".to_string(),
+            "nativePC/pg/pg000/mod/pg000.mod3".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let monster = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "monster")
+            .unwrap();
+        let poogie = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "poogie")
+            .unwrap();
+
+        assert!(monster.display_names.iter().any(|name| name == "蛮颚龙"));
+        assert!(poogie.display_names.iter().any(|name| name == "回忆条纹"));
+    }
+
+    #[test]
+    fn recognizes_furniture_and_accessories_without_guessing_names() {
+        let paths = vec![
+            "nativePC/ft/ft001_000/mod/ft001_000.mod3".to_string(),
+            "nativePC/acc/acc000/mod/acc000.mod3".to_string(),
+            "nativePC/otomo/ot_acc005/mod/ot_acc005.mod3".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+
+        assert!(replacements
+            .iter()
+            .any(|replacement| replacement.model_kind == "furniture"));
+        assert!(replacements
+            .iter()
+            .any(|replacement| replacement.model_kind == "playerAccessory"));
+        assert!(replacements
+            .iter()
+            .any(|replacement| replacement.model_kind == "palicoAccessory"));
     }
 
     #[test]

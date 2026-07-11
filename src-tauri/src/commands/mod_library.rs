@@ -2,7 +2,8 @@ use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
     ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
-    ModUninstallPlan, ModUninstallResult, RestoreAllPlan, RestoreAllResult,
+    ModMetadataUpdateResult, ModProfileList, ModProfileSummary, ModUninstallPlan,
+    ModUninstallResult, ProfileSwitchPlan, ProfileSwitchResult, RestoreAllPlan, RestoreAllResult,
 };
 
 #[tauri::command]
@@ -51,6 +52,60 @@ pub fn install_mod_from_candidate(
 #[tauri::command]
 pub fn list_installed_mods(app: tauri::AppHandle) -> Result<InstalledModList, String> {
     mod_library::list_installed_mods(&app)
+}
+
+#[tauri::command]
+pub fn update_mod_metadata(
+    app: tauri::AppHandle,
+    mod_id: String,
+    display_name: String,
+    note: String,
+) -> Result<ModMetadataUpdateResult, String> {
+    mod_library::update_mod_metadata(&app, mod_id, display_name, note)
+}
+
+#[tauri::command]
+pub fn list_mod_profiles(app: tauri::AppHandle) -> Result<ModProfileList, String> {
+    mod_library::list_mod_profiles(&app)
+}
+
+#[tauri::command]
+pub fn create_mod_profile(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<ModProfileSummary, String> {
+    mod_library::create_mod_profile(&app, name)
+}
+
+#[tauri::command]
+pub fn rename_mod_profile(
+    app: tauri::AppHandle,
+    profile_id: String,
+    name: String,
+) -> Result<ModProfileSummary, String> {
+    mod_library::rename_mod_profile(&app, profile_id, name)
+}
+
+#[tauri::command]
+pub fn delete_mod_profile(app: tauri::AppHandle, profile_id: String) -> Result<(), String> {
+    mod_library::delete_mod_profile(&app, profile_id)
+}
+
+#[tauri::command]
+pub fn preview_switch_mod_profile(
+    app: tauri::AppHandle,
+    profile_id: String,
+) -> Result<ProfileSwitchPlan, String> {
+    mod_library::preview_switch_mod_profile(&app, profile_id)
+}
+
+#[tauri::command]
+pub fn switch_mod_profile(
+    app: tauri::AppHandle,
+    profile_id: String,
+    confirm_overwrite: bool,
+) -> Result<ProfileSwitchResult, String> {
+    mod_library::switch_mod_profile(&app, profile_id, confirm_overwrite)
 }
 
 #[tauri::command]

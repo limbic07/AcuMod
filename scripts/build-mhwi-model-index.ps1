@@ -2,6 +2,7 @@
     [string]$RawPackagePath,
     [string]$HairSourcePath,
     [string]$ExtendedAssetSourcePath,
+    [string]$AdditionalAssetSourcePath,
     [string]$OutputPath
 )
 
@@ -26,6 +27,10 @@ if ([string]::IsNullOrWhiteSpace($ExtendedAssetSourcePath)) {
     $ExtendedAssetSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/extended-assets.json"
 }
 
+if ([string]::IsNullOrWhiteSpace($AdditionalAssetSourcePath)) {
+    $AdditionalAssetSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/additional-assets.json"
+}
+
 $weaponCsvPath = Join-Path $RawPackagePath "csv/02_weapons.csv"
 $armorCsvPath = Join-Path $RawPackagePath "csv/03_armor.csv"
 $palicoWeaponCsvPath = Join-Path $RawPackagePath "csv/09_palico_weapons.csv"
@@ -33,6 +38,8 @@ $palicoArmorCsvPath = Join-Path $RawPackagePath "csv/10_palico_armor.csv"
 $pendantCsvPath = Join-Path $RawPackagePath "csv/12_pendants.csv"
 $kinsectCsvPath = Join-Path $RawPackagePath "csv/13_kinsects.csv"
 $npcCsvPath = Join-Path $RawPackagePath "csv/17_npc.csv"
+$monsterCsvPath = Join-Path $RawPackagePath "csv/06_monsters.csv"
+$poogieCsvPath = Join-Path $RawPackagePath "csv/18_poogie.csv"
 
 foreach ($requiredDataPath in @(
         $weaponCsvPath,
@@ -41,7 +48,9 @@ foreach ($requiredDataPath in @(
         $palicoArmorCsvPath,
         $pendantCsvPath,
         $kinsectCsvPath,
-        $npcCsvPath
+        $npcCsvPath,
+        $monsterCsvPath,
+        $poogieCsvPath
     )) {
     if (-not (Test-Path -LiteralPath $requiredDataPath -PathType Leaf)) {
         throw "Required MHWI data was not found: $requiredDataPath"
@@ -54,6 +63,10 @@ if (-not (Test-Path -LiteralPath $HairSourcePath -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath $ExtendedAssetSourcePath -PathType Leaf)) {
     throw "Curated extended asset data was not found: $ExtendedAssetSourcePath"
+}
+
+if (-not (Test-Path -LiteralPath $AdditionalAssetSourcePath -PathType Leaf)) {
+    throw "Curated additional asset data was not found: $AdditionalAssetSourcePath"
 }
 
 function Normalize-ModelPath {
@@ -113,8 +126,11 @@ $palicoArmorRows = Import-Csv -LiteralPath $palicoArmorCsvPath -Encoding utf8
 $pendantRows = Import-Csv -LiteralPath $pendantCsvPath -Encoding utf8
 $kinsectRows = Import-Csv -LiteralPath $kinsectCsvPath -Encoding utf8
 $npcRows = Import-Csv -LiteralPath $npcCsvPath -Encoding utf8
+$monsterRows = Import-Csv -LiteralPath $monsterCsvPath -Encoding utf8
+$poogieRows = Import-Csv -LiteralPath $poogieCsvPath -Encoding utf8
 $hairSource = Get-Content -LiteralPath $HairSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
 $extendedAssetSource = Get-Content -LiteralPath $ExtendedAssetSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
+$additionalAssetSource = Get-Content -LiteralPath $AdditionalAssetSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
 
 $weaponModelRows = foreach ($row in $weaponRows) {
     $mainModelPath = Normalize-ModelPath $row.主模型地址
@@ -301,6 +317,49 @@ $assetModelRows = @(
         }
     }
 
+    $monsterRows | ForEach-Object {
+        $modelId = ([string]$_.怪物代码).Trim().ToLowerInvariant()
+        if ($modelId -match '^(?:em|ems)[0-9]{3}(?:_[0-9]{2}|_[0-9]{2}_[a-z])?$') {
+            [pscustomobject]@{
+                modelKind = "monster"
+                subKind = "怪物"
+                modelPart = "model"
+                modelPath = "em/$modelId"
+                modelId = $modelId
+                gameId = [string]$_.怪物ID
+                displayName = $_.怪物名称
+            }
+        }
+    }
+
+    $poogieNameById = @{}
+    $poogieRows | ForEach-Object {
+        $poogieNameById[[string]$_.小猪服装ID] = [string]$_.小猪服装名
+    }
+
+    $additionalAssetSource.poogieModels | ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.modelPath
+        $poogieId = [string]$_.poogieId
+        if ($null -eq $modelPath -or $modelPath -notmatch '^pg/pg[0-9]{3}$') {
+            throw "Invalid Poogie model path: $($_.modelPath)"
+        }
+
+        $displayName = $poogieNameById[$poogieId]
+        if (-not (Test-DisplayName $displayName)) {
+            throw "Poogie model $modelPath has no matching local Chinese name for ID $poogieId."
+        }
+
+        [pscustomobject]@{
+            modelKind = "poogie"
+            subKind = "噗吱猪服装"
+            modelPart = "model"
+            modelPath = $modelPath
+            modelId = Get-ModelId $modelPath
+            gameId = $poogieId
+            displayName = $displayName
+        }
+    }
+
     $extendedAssetSource.slingerModels | ForEach-Object {
         $modelPath = Normalize-ModelPath $_.modelPath
         if ($null -eq $modelPath -or $modelPath -notmatch '^wp/slg/slg[0-9]{3}(?:_[0-9]{4})?$') {
@@ -370,7 +429,7 @@ $voiceModels = @($extendedAssetSource.voiceModels |
     Sort-Object gender, { [int]$_.voiceNumber })
 
 $index = [ordered]@{
-    schemaVersion = 5
+    schemaVersion = 6
     gameVersion = "15.10.00"
     sourceFiles = @(
         "02_weapons.csv",
@@ -380,10 +439,13 @@ $index = [ordered]@{
         "12_pendants.csv",
         "13_kinsects.csv",
         "17_npc.csv",
+        "06_monsters.csv",
+        "18_poogie.csv",
         "curated/sources/hairstyles.json",
-        "curated/sources/extended-assets.json"
+        "curated/sources/extended-assets.json",
+        "curated/sources/additional-assets.json"
     )
-    sourceReferences = @($hairSource.source) + @($extendedAssetSource.sources)
+    sourceReferences = @($hairSource.source) + @($extendedAssetSource.sources) + @($additionalAssetSource.sources)
     weaponModels = $weaponModels
     armorModels = $armorModels
     hairModels = $hairModels

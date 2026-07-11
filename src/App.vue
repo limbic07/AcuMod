@@ -4,6 +4,8 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
 import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
+import ModLibraryTable from "./components/ModLibraryTable.vue";
+import ModLibraryToolbar from "./components/ModLibraryToolbar.vue";
 import { getAppInfo, type AppInfo } from "./api/app";
 import {
   detectGameDirectory,
@@ -13,6 +15,8 @@ import {
 } from "./api/game";
 import {
   applyConflictOrder,
+  createModProfile,
+  deleteModProfile,
   disableMod,
   enableMod,
   getModConflictReport,
@@ -21,6 +25,7 @@ import {
   installModFromCandidate,
   installModFromFolder,
   listInstalledMods,
+  listModProfiles,
   moveConflictParticipant,
   openInstalledModFolder,
   previewApplyConflictOrder,
@@ -28,9 +33,13 @@ import {
   previewEnableMod,
   previewModImport,
   previewRestoreAllMods,
+  previewSwitchModProfile,
   previewUninstallMod,
+  renameModProfile,
   restoreAllMods,
+  switchModProfile,
   uninstallMod,
+  updateModMetadata,
   type InstalledModList,
   type InstalledModSummary,
   type ApplyConflictOrderPlan,
@@ -45,6 +54,9 @@ import {
   type ModelReplacement,
   type ModUninstallPlan,
   type ModUninstallResult,
+  type ModProfileList,
+  type ProfileSwitchPlan,
+  type ProfileSwitchResult,
   type RestoreAllPlan,
   type RestoreAllResult,
 } from "./api/modLibrary";
@@ -63,6 +75,9 @@ const uninstallResult = ref<ModUninstallResult | null>(null);
 const restorePlan = ref<RestoreAllPlan | null>(null);
 const restoreResult = ref<RestoreAllResult | null>(null);
 const conflictReport = ref<ModConflictReport | null>(null);
+const modProfileList = ref<ModProfileList | null>(null);
+const profileSwitchPlan = ref<ProfileSwitchPlan | null>(null);
+const profileSwitchResult = ref<ProfileSwitchResult | null>(null);
 const conflictOrderPlan = ref<ApplyConflictOrderPlan | null>(null);
 const conflictOrderResult = ref<ApplyConflictOrderResult | null>(null);
 const manualPath = ref("");
@@ -95,6 +110,14 @@ const isHandlingDrop = ref(false);
 const pendingDropPath = ref("");
 const dragError = ref("");
 const conflictActionError = ref("");
+const profileError = ref("");
+const isProfileAction = ref(false);
+const selectedProfileId = ref("");
+const modSearchQuery = ref("");
+const modCategoryFilter = ref("all");
+const modStatusFilter = ref("all");
+const modConflictFilter = ref("all");
+const modSort = ref<"installation" | "name" | "category" | "replacement">("installation");
 let stopDragListener: (() => void) | undefined;
 
 const statusLabel = computed(() => {
@@ -152,6 +175,80 @@ const importStatusClass = computed(() => {
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
+const availableModCategories = computed(() =>
+  [...new Set(installedMods.value.flatMap((installedMod) => installedMod.categories))].sort(),
+);
+const filteredInstalledMods = computed(() => {
+  const searchText = modSearchQuery.value.trim().toLocaleLowerCase();
+
+  return installedMods.value.filter((installedMod) => {
+    if (modCategoryFilter.value !== "all" && !installedMod.categories.includes(modCategoryFilter.value)) {
+      return false;
+    }
+
+    if (modStatusFilter.value === "enabled" && !installedMod.enabled) {
+      return false;
+    }
+
+    if (modStatusFilter.value === "disabled" && installedMod.enabled) {
+      return false;
+    }
+
+    const hasConflict = conflictingModIds.value.has(installedMod.id);
+    if (modConflictFilter.value === "conflict" && !hasConflict) {
+      return false;
+    }
+
+    if (modConflictFilter.value === "normal" && hasConflict) {
+      return false;
+    }
+
+    if (!searchText) {
+      return true;
+    }
+
+    const searchableText = [
+      installedMod.name,
+      installedMod.originalName,
+      installedMod.note,
+      ...installedMod.categories,
+      ...installedMod.modelReplacements.flatMap((replacement) => [
+        replacement.modelKind,
+        replacement.subKind,
+        replacement.modelId,
+        ...replacement.gameIds,
+        ...replacement.displayNames,
+      ]),
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    return searchableText.includes(searchText);
+  });
+});
+const displayedInstalledMods = computed(() => {
+  const mods = [...filteredInstalledMods.value];
+
+  mods.sort((left, right) => {
+    if (modSort.value === "name") {
+      return left.name.localeCompare(right.name, "zh-Hans-CN");
+    }
+
+    if (modSort.value === "category") {
+      return left.categories.join("、").localeCompare(right.categories.join("、"), "zh-Hans-CN")
+        || left.name.localeCompare(right.name, "zh-Hans-CN");
+    }
+
+    if (modSort.value === "replacement") {
+      return summarizeModReplacements(left).localeCompare(summarizeModReplacements(right), "zh-Hans-CN")
+        || left.name.localeCompare(right.name, "zh-Hans-CN");
+    }
+
+    return right.installedAtUnixSeconds - left.installedAtUnixSeconds
+      || left.name.localeCompare(right.name, "zh-Hans-CN");
+  });
+
+  return mods;
+});
 const enabledModCount = computed(
   () => installedMods.value.filter((installedMod) => installedMod.enabled).length,
 );
@@ -162,6 +259,10 @@ const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.s
 const restorePlanMods = computed(() => restorePlan.value?.mods.slice(0, 12) ?? []);
 const restoreResultMods = computed(() => restoreResult.value?.mods.slice(0, 12) ?? []);
 const conflictGroups = computed(() => conflictReport.value?.groups ?? []);
+const modProfiles = computed(() => modProfileList.value?.profiles ?? []);
+const activeModProfile = computed(() =>
+  modProfiles.value.find((profile) => profile.isActive) ?? null,
+);
 const conflictingModIds = computed(
   () =>
     new Set(
@@ -213,17 +314,15 @@ function modelKindLabel(modelKind: string) {
     npc: "NPC",
     slinger: "投射器",
     voice: "人物语音",
+    face: "脸型",
+    monster: "怪物",
+    poogie: "噗吱猪服装",
+    furniture: "家具",
+    playerAccessory: "玩家附件",
+    palicoAccessory: "随从附件",
   };
 
   return labels[modelKind] ?? modelKind;
-}
-
-function summarizeModCategories(mod: InstalledModSummary) {
-  const categories = [
-    ...new Set(mod.modelReplacements.map((replacement) => modelKindLabel(replacement.modelKind))),
-  ];
-
-  return categories.length ? categories.join("、") : "未识别";
 }
 
 function summarizeModReplacements(mod: InstalledModSummary) {
@@ -243,14 +342,14 @@ function summarizeModReplacements(mod: InstalledModSummary) {
     : visibleSummaries.join("；");
 }
 
-function summarizeModNote(mod: InstalledModSummary) {
-  const notes = [mod.enabled ? "已启用" : "未启用"];
-
-  if (conflictingModIds.value.has(mod.id)) {
-    notes.push("存在冲突");
-  }
-
-  return notes.join("；");
+function summarizeSharedModelTarget(target: {
+  modelKind: string;
+  subKind: string;
+  modelId: string;
+  displayNames: string[];
+}) {
+  const name = target.displayNames[0] ?? target.modelId;
+  return `${modelKindLabel(target.modelKind)} · ${target.subKind} · ${name}`;
 }
 
 function summarizeModelNames(replacement: ModelReplacement) {
@@ -343,9 +442,21 @@ async function loadConflictReport() {
   }
 }
 
+async function loadModProfiles() {
+  try {
+    const profiles = await listModProfiles();
+    modProfileList.value = profiles;
+    if (!profiles.profiles.some((profile) => profile.id === selectedProfileId.value)) {
+      selectedProfileId.value = profiles.activeProfileId;
+    }
+    profileError.value = "";
+  } catch (error) {
+    profileError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
 async function refreshModViews() {
-  await loadInstalledMods();
-  await loadConflictReport();
+  await Promise.all([loadInstalledMods(), loadConflictReport(), loadModProfiles()]);
 }
 
 async function refreshCurrentWorkspace() {
@@ -365,6 +476,138 @@ async function refreshCurrentWorkspace() {
   }
 
   await refreshModViews();
+}
+
+async function editModMetadata(mod: InstalledModSummary) {
+  const currentDisplayName = mod.name === mod.originalName ? "" : mod.name;
+  const displayName = window.prompt(
+    "显示名称留空时使用原始导入名称。",
+    currentDisplayName,
+  );
+
+  if (displayName === null) {
+    return;
+  }
+
+  const note = window.prompt("备注可用于检索和整理。", mod.note);
+  if (note === null) {
+    return;
+  }
+
+  activeModAction.value = mod.id;
+  try {
+    await updateModMetadata(mod.id, displayName, note);
+    deploymentError.value = "";
+    await refreshModViews();
+  } catch (error) {
+    deploymentError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    activeModAction.value = "";
+  }
+}
+
+async function createProfile() {
+  const name = window.prompt("新 Profile 会从当前启用状态和冲突顺序复制。请输入名称：", "");
+  if (name === null) {
+    return;
+  }
+
+  isProfileAction.value = true;
+  try {
+    const profile = await createModProfile(name);
+    selectedProfileId.value = profile.id;
+    profileError.value = "";
+    await loadModProfiles();
+  } catch (error) {
+    profileError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isProfileAction.value = false;
+  }
+}
+
+async function renameSelectedProfile() {
+  const profile = modProfiles.value.find((item) => item.id === selectedProfileId.value);
+  if (!profile) {
+    return;
+  }
+
+  const name = window.prompt("请输入新的 Profile 名称：", profile.name);
+  if (name === null) {
+    return;
+  }
+
+  isProfileAction.value = true;
+  try {
+    await renameModProfile(profile.id, name);
+    profileError.value = "";
+    await loadModProfiles();
+  } catch (error) {
+    profileError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isProfileAction.value = false;
+  }
+}
+
+async function deleteSelectedProfile() {
+  const profile = modProfiles.value.find((item) => item.id === selectedProfileId.value);
+  if (!profile || profile.isActive) {
+    return;
+  }
+
+  if (!window.confirm(`删除 Profile ${profile.name} 不会删除 MOD 文件。是否继续？`)) {
+    return;
+  }
+
+  isProfileAction.value = true;
+  try {
+    await deleteModProfile(profile.id);
+    selectedProfileId.value = modProfileList.value?.activeProfileId ?? "";
+    profileError.value = "";
+    await loadModProfiles();
+  } catch (error) {
+    profileError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isProfileAction.value = false;
+  }
+}
+
+async function switchSelectedProfile(profileId = selectedProfileId.value) {
+  const activeProfile = activeModProfile.value;
+
+  selectedProfileId.value = profileId;
+
+  if (!profileId || !activeProfile || profileId === activeProfile.id) {
+    return;
+  }
+
+  isProfileAction.value = true;
+  try {
+    const plan = await previewSwitchModProfile(profileId);
+    profileSwitchPlan.value = plan;
+    profileSwitchResult.value = null;
+    profileError.value = "";
+    const confirmed = window.confirm(
+      `${plan.message}\n\n将启用：${plan.enableMods.length} 个 MOD\n将禁用：${plan.disableMods.length} 个 MOD` +
+        (plan.requiresOverwriteConfirmation ? "\n将覆盖已有文件。" : "") +
+        "\n\n是否切换？",
+    );
+
+    if (!confirmed) {
+      selectedProfileId.value = activeProfile.id;
+      return;
+    }
+
+    profileSwitchResult.value = await switchModProfile(
+      profileId,
+      plan.requiresOverwriteConfirmation,
+    );
+    await refreshModViews();
+  } catch (error) {
+    profileError.value = error instanceof Error ? error.message : String(error);
+    selectedProfileId.value = activeProfile.id;
+  } finally {
+    isProfileAction.value = false;
+  }
 }
 
 function openConflictManager() {
@@ -472,8 +715,7 @@ async function installPreviewedMod() {
     installResult.value = await installModFromFolder(importPath.value, allowGameRoot);
     importError.value = "";
     await loadModLibraryStatus();
-    await loadInstalledMods();
-    await loadConflictReport();
+    await refreshModViews();
   } catch (error) {
     importError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -494,8 +736,7 @@ async function installArchive() {
       outcome.status === "ambiguous" ? outcome.originalArchivePath : null;
     selectedCandidateRootPath.value = outcome.preview?.candidates[0]?.rootPath ?? "";
     await loadModLibraryStatus();
-    await loadInstalledMods();
-    await loadConflictReport();
+    await refreshModViews();
   } catch (error) {
     archiveError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -600,8 +841,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
     }
 
     deploymentResult.value = await enableMod(mod.id, confirmOverwrite);
-    await loadInstalledMods();
-    await loadConflictReport();
+    await refreshModViews();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -628,8 +868,7 @@ async function disableInstalledMod(mod: InstalledModSummary) {
     }
 
     deploymentResult.value = await disableMod(mod.id);
-    await loadInstalledMods();
-    await loadConflictReport();
+    await refreshModViews();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -676,8 +915,7 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
     deploymentResult.value = null;
     disablePlan.value = null;
     await loadModLibraryStatus();
-    await loadInstalledMods();
-    await loadConflictReport();
+    await refreshModViews();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -712,8 +950,7 @@ async function restoreAllInstalledMods() {
     disablePlan.value = null;
     uninstallPlan.value = null;
     uninstallResult.value = null;
-    await loadInstalledMods();
-    await loadConflictReport();
+    await refreshModViews();
   } catch (error) {
     deploymentError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -785,8 +1022,7 @@ onMounted(() => {
   void loadAppInfo();
   void loadGameStatus();
   void loadModLibraryStatus();
-  void loadInstalledMods();
-  void loadConflictReport();
+  void refreshModViews();
   void getCurrentWebview()
     .onDragDropEvent((event) => {
       if (event.payload.type === "enter" || event.payload.type === "over") {
@@ -1164,88 +1400,77 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+        <ModLibraryToolbar
+          :profiles="modProfiles"
+          :active-profile="activeModProfile"
+          :selected-profile-id="selectedProfileId"
+          :is-profile-action="isProfileAction"
+          :search-query="modSearchQuery"
+          :category-filter="modCategoryFilter"
+          :status-filter="modStatusFilter"
+          :conflict-filter="modConflictFilter"
+          :sort="modSort"
+          :categories="availableModCategories"
+          @select-profile="switchSelectedProfile"
+          @create-profile="createProfile"
+          @rename-profile="renameSelectedProfile"
+          @delete-profile="deleteSelectedProfile"
+          @update-search-query="modSearchQuery = $event"
+          @update-category-filter="modCategoryFilter = $event"
+          @update-status-filter="modStatusFilter = $event"
+          @update-conflict-filter="modConflictFilter = $event"
+          @update-sort="modSort = $event"
+        />
+        <p v-if="profileError" class="error">{{ profileError }}</p>
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
-        <div v-if="installedMods.length" class="mod-table-scroll">
-          <table class="mod-table">
-            <thead>
-              <tr>
-                <th scope="col">序号</th>
-                <th scope="col">名字</th>
-                <th scope="col">类别</th>
-                <th scope="col">替换信息</th>
-                <th scope="col">备注</th>
-                <th scope="col">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(mod, index) in installedMods" :key="mod.id">
-                <td class="mod-index">{{ index + 1 }}</td>
-                <td class="mod-name" :title="mod.id">
-                  <strong>{{ mod.name }}</strong>
-                </td>
-                <td :title="summarizeModCategories(mod)">{{ summarizeModCategories(mod) }}</td>
-                <td class="replacement-summary" :title="summarizeModReplacements(mod)">
-                  {{ summarizeModReplacements(mod) }}
-                </td>
-                <td :class="{ 'conflict-state': conflictingModIds.has(mod.id) }">
-                  {{ summarizeModNote(mod) }}
-                </td>
-                <td class="mod-actions">
-                  <div class="mod-action-buttons">
-                    <button
-                      type="button"
-                      class="icon-button"
-                      :class="{ busy: openingModFolderId === mod.id }"
-                      :disabled="openingModFolderId === mod.id"
-                      :aria-label="openingModFolderId === mod.id ? '正在打开文件夹' : '打开文件夹'"
-                      :data-tooltip="openingModFolderId === mod.id ? '正在打开文件夹' : '打开文件夹'"
-                      @click="showInstalledModFolder(mod)"
-                    >
-                      <span v-if="openingModFolderId === mod.id" aria-hidden="true">&#8987;</span>
-                      <span v-else aria-hidden="true">&#128194;</span>
-                    </button>
-                    <button
-                      v-if="!mod.enabled"
-                      type="button"
-                      class="icon-button"
-                      :class="{ busy: activeModAction === mod.id }"
-                      :disabled="!!activeModAction"
-                      :aria-label="activeModAction === mod.id ? '正在启用 MOD' : '启用 MOD'"
-                      :data-tooltip="activeModAction === mod.id ? '正在启用 MOD' : '启用 MOD'"
-                      @click="enableInstalledMod(mod)"
-                    >
-                      <span aria-hidden="true">&#9654;</span>
-                    </button>
-                    <button
-                      v-else
-                      type="button"
-                      class="icon-button warning-icon"
-                      :class="{ busy: activeModAction === mod.id }"
-                      :disabled="!!activeModAction"
-                      :aria-label="activeModAction === mod.id ? '正在禁用 MOD' : '禁用 MOD'"
-                      :data-tooltip="activeModAction === mod.id ? '正在禁用 MOD' : '禁用 MOD'"
-                      @click="disableInstalledMod(mod)"
-                    >
-                      <span aria-hidden="true">&#9632;</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="icon-button danger-icon"
-                      :class="{ busy: activeModAction === mod.id }"
-                      :disabled="!!activeModAction"
-                      :aria-label="activeModAction === mod.id ? '正在卸载 MOD' : '卸载 MOD'"
-                      :data-tooltip="activeModAction === mod.id ? '正在卸载 MOD' : '卸载 MOD'"
-                      @click="uninstallInstalledMod(mod)"
-                    >
-                      <span aria-hidden="true">&#128465;</span>
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p v-else class="empty-table-state">当前没有已安装的 MOD。</p>
+        <p v-if="installedMods.length" class="hint">
+          显示 {{ displayedInstalledMods.length }} / {{ installedMods.length }} 个 MOD；此处排序不影响冲突覆盖顺序。
+        </p>
+        <ModLibraryTable
+          :mods="displayedInstalledMods"
+          :installed-mod-count="installedMods.length"
+          :conflicting-mod-ids="conflictingModIds"
+          :active-mod-action="activeModAction"
+          :opening-mod-folder-id="openingModFolderId"
+          @edit="editModMetadata"
+          @open-folder="showInstalledModFolder"
+          @enable="enableInstalledMod"
+          @disable="disableInstalledMod"
+          @uninstall="uninstallInstalledMod"
+        />
+      </div>
+
+      <div v-if="profileSwitchPlan" class="preview-block">
+        <h3>Profile 切换预览</h3>
+        <p class="hint">{{ profileSwitchPlan.message }}</p>
+        <ul v-if="profileSwitchPlan.enableMods.length || profileSwitchPlan.disableMods.length" class="compact-list">
+          <li v-for="mod in profileSwitchPlan.enableMods" :key="`enable-${mod.modId}`">
+            <span>启用：{{ mod.name }}</span>
+            <strong>{{ mod.fileCount }} 个文件</strong>
+          </li>
+          <li v-for="mod in profileSwitchPlan.disableMods" :key="`disable-${mod.modId}`">
+            <span>禁用：{{ mod.name }}</span>
+            <strong>{{ mod.fileCount }} 个文件</strong>
+          </li>
+        </ul>
+        <ul v-if="profileSwitchPlan.warnings.length" class="compact-list">
+          <li v-for="warning in profileSwitchPlan.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="profileSwitchResult" class="preview-block">
+        <h3>Profile 切换结果</h3>
+        <p class="hint">{{ profileSwitchResult.message }}</p>
+        <p class="hint">
+          已启用 {{ profileSwitchResult.enabledModCount }} 个，已禁用 {{ profileSwitchResult.disabledModCount }} 个，已应用 {{ profileSwitchResult.appliedConflictGroupCount }} 组冲突顺序。
+        </p>
+        <ul v-if="profileSwitchResult.warnings.length" class="compact-list">
+          <li v-for="warning in profileSwitchResult.warnings" :key="warning">
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
       </div>
 
       <p v-if="deploymentError" class="error">{{ deploymentError }}</p>
@@ -1415,6 +1640,16 @@ onBeforeUnmount(() => {
             >
               {{ isApplyingConflict ? "应用中" : "应用此组顺序" }}
             </button>
+          </div>
+
+          <div v-if="selectedConflictGroup.sharedModelTargets.length" class="shared-model-targets">
+            <strong>共同替换目标</strong>
+            <span
+              v-for="target in selectedConflictGroup.sharedModelTargets"
+              :key="`${target.modelKind}-${target.modelId}`"
+            >
+              {{ summarizeSharedModelTarget(target) }}
+            </span>
           </div>
 
           <ol class="conflict-order-list">
@@ -1625,7 +1860,8 @@ h3 {
   gap: 10px;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 42px;
   padding: 0 12px;
@@ -1748,6 +1984,61 @@ dd {
   justify-content: flex-end;
 }
 
+.profile-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid #dfe7e3;
+  border-radius: 6px;
+  background: #f7faf8;
+}
+
+.profile-selector {
+  display: grid;
+  min-width: min(280px, 100%);
+  gap: 5px;
+}
+
+.profile-selector span,
+.mod-browser-controls label > span {
+  color: #61756f;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.profile-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.profile-summary {
+  min-width: 0;
+  color: #52645f;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.mod-browser-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.55fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.mod-browser-controls label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.mod-browser-controls input,
+.mod-browser-controls select,
+.profile-selector select {
+  min-width: 0;
+}
+
 .file-preview,
 .compact-list,
 .mod-list,
@@ -1858,7 +2149,7 @@ dd {
 
 .mod-table {
   width: 100%;
-  min-width: 940px;
+  min-width: 1020px;
   border-collapse: collapse;
   background: #ffffff;
 }
@@ -1910,7 +2201,7 @@ dd {
 }
 
 .mod-table td:nth-child(6) {
-  width: 140px;
+  width: 164px;
 }
 
 .mod-index {
@@ -1919,7 +2210,16 @@ dd {
 }
 
 .mod-name strong {
+  display: block;
   color: #17211f;
+  overflow-wrap: anywhere;
+}
+
+.mod-name small {
+  display: block;
+  margin-top: 3px;
+  color: #72837e;
+  font-size: 0.76rem;
   overflow-wrap: anywhere;
 }
 
@@ -2188,6 +2488,26 @@ dd {
   background: #fbfdfc;
 }
 
+.shared-model-targets {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 12px;
+  border-left: 3px solid #b98929;
+  background: #fff9ed;
+}
+
+.shared-model-targets strong {
+  color: #7a4d00;
+  font-size: 0.82rem;
+}
+
+.shared-model-targets span {
+  color: #5f4a24;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
 .conflict-order-list li > div:nth-child(2) {
   display: grid;
   gap: 2px;
@@ -2333,6 +2653,16 @@ dd {
 
   .section-title-row {
     display: grid;
+  }
+
+  .profile-toolbar,
+  .mod-browser-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-toolbar {
+    display: grid;
+    align-items: stretch;
   }
 
   .section-actions {

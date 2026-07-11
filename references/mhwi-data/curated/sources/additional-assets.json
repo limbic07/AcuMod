@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "title": "Monster Hunter World Modding Wiki - Poogie Clothes IDs",
+      "url": "https://github.com/AniBullet/MonsterHunterWorldModding/wiki/Poogie-Clothes-IDs",
+      "note": "Maps the local 15.10.00 Poogie clothing IDs to their pg resource directories. Display names come from the local simplified-Chinese table."
+    }
+  ],
+  "poogieModels": [
+    { "poogieId": "1", "modelPath": "pg/pg000" },
+    { "poogieId": "2", "modelPath": "pg/pg001" },
+    { "poogieId": "3", "modelPath": "pg/pg002" },
+    { "poogieId": "4", "modelPath": "pg/pg003" },
+    { "poogieId": "5", "modelPath": "pg/pg004" },
+    { "poogieId": "6", "modelPath": "pg/pg005" },
+    { "poogieId": "7", "modelPath": "pg/pg006" },
+    { "poogieId": "8", "modelPath": "pg/pg007" },
+    { "poogieId": "9", "modelPath": "pg/pg008" },
+    { "poogieId": "10", "modelPath": "pg/pg009" },
+    { "poogieId": "11", "modelPath": "pg/pg010" },
+    { "poogieId": "20", "modelPath": "pg/pg021" },
+    { "poogieId": "22", "modelPath": "pg/pg022" },
+    { "poogieId": "23", "modelPath": "pg/pg023" },
+    { "poogieId": "24", "modelPath": "pg/pg024" },
+    { "poogieId": "25", "modelPath": "pg/pg025" },
+    { "poogieId": "26", "modelPath": "pg/pg026" },
+    { "poogieId": "27", "modelPath": "pg/pg027" },
+    { "poogieId": "28", "modelPath": "pg/pg028" },
+    { "poogieId": "29", "modelPath": "pg/pg029" }
+  ]
+}

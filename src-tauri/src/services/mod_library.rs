@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env, fs,
     io::ErrorKind,
     path::{Component, Path, PathBuf},
@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::storage::config;
+use crate::storage::{config, profiles};
 
 use super::model_recognition::{recognize_model_replacements, ModelReplacement};
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 7;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 8;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -109,6 +109,9 @@ pub struct ModArchiveImportOutcome {
 pub struct InstalledModSummary {
     pub id: String,
     pub name: String,
+    pub original_name: String,
+    pub note: String,
+    pub categories: Vec<String>,
     pub mod_path: String,
     pub content_path: String,
     pub manifest_path: String,
@@ -249,6 +252,15 @@ pub struct ModConflictParticipant {
     pub order: usize,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedModelTarget {
+    pub model_kind: String,
+    pub sub_kind: String,
+    pub model_id: String,
+    pub display_names: Vec<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModConflictGroup {
@@ -257,6 +269,7 @@ pub struct ModConflictGroup {
     pub conflict_file_count: usize,
     pub enabled_participant_count: usize,
     pub participants: Vec<ModConflictParticipant>,
+    pub shared_model_targets: Vec<SharedModelTarget>,
 }
 
 #[derive(Serialize)]
@@ -301,12 +314,81 @@ pub struct ApplyConflictOrderResult {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModMetadataUpdateResult {
+    pub mod_id: String,
+    pub name: String,
+    pub original_name: String,
+    pub note: String,
+    pub message: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModProfileSummary {
+    pub id: String,
+    pub name: String,
+    pub created_at_unix_seconds: u64,
+    pub enabled_mod_count: usize,
+    pub conflict_order_count: usize,
+    pub is_active: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModProfileList {
+    pub active_profile_id: String,
+    pub profiles: Vec<ModProfileSummary>,
+    pub message: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSwitchModItem {
+    pub mod_id: String,
+    pub name: String,
+    pub file_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSwitchPlan {
+    pub profile_id: String,
+    pub profile_name: String,
+    pub current_profile_id: String,
+    pub current_profile_name: String,
+    pub enable_mods: Vec<ProfileSwitchModItem>,
+    pub disable_mods: Vec<ProfileSwitchModItem>,
+    pub missing_mod_ids: Vec<String>,
+    pub conflict_group_count: usize,
+    pub requires_overwrite_confirmation: bool,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSwitchResult {
+    pub profile_id: String,
+    pub profile_name: String,
+    pub enabled_mod_count: usize,
+    pub disabled_mod_count: usize,
+    pub applied_conflict_group_count: usize,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstalledModManifest {
     schema_version: u32,
     id: String,
     name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    note: String,
     source_path: String,
     content_root_path: String,
     detection_method: String,
@@ -321,7 +403,7 @@ struct InstalledModManifest {
     deployed_files: Vec<DeployedModFile>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConflictOrderStore {
     #[serde(default = "default_conflict_order_schema_version")]
@@ -359,6 +441,7 @@ struct ScanResult {
     warnings: Vec<String>,
 }
 
+#[derive(Clone)]
 struct InstalledManifestContext {
     mod_path: PathBuf,
     content_path: PathBuf,
@@ -612,7 +695,36 @@ fn install_mod_from_candidate_into(
 pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
+    load_or_initialize_profile_store(&paths)?;
     list_installed_mods_from(&paths.installed_path)
+}
+
+pub fn update_mod_metadata(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    display_name: String,
+    note: String,
+) -> Result<ModMetadataUpdateResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    validate_mod_id(&mod_id)?;
+    let display_name = validate_mod_display_name(&display_name)?;
+    let note = validate_mod_note(&note)?;
+    let mut context = load_installed_manifest(&paths.installed_path, &mod_id)?;
+
+    context.manifest.display_name = (!display_name.is_empty()).then_some(display_name);
+    context.manifest.note = note;
+    context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+    save_manifest(&context.manifest_path, &context.manifest)?;
+
+    Ok(ModMetadataUpdateResult {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        original_name: context.manifest.name.clone(),
+        note: context.manifest.note.clone(),
+        message: "MOD display name and note were updated without changing deployment files."
+            .to_string(),
+    })
 }
 
 pub fn open_installed_mod_folder(app: &tauri::AppHandle, mod_id: String) -> Result<(), String> {
@@ -661,19 +773,31 @@ pub fn enable_mod(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    enable_mod_from(
+    let mut result = enable_mod_from(
         &paths.installed_path,
         &game_root,
         &mod_id,
         confirm_overwrite,
-    )
+    )?;
+    if let Err(error) = sync_active_profile_from_runtime(&paths) {
+        result.warnings.push(format!(
+            "MOD was enabled, but the active Profile snapshot could not be updated: {error}"
+        ));
+    }
+    Ok(result)
 }
 
 pub fn disable_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModDeploymentResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    disable_mod_from(&paths.installed_path, &game_root, &mod_id)
+    let mut result = disable_mod_from(&paths.installed_path, &game_root, &mod_id)?;
+    if let Err(error) = sync_active_profile_from_runtime(&paths) {
+        result.warnings.push(format!(
+            "MOD was disabled, but the active Profile snapshot could not be updated: {error}"
+        ));
+    }
+    Ok(result)
 }
 
 pub fn preview_disable_mod(
@@ -698,7 +822,13 @@ pub fn uninstall_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModUninst
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    uninstall_mod_from(&paths.installed_path, &game_root, &mod_id)
+    let mut result = uninstall_mod_from(&paths.installed_path, &game_root, &mod_id)?;
+    if let Err(error) = remove_mod_from_profiles(&paths, &mod_id) {
+        result.warnings.push(format!(
+            "MOD was uninstalled, but Profile entries could not be cleaned: {error}"
+        ));
+    }
+    Ok(result)
 }
 
 pub fn preview_restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllPlan, String> {
@@ -711,12 +841,19 @@ pub fn restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllResult, Stri
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    restore_all_mods_from(&paths.installed_path, &game_root)
+    let mut result = restore_all_mods_from(&paths.installed_path, &game_root)?;
+    if let Err(error) = sync_active_profile_from_runtime(&paths) {
+        result.warnings.push(format!(
+            "MODs were restored, but the active Profile snapshot could not be updated: {error}"
+        ));
+    }
+    Ok(result)
 }
 
 pub fn get_mod_conflict_report(app: &tauri::AppHandle) -> Result<ModConflictReport, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
+    load_or_initialize_profile_store(&paths)?;
     get_mod_conflict_report_from(&paths.installed_path)
 }
 
@@ -728,7 +865,10 @@ pub fn move_conflict_participant(
 ) -> Result<ModConflictMoveResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    move_conflict_participant_from(&paths.installed_path, &group_id, &mod_id, &direction)
+    let result =
+        move_conflict_participant_from(&paths.installed_path, &group_id, &mod_id, &direction)?;
+    sync_active_profile_from_runtime(&paths)?;
+    Ok(result)
 }
 
 pub fn preview_apply_conflict_order(
@@ -749,12 +889,375 @@ pub fn apply_conflict_order(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    apply_conflict_order_from(
+    let mut result = apply_conflict_order_from(
         &paths.installed_path,
         &game_root,
         &group_id,
         confirm_overwrite,
-    )
+    )?;
+    if let Err(error) = sync_active_profile_from_runtime(&paths) {
+        result
+            .warnings
+            .push(format!("Conflict order was applied, but the active Profile snapshot could not be updated: {error}"));
+    }
+    Ok(result)
+}
+
+pub fn list_mod_profiles(app: &tauri::AppHandle) -> Result<ModProfileList, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let store = load_or_initialize_profile_store(&paths)?;
+    let profile_count = store.profiles.len();
+
+    Ok(ModProfileList {
+        active_profile_id: store.active_profile_id.clone(),
+        profiles: profile_summaries(&store),
+        message: format!("{profile_count} MOD Profile(s) are available."),
+    })
+}
+
+pub fn create_mod_profile(
+    app: &tauri::AppHandle,
+    name: String,
+) -> Result<ModProfileSummary, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let name = validate_profile_name(&name)?;
+    let mut store = load_or_initialize_profile_store(&paths)?;
+
+    if store
+        .profiles
+        .iter()
+        .any(|profile| profile.name.eq_ignore_ascii_case(&name))
+    {
+        return Err("A MOD Profile with the same name already exists.".to_string());
+    }
+
+    let active_profile_id = store.active_profile_id.clone();
+    update_profile_from_runtime(
+        find_profile_mut(&mut store, &active_profile_id)?,
+        &paths.installed_path,
+    )?;
+    let source_profile = find_profile(&store, &active_profile_id)?.clone();
+    let profile = profiles::ProfileRecord {
+        id: unique_profile_id(&name)?,
+        name,
+        created_at_unix_seconds: unix_seconds_now()?,
+        enabled_mod_ids: source_profile.enabled_mod_ids,
+        conflict_orders: source_profile.conflict_orders,
+    };
+    let summary = ModProfileSummary {
+        id: profile.id.clone(),
+        name: profile.name.clone(),
+        created_at_unix_seconds: profile.created_at_unix_seconds,
+        enabled_mod_count: profile.enabled_mod_ids.len(),
+        conflict_order_count: profile.conflict_orders.len(),
+        is_active: false,
+    };
+
+    store.profiles.push(profile);
+    profiles::save(&paths.profiles_path, &store)?;
+    Ok(summary)
+}
+
+pub fn rename_mod_profile(
+    app: &tauri::AppHandle,
+    profile_id: String,
+    name: String,
+) -> Result<ModProfileSummary, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let name = validate_profile_name(&name)?;
+    let mut store = load_or_initialize_profile_store(&paths)?;
+
+    if store
+        .profiles
+        .iter()
+        .any(|profile| profile.id != profile_id && profile.name.eq_ignore_ascii_case(&name))
+    {
+        return Err("A MOD Profile with the same name already exists.".to_string());
+    }
+
+    let active_profile_id = store.active_profile_id.clone();
+    let profile = find_profile_mut(&mut store, &profile_id)?;
+    profile.name = name;
+    let summary = ModProfileSummary {
+        id: profile.id.clone(),
+        name: profile.name.clone(),
+        created_at_unix_seconds: profile.created_at_unix_seconds,
+        enabled_mod_count: profile.enabled_mod_ids.len(),
+        conflict_order_count: profile.conflict_orders.len(),
+        is_active: profile.id == active_profile_id,
+    };
+    profiles::save(&paths.profiles_path, &store)?;
+    Ok(summary)
+}
+
+pub fn delete_mod_profile(app: &tauri::AppHandle, profile_id: String) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let mut store = load_or_initialize_profile_store(&paths)?;
+
+    if profile_id == store.active_profile_id {
+        return Err(
+            "The active MOD Profile cannot be deleted. Switch to another Profile first."
+                .to_string(),
+        );
+    }
+    if store.profiles.len() <= 1 {
+        return Err("At least one MOD Profile must remain.".to_string());
+    }
+
+    let original_count = store.profiles.len();
+    store.profiles.retain(|profile| profile.id != profile_id);
+    if store.profiles.len() == original_count {
+        return Err(format!("MOD profile was not found: {profile_id}"));
+    }
+
+    profiles::save(&paths.profiles_path, &store)
+}
+
+pub fn preview_switch_mod_profile(
+    app: &tauri::AppHandle,
+    profile_id: String,
+) -> Result<ProfileSwitchPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    let store = load_or_initialize_profile_store(&paths)?;
+    build_profile_switch_plan(&paths.installed_path, &game_root, &store, &profile_id)
+}
+
+pub fn switch_mod_profile(
+    app: &tauri::AppHandle,
+    profile_id: String,
+    confirm_overwrite: bool,
+) -> Result<ProfileSwitchResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    switch_mod_profile_from(&paths, &game_root, &profile_id, confirm_overwrite)
+}
+
+fn switch_mod_profile_from(
+    paths: &LibraryPaths,
+    game_root: &Path,
+    profile_id: &str,
+    confirm_overwrite: bool,
+) -> Result<ProfileSwitchResult, String> {
+    let mut store = load_or_initialize_profile_store(paths)?;
+    let plan = build_profile_switch_plan(&paths.installed_path, &game_root, &store, &profile_id)?;
+
+    if plan.current_profile_id == profile_id {
+        return Ok(ProfileSwitchResult {
+            profile_id: plan.profile_id,
+            profile_name: plan.profile_name,
+            enabled_mod_count: 0,
+            disabled_mod_count: 0,
+            applied_conflict_group_count: 0,
+            warnings: plan.warnings,
+            message: "The selected MOD Profile is already active.".to_string(),
+        });
+    }
+
+    if plan.requires_overwrite_confirmation && !confirm_overwrite {
+        return Err(
+            "Profile switch requires overwrite confirmation because target files already exist."
+                .to_string(),
+        );
+    }
+
+    let previous_active_profile_id = store.active_profile_id.clone();
+    update_profile_from_runtime(
+        find_profile_mut(&mut store, &previous_active_profile_id)?,
+        &paths.installed_path,
+    )?;
+    let target_profile = find_profile(&store, profile_id)?.clone();
+    store.active_profile_id = profile_id.to_string();
+    profiles::save(&paths.profiles_path, &store)?;
+
+    let target_order_store = ConflictOrderStore {
+        schema_version: default_conflict_order_schema_version(),
+        orders: target_profile.conflict_orders.clone(),
+    };
+    if let Err(error) = save_conflict_order_store(&paths.installed_path, &target_order_store) {
+        store.active_profile_id = previous_active_profile_id;
+        let _ = profiles::save(&paths.profiles_path, &store);
+        return Err(error);
+    }
+
+    let switch_result = (|| -> Result<ProfileSwitchResult, String> {
+        let mut warnings = plan.warnings.clone();
+
+        for item in &plan.disable_mods {
+            let result = disable_mod_from(&paths.installed_path, &game_root, &item.mod_id)?;
+            warnings.extend(result.warnings);
+        }
+
+        for item in &plan.enable_mods {
+            let result = enable_mod_from(
+                &paths.installed_path,
+                &game_root,
+                &item.mod_id,
+                confirm_overwrite,
+            )?;
+            warnings.extend(result.warnings);
+        }
+
+        // Enabling a MOD records the activation order. Restore the target Profile's
+        // saved order before applying its final conflict winners.
+        save_conflict_order_store(&paths.installed_path, &target_order_store)?;
+        let report = get_mod_conflict_report_from(&paths.installed_path)?;
+        let mut applied_conflict_group_count = 0;
+
+        for group in report.groups {
+            if group.enabled_participant_count < 2 {
+                continue;
+            }
+
+            let result = apply_conflict_order_from(
+                &paths.installed_path,
+                &game_root,
+                &group.group_id,
+                confirm_overwrite,
+            )?;
+            warnings.extend(result.warnings);
+            applied_conflict_group_count += 1;
+        }
+
+        sync_active_profile_from_runtime(paths)?;
+
+        Ok(ProfileSwitchResult {
+            profile_id: plan.profile_id.clone(),
+            profile_name: plan.profile_name.clone(),
+            enabled_mod_count: plan.enable_mods.len(),
+            disabled_mod_count: plan.disable_mods.len(),
+            applied_conflict_group_count,
+            warnings,
+            message: format!("Switched to MOD Profile {}.", plan.profile_name),
+        })
+    })();
+
+    match switch_result {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let _ = sync_active_profile_from_runtime(paths);
+            Err(format!(
+                "Profile switch stopped after applying some changes. The selected Profile remains active; review the current MOD state before retrying. {error}"
+            ))
+        }
+    }
+}
+
+fn build_profile_switch_plan(
+    installed_root: &Path,
+    game_root: &Path,
+    store: &profiles::ProfileStore,
+    profile_id: &str,
+) -> Result<ProfileSwitchPlan, String> {
+    let target_profile = find_profile(store, profile_id)?;
+    let current_profile = find_profile(store, &store.active_profile_id)?;
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let current_enabled_ids = contexts
+        .iter()
+        .filter(|context| context.manifest.enabled)
+        .map(|context| context.manifest.id.clone())
+        .collect::<HashSet<_>>();
+    let available_ids = contexts
+        .iter()
+        .map(|context| context.manifest.id.clone())
+        .collect::<HashSet<_>>();
+    let requested_enabled_ids = target_profile
+        .enabled_mod_ids
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut missing_mod_ids = requested_enabled_ids
+        .difference(&available_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    missing_mod_ids.sort();
+
+    let enable_mods = contexts
+        .iter()
+        .filter(|context| {
+            requested_enabled_ids.contains(&context.manifest.id)
+                && !current_enabled_ids.contains(&context.manifest.id)
+        })
+        .map(profile_switch_item)
+        .collect::<Vec<_>>();
+    let disable_mods = contexts
+        .iter()
+        .filter(|context| {
+            current_enabled_ids.contains(&context.manifest.id)
+                && !requested_enabled_ids.contains(&context.manifest.id)
+        })
+        .map(profile_switch_item)
+        .collect::<Vec<_>>();
+    let mut warnings = missing_mod_ids
+        .iter()
+        .map(|mod_id| {
+            format!(
+                "Profile requests an MOD that is no longer installed and will be skipped: {mod_id}"
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut requires_overwrite_confirmation = false;
+
+    for item in &enable_mods {
+        let context = contexts
+            .iter()
+            .find(|context| context.manifest.id == item.mod_id)
+            .ok_or_else(|| format!("Installed MOD was not found: {}", item.mod_id))?;
+        let deployment_plan = build_deployment_plan(installed_root, game_root, context)?;
+        requires_overwrite_confirmation |= deployment_plan.requires_overwrite_confirmation;
+        warnings.extend(deployment_plan.warnings);
+    }
+
+    let mut target_contexts = contexts.clone();
+    for context in &mut target_contexts {
+        context.manifest.enabled = requested_enabled_ids.contains(&context.manifest.id);
+    }
+    let target_conflict_store = ConflictOrderStore {
+        schema_version: default_conflict_order_schema_version(),
+        orders: target_profile.conflict_orders.clone(),
+    };
+    let conflict_group_count = build_mod_conflict_report(&target_contexts, &target_conflict_store)?
+        .groups
+        .len();
+
+    let message = if target_profile.id == current_profile.id {
+        "The selected MOD Profile is already active.".to_string()
+    } else {
+        format!(
+            "Switching to this Profile will enable {} MOD(s), disable {} MOD(s), and apply {} conflict group(s).",
+            enable_mods.len(),
+            disable_mods.len(),
+            conflict_group_count
+        )
+    };
+
+    Ok(ProfileSwitchPlan {
+        profile_id: target_profile.id.clone(),
+        profile_name: target_profile.name.clone(),
+        current_profile_id: current_profile.id.clone(),
+        current_profile_name: current_profile.name.clone(),
+        enable_mods,
+        disable_mods,
+        missing_mod_ids,
+        conflict_group_count,
+        requires_overwrite_confirmation,
+        warnings,
+        message,
+    })
+}
+
+fn profile_switch_item(context: &InstalledManifestContext) -> ProfileSwitchModItem {
+    ProfileSwitchModItem {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        file_count: context.manifest.file_count,
+    }
 }
 
 fn install_mod_from_folder_into(
@@ -868,6 +1371,8 @@ fn install_mod_from_folder_into_with_options(
             schema_version: CURRENT_MOD_MANIFEST_SCHEMA_VERSION,
             id: mod_id.clone(),
             name: mod_name.clone(),
+            display_name: None,
+            note: String::new(),
             source_path: original_source_path.unwrap_or_else(|| preview.source_path.clone()),
             content_root_path,
             detection_method: preview.detection_method.clone(),
@@ -942,9 +1447,11 @@ fn find_installed_mod_by_name(
     };
     let model_replacements = model_replacements_for_manifest(&context.manifest)?;
 
+    let display_name = manifest_display_name(&context.manifest);
+
     Ok(Some(ModInstallResult {
         mod_id: context.manifest.id,
-        name: context.manifest.name,
+        name: display_name,
         already_installed: true,
         mod_path: path_to_string(&context.mod_path),
         content_path: path_to_string(&context.content_path),
@@ -1379,8 +1886,11 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
         };
 
         mods.push(InstalledModSummary {
-            id: manifest.id,
-            name: manifest.name,
+            id: manifest.id.clone(),
+            name: manifest_display_name(&manifest),
+            original_name: manifest.name.clone(),
+            note: manifest.note.clone(),
+            categories: model_categories(&model_replacements),
             mod_path: path_to_string(&mod_path),
             content_path: path_to_string(&mod_path.join("content")),
             manifest_path: path_to_string(&manifest_path),
@@ -1429,6 +1939,48 @@ fn model_replacements_for_manifest(
     recognize_model_replacements(&deploy_relative_paths)
 }
 
+fn manifest_display_name(manifest: &InstalledModManifest) -> String {
+    manifest
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&manifest.name)
+        .to_string()
+}
+
+fn model_categories(model_replacements: &[ModelReplacement]) -> Vec<String> {
+    let mut categories = model_replacements
+        .iter()
+        .map(|replacement| model_kind_label(&replacement.model_kind).to_string())
+        .collect::<Vec<_>>();
+    categories.sort();
+    categories.dedup();
+    categories
+}
+
+fn model_kind_label(model_kind: &str) -> &str {
+    match model_kind {
+        "weapon" => "武器",
+        "armor" => "防具",
+        "hair" => "发型",
+        "palicoWeapon" => "随从武器",
+        "palicoArmor" => "随从防具",
+        "kinsect" => "猎虫",
+        "pendant" => "挂件",
+        "npc" => "NPC",
+        "slinger" => "投射器",
+        "voice" => "人物语音",
+        "face" => "脸型",
+        "monster" => "怪物",
+        "poogie" => "噗吱猪服装",
+        "furniture" => "家具",
+        "playerAccessory" => "玩家附件",
+        "palicoAccessory" => "随从附件",
+        _ => "未识别",
+    }
+}
+
 fn preview_enable_mod_from(
     installed_root: &Path,
     game_root: &Path,
@@ -1440,6 +1992,7 @@ fn preview_enable_mod_from(
 
 fn preview_disable_mod_from(installed_root: &Path, mod_id: &str) -> Result<ModDisablePlan, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
+    let name = manifest_display_name(&context.manifest);
     let files = context.manifest.deployed_files.clone();
     let warnings = files
         .iter()
@@ -1462,7 +2015,7 @@ fn preview_disable_mod_from(installed_root: &Path, mod_id: &str) -> Result<ModDi
 
     Ok(ModDisablePlan {
         mod_id: context.manifest.id,
-        name: context.manifest.name,
+        name,
         enabled: context.manifest.enabled,
         file_count: files.len(),
         files,
@@ -1531,9 +2084,10 @@ fn enable_mod_from(
         &mut warnings,
     )?;
 
+    let name = manifest_display_name(&context.manifest);
     Ok(ModDeploymentResult {
         mod_id: context.manifest.id,
-        name: context.manifest.name,
+        name,
         enabled: true,
         affected_file_count: deployed_files.len(),
         files: deployed_files,
@@ -1575,9 +2129,10 @@ fn disable_mod_from(
         "MOD was disabled and its recorded deployed files were removed.".to_string()
     };
 
+    let name = manifest_display_name(&context.manifest);
     Ok(ModDeploymentResult {
         mod_id: context.manifest.id,
-        name: context.manifest.name,
+        name,
         enabled: false,
         affected_file_count: removed_count,
         files: deployed_files,
@@ -1591,6 +2146,7 @@ fn preview_uninstall_mod_from(
     mod_id: &str,
 ) -> Result<ModUninstallPlan, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
+    let name = manifest_display_name(&context.manifest);
     let mut warnings = Vec::new();
 
     if context.manifest.enabled {
@@ -1602,7 +2158,7 @@ fn preview_uninstall_mod_from(
 
     Ok(ModUninstallPlan {
         mod_id: context.manifest.id,
-        name: context.manifest.name,
+        name,
         enabled: context.manifest.enabled,
         deployed_file_count: context.manifest.deployed_files.len(),
         library_file_count: context.manifest.files.len(),
@@ -1628,8 +2184,8 @@ fn uninstall_mod_from(
     } else {
         remove_deployed_files(game_root, &context.manifest.deployed_files, &mut warnings)?
     };
+    let name = manifest_display_name(&context.manifest);
     let mod_id = context.manifest.id;
-    let name = context.manifest.name;
 
     fs::remove_dir_all(&context.mod_path).map_err(|error| {
         format!(
@@ -1714,7 +2270,7 @@ fn restore_plan_items(contexts: &[InstalledManifestContext]) -> Vec<RestoreModPl
         .filter(|context| context.manifest.enabled || !context.manifest.deployed_files.is_empty())
         .map(|context| RestoreModPlanItem {
             mod_id: context.manifest.id.clone(),
-            name: context.manifest.name.clone(),
+            name: manifest_display_name(&context.manifest),
             enabled: context.manifest.enabled,
             deployed_file_count: context.manifest.deployed_files.len(),
         })
@@ -1979,7 +2535,7 @@ fn build_mod_conflict_report(
             .filter(|context| participant_id_set.contains(&context.manifest.id))
             .map(|context| ModConflictParticipant {
                 mod_id: context.manifest.id.clone(),
-                name: context.manifest.name.clone(),
+                name: manifest_display_name(&context.manifest),
                 enabled: context.manifest.enabled,
                 order: 0,
             })
@@ -2008,6 +2564,7 @@ fn build_mod_conflict_report(
             conflict_file_count,
             enabled_participant_count,
             participants,
+            shared_model_targets: shared_model_targets_for_group(contexts, &participant_id_set)?,
         });
     }
 
@@ -2038,6 +2595,66 @@ fn build_mod_conflict_report(
         warnings: Vec::new(),
         message,
     })
+}
+
+fn shared_model_targets_for_group(
+    contexts: &[InstalledManifestContext],
+    participant_ids: &HashSet<String>,
+) -> Result<Vec<SharedModelTarget>, String> {
+    struct SharedTargetAccumulator {
+        model_kind: String,
+        model_id: String,
+        sub_kinds: HashSet<String>,
+        display_names: HashSet<String>,
+        participant_ids: HashSet<String>,
+    }
+
+    let mut targets = BTreeMap::<(String, String), SharedTargetAccumulator>::new();
+
+    for context in contexts
+        .iter()
+        .filter(|context| participant_ids.contains(&context.manifest.id))
+    {
+        for replacement in model_replacements_for_manifest(&context.manifest)? {
+            let key = (replacement.model_kind.clone(), replacement.model_id.clone());
+            let target = targets
+                .entry(key)
+                .or_insert_with(|| SharedTargetAccumulator {
+                    model_kind: replacement.model_kind.clone(),
+                    model_id: replacement.model_id.clone(),
+                    sub_kinds: HashSet::new(),
+                    display_names: HashSet::new(),
+                    participant_ids: HashSet::new(),
+                });
+            target.sub_kinds.insert(replacement.sub_kind);
+            target.display_names.extend(replacement.display_names);
+            target.participant_ids.insert(context.manifest.id.clone());
+        }
+    }
+
+    let mut shared_targets = targets
+        .into_values()
+        .filter(|target| target.participant_ids.len() >= 2)
+        .map(|target| {
+            let mut sub_kinds = target.sub_kinds.into_iter().collect::<Vec<_>>();
+            let mut display_names = target.display_names.into_iter().collect::<Vec<_>>();
+            sub_kinds.sort();
+            display_names.sort();
+            SharedModelTarget {
+                model_kind: target.model_kind,
+                sub_kind: sub_kinds.join("、"),
+                model_id: target.model_id,
+                display_names,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    shared_targets.sort_by(|left, right| {
+        left.model_kind
+            .cmp(&right.model_kind)
+            .then_with(|| left.model_id.cmp(&right.model_id))
+    });
+    Ok(shared_targets)
 }
 
 fn find_conflict_group<'a>(
@@ -2253,7 +2870,7 @@ fn restore_enabled_versions_for_paths(
             })
             .map(|context| ModConflictParticipant {
                 mod_id: context.manifest.id.clone(),
-                name: context.manifest.name.clone(),
+                name: manifest_display_name(&context.manifest),
                 enabled: true,
                 order: 0,
             })
@@ -2485,7 +3102,7 @@ fn build_deployment_plan(
 
     Ok(ModDeploymentPlan {
         mod_id: context.manifest.id.clone(),
-        name: context.manifest.name.clone(),
+        name: manifest_display_name(&context.manifest),
         status: status.to_string(),
         message: message.to_string(),
         file_count: context.manifest.files.len(),
@@ -2836,6 +3453,22 @@ fn validate_mod_id(mod_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_mod_display_name(display_name: &str) -> Result<String, String> {
+    let display_name = display_name.trim();
+    if display_name.chars().count() > 120 {
+        return Err("MOD display name must contain at most 120 characters.".to_string());
+    }
+    Ok(display_name.to_string())
+}
+
+fn validate_mod_note(note: &str) -> Result<String, String> {
+    let note = note.trim();
+    if note.chars().count() > 800 {
+        return Err("MOD note must contain at most 800 characters.".to_string());
+    }
+    Ok(note.to_string())
+}
+
 fn deployment_key(path: &Path) -> String {
     path_to_string(path).to_lowercase()
 }
@@ -3087,6 +3720,7 @@ struct LibraryPaths {
     software_data_path: PathBuf,
     mods_path: PathBuf,
     installed_path: PathBuf,
+    profiles_path: PathBuf,
     staging_path: PathBuf,
     import_staging_path: PathBuf,
 }
@@ -3095,6 +3729,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
     let software_data_path = software_data_path()?;
     let mods_path = software_data_path.join("mods");
     let installed_path = mods_path.join("installed");
+    let profiles_path = mods_path.join("profiles.json");
     let staging_path = mods_path.join("staging");
     let import_staging_path = staging_path.join("imports");
 
@@ -3102,6 +3737,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
         software_data_path,
         mods_path,
         installed_path,
+        profiles_path,
         staging_path,
         import_staging_path,
     })
@@ -3191,6 +3827,215 @@ fn software_data_path() -> Result<PathBuf, String> {
     Ok(executable_dir.join("AcumodData"))
 }
 
+fn load_or_initialize_profile_store(
+    paths: &LibraryPaths,
+) -> Result<profiles::ProfileStore, String> {
+    let mut changed = false;
+    let mut store = match profiles::load(&paths.profiles_path)? {
+        Some(store) => store,
+        None => {
+            changed = true;
+            profiles::ProfileStore {
+                schema_version: profiles::CURRENT_PROFILE_STORE_SCHEMA_VERSION,
+                active_profile_id: "default".to_string(),
+                profiles: vec![profile_snapshot_from_runtime(
+                    "default".to_string(),
+                    "默认配置".to_string(),
+                    &paths.installed_path,
+                )?],
+            }
+        }
+    };
+
+    if store.schema_version != profiles::CURRENT_PROFILE_STORE_SCHEMA_VERSION {
+        store.schema_version = profiles::CURRENT_PROFILE_STORE_SCHEMA_VERSION;
+        changed = true;
+    }
+
+    if store.profiles.is_empty() {
+        store.profiles.push(profile_snapshot_from_runtime(
+            "default".to_string(),
+            "默认配置".to_string(),
+            &paths.installed_path,
+        )?);
+        changed = true;
+    }
+
+    if !store
+        .profiles
+        .iter()
+        .any(|profile| profile.id == store.active_profile_id)
+    {
+        store.active_profile_id = store.profiles[0].id.clone();
+        changed = true;
+    }
+
+    for profile in &mut store.profiles {
+        changed |= normalize_profile_record(profile);
+    }
+
+    if changed {
+        profiles::save(&paths.profiles_path, &store)?;
+    }
+
+    Ok(store)
+}
+
+fn profile_snapshot_from_runtime(
+    id: String,
+    name: String,
+    installed_root: &Path,
+) -> Result<profiles::ProfileRecord, String> {
+    let mut profile = profiles::ProfileRecord {
+        id,
+        name,
+        created_at_unix_seconds: unix_seconds_now()?,
+        enabled_mod_ids: Vec::new(),
+        conflict_orders: HashMap::new(),
+    };
+    update_profile_from_runtime(&mut profile, installed_root)?;
+    Ok(profile)
+}
+
+fn update_profile_from_runtime(
+    profile: &mut profiles::ProfileRecord,
+    installed_root: &Path,
+) -> Result<(), String> {
+    let contexts = load_all_installed_manifests(installed_root)?;
+    profile.enabled_mod_ids = contexts
+        .iter()
+        .filter(|context| context.manifest.enabled)
+        .map(|context| context.manifest.id.clone())
+        .collect::<Vec<_>>();
+    profile.enabled_mod_ids.sort();
+    profile.enabled_mod_ids.dedup();
+    profile.conflict_orders = read_conflict_order_store(installed_root)?.orders;
+    Ok(())
+}
+
+fn normalize_profile_record(profile: &mut profiles::ProfileRecord) -> bool {
+    let original_enabled_count = profile.enabled_mod_ids.len();
+    profile.enabled_mod_ids.sort();
+    profile.enabled_mod_ids.dedup();
+
+    let original_order_count = profile.conflict_orders.len();
+    profile.conflict_orders.retain(|_, order| {
+        order.retain(|mod_id| !mod_id.trim().is_empty());
+        deduplicate_ids_preserving_order(order);
+        !order.is_empty()
+    });
+
+    original_enabled_count != profile.enabled_mod_ids.len()
+        || original_order_count != profile.conflict_orders.len()
+}
+
+fn deduplicate_ids_preserving_order(values: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
+
+fn find_profile<'a>(
+    store: &'a profiles::ProfileStore,
+    profile_id: &str,
+) -> Result<&'a profiles::ProfileRecord, String> {
+    store
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| format!("MOD profile was not found: {profile_id}"))
+}
+
+fn find_profile_mut<'a>(
+    store: &'a mut profiles::ProfileStore,
+    profile_id: &str,
+) -> Result<&'a mut profiles::ProfileRecord, String> {
+    store
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| format!("MOD profile was not found: {profile_id}"))
+}
+
+fn profile_summaries(store: &profiles::ProfileStore) -> Vec<ModProfileSummary> {
+    let mut summaries = store
+        .profiles
+        .iter()
+        .map(|profile| ModProfileSummary {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            created_at_unix_seconds: profile.created_at_unix_seconds,
+            enabled_mod_count: profile.enabled_mod_ids.len(),
+            conflict_order_count: profile.conflict_orders.len(),
+            is_active: profile.id == store.active_profile_id,
+        })
+        .collect::<Vec<_>>();
+    summaries.sort_by(|left, right| {
+        right
+            .is_active
+            .cmp(&left.is_active)
+            .then_with(|| {
+                left.created_at_unix_seconds
+                    .cmp(&right.created_at_unix_seconds)
+            })
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    summaries
+}
+
+fn sync_active_profile_from_runtime(paths: &LibraryPaths) -> Result<(), String> {
+    let mut store = load_or_initialize_profile_store(paths)?;
+    let active_profile_id = store.active_profile_id.clone();
+    update_profile_from_runtime(
+        find_profile_mut(&mut store, &active_profile_id)?,
+        &paths.installed_path,
+    )?;
+    profiles::save(&paths.profiles_path, &store)
+}
+
+fn remove_mod_from_profiles(paths: &LibraryPaths, mod_id: &str) -> Result<(), String> {
+    let mut store = load_or_initialize_profile_store(paths)?;
+    let mut changed = false;
+
+    for profile in &mut store.profiles {
+        let before_enabled_count = profile.enabled_mod_ids.len();
+        profile.enabled_mod_ids.retain(|id| id != mod_id);
+        changed |= before_enabled_count != profile.enabled_mod_ids.len();
+
+        for order in profile.conflict_orders.values_mut() {
+            let before_order_count = order.len();
+            order.retain(|id| id != mod_id);
+            changed |= before_order_count != order.len();
+        }
+        profile.conflict_orders.retain(|_, order| !order.is_empty());
+    }
+
+    let mut conflict_store = read_conflict_order_store(&paths.installed_path)?;
+    for order in conflict_store.orders.values_mut() {
+        order.retain(|id| id != mod_id);
+    }
+    conflict_store.orders.retain(|_, order| !order.is_empty());
+
+    if changed {
+        profiles::save(&paths.profiles_path, &store)?;
+    }
+    save_conflict_order_store(&paths.installed_path, &conflict_store)
+}
+
+fn validate_profile_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Profile name cannot be empty.".to_string());
+    }
+    if name.chars().count() > 48 {
+        return Err("Profile name must contain at most 48 characters.".to_string());
+    }
+    Ok(name.to_string())
+}
+
+fn unique_profile_id(name: &str) -> Result<String, String> {
+    Ok(format!("profile-{}", unique_mod_id(name)?))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -3200,13 +4045,16 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use crate::storage::profiles;
+
     use super::{
-        apply_conflict_order_from, clear_import_staging, disable_mod_from, enable_mod_from,
-        get_mod_conflict_report_from, install_mod_from_candidate_into,
-        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
-        move_conflict_participant_from, preview_disable_mod_from, preview_enable_mod_from,
-        preview_mod_import, preview_restore_all_mods_from, preview_uninstall_mod_from,
-        restore_all_mods_from, uninstall_mod_from, validate_archive_path,
+        apply_conflict_order_from, build_profile_switch_plan, clear_import_staging,
+        disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
+        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
+        list_installed_mods_from, load_or_initialize_profile_store, move_conflict_participant_from,
+        preview_disable_mod_from, preview_enable_mod_from, preview_mod_import,
+        preview_restore_all_mods_from, preview_uninstall_mod_from, restore_all_mods_from,
+        switch_mod_profile_from, uninstall_mod_from, validate_archive_path, LibraryPaths,
     };
 
     #[test]
@@ -3427,7 +4275,7 @@ mod tests {
         let manifest_json = fs::read_to_string(&result.manifest_path).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
 
-        assert_eq!(manifest["schemaVersion"], 7);
+        assert_eq!(manifest["schemaVersion"], 8);
         assert_eq!(result.model_replacements[0].sub_kind, "太刀");
         assert_eq!(manifest["modelReplacements"][0]["modelKind"], "weapon");
 
@@ -3478,9 +4326,9 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_model_recognition_when_listing_schema_six_manifest() {
-        let root = temp_root("schema_six_hair_source");
-        let installed_root = temp_root("schema_six_hair_target");
+    fn refreshes_model_recognition_when_listing_schema_seven_manifest() {
+        let root = temp_root("schema_seven_hair_source");
+        let installed_root = temp_root("schema_seven_hair_target");
         write_file(
             &root
                 .join("nativePC")
@@ -3495,7 +4343,7 @@ mod tests {
             install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
         let mut manifest: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
-        manifest["schemaVersion"] = serde_json::Value::from(6);
+        manifest["schemaVersion"] = serde_json::Value::from(7);
         manifest["modelReplacements"] = serde_json::json!([]);
         fs::write(
             &result.manifest_path,
@@ -4249,6 +5097,175 @@ mod tests {
         cleanup(second_source);
         cleanup(installed_root);
         cleanup(game_root);
+    }
+
+    #[test]
+    fn lists_custom_display_name_and_note_without_changing_original_name() {
+        let source_root = temp_root("metadata_source");
+        let installed_root = temp_root("metadata_installed");
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
+        manifest["displayName"] = serde_json::Value::from("测试显示名称");
+        manifest["note"] = serde_json::Value::from("用于回归测试的备注");
+        fs::write(
+            &result.manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let list = list_installed_mods_from(&installed_root).unwrap();
+
+        assert_eq!(list.mods[0].name, "测试显示名称");
+        assert_eq!(list.mods[0].original_name, result.name);
+        assert_eq!(list.mods[0].note, "用于回归测试的备注");
+
+        cleanup(source_root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn reports_shared_model_targets_for_conflicting_mods() {
+        let first_source = temp_root("shared_model_first_source");
+        let second_source = temp_root("shared_model_second_source");
+        let installed_root = temp_root("shared_model_installed");
+        let game_root = temp_root("shared_model_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("wp")
+                .join("swo")
+                .join("bs_swo001")
+                .join("mod")
+                .join("shared.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("wp")
+                .join("swo")
+                .join("bs_swo001")
+                .join("mod")
+                .join("shared.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &second.mod_id, true).unwrap();
+
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+        let shared_target = report.groups[0]
+            .shared_model_targets
+            .iter()
+            .find(|target| target.model_kind == "weapon")
+            .unwrap();
+
+        assert_eq!(shared_target.model_id, "wp/swo/bs_swo001");
+        assert!(shared_target
+            .display_names
+            .iter()
+            .any(|name| name == "铁刀1"));
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn profiles_migrate_current_state_and_preview_the_switch() {
+        let first_source = temp_root("profile_first_source");
+        let second_source = temp_root("profile_second_source");
+        let installed_root = temp_root("profile_installed");
+        let game_root = temp_root("profile_game");
+        let profile_root = temp_root("profile_store");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("first.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("second.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+
+        let paths = LibraryPaths {
+            software_data_path: profile_root.clone(),
+            mods_path: profile_root.join("mods"),
+            installed_path: installed_root.clone(),
+            profiles_path: profile_root.join("profiles.json"),
+            staging_path: profile_root.join("staging"),
+            import_staging_path: profile_root.join("staging").join("imports"),
+        };
+        let mut store = load_or_initialize_profile_store(&paths).unwrap();
+        assert_eq!(store.profiles.len(), 1);
+        assert_eq!(
+            store.profiles[0].enabled_mod_ids,
+            vec![first.mod_id.clone()]
+        );
+        store.profiles.push(profiles::ProfileRecord {
+            id: "alternate".to_string(),
+            name: "替代配置".to_string(),
+            created_at_unix_seconds: 1,
+            enabled_mod_ids: vec![second.mod_id.clone()],
+            conflict_orders: Default::default(),
+        });
+
+        let plan =
+            build_profile_switch_plan(&installed_root, &game_root, &store, "alternate").unwrap();
+
+        assert_eq!(plan.enable_mods.len(), 1);
+        assert_eq!(plan.enable_mods[0].mod_id, second.mod_id);
+        assert_eq!(plan.disable_mods.len(), 1);
+        assert_eq!(plan.disable_mods[0].mod_id, first.mod_id);
+
+        profiles::save(&paths.profiles_path, &store).unwrap();
+        let switch_result =
+            switch_mod_profile_from(&paths, &game_root, "alternate", false).unwrap();
+        assert_eq!(switch_result.enabled_mod_count, 1);
+        assert_eq!(switch_result.disabled_mod_count, 1);
+
+        let list = list_installed_mods_from(&installed_root).unwrap();
+        assert!(list
+            .mods
+            .iter()
+            .any(|mod_summary| mod_summary.id == second.mod_id && mod_summary.enabled));
+        assert!(list
+            .mods
+            .iter()
+            .any(|mod_summary| mod_summary.id == first.mod_id && !mod_summary.enabled));
+        let active_store = load_or_initialize_profile_store(&paths).unwrap();
+        assert_eq!(active_store.active_profile_id, "alternate");
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+        cleanup(profile_root);
     }
 
     fn temp_root(name: &str) -> PathBuf {

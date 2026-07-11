@@ -142,7 +142,7 @@ Rust AppInfo
   -> 如该 MOD 仍处于启用状态，也应先清理它部署到游戏目录的文件
 ```
 
-这个模型的好处是语义直观：安装表示“纳入管理”，启用才表示“写入游戏目录”。第一版只保留单 Profile，也就是只维护当前这一套启用状态和排序；多 Profile 后续可以扩展。
+这个模型的好处是语义直观：安装表示“纳入管理”，启用才表示“写入游戏目录”。MVP 初始阶段只保留单 Profile；当前已扩展为多个 Profile，但同一时刻仍只维护一套实际部署到游戏目录的启用状态和排序。
 
 实现时需要记录至少两类路径：
 
@@ -228,7 +228,7 @@ MOD 文件列表
 
 当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型命中多个部位时，后端合并为一个套装 DTO 并返回部位列表。
 
-新导入 MOD 使用 manifest schema 7 持久化 `modelReplacements`。旧 schema 1 至 6 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。投射器接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录；未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
+新导入 MOD 使用 manifest schema 8 持久化 `modelReplacements`、显示名称和备注。旧 schema 1 至 7 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。投射器接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录；未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
 
 后续如果支持同类型模型替换目标选择，应作为独立功能设计。该功能不能修改 MOD 库中的原始文件，应在部署阶段生成新的部署计划。MVP 暂不做任何模型改绑，包括通过路径、文件名或文件内容进行改绑。
 
@@ -243,6 +243,8 @@ MHW 文件 ID 表不只用于展示模型替换目标。MVP 之后，它还可�
 
 这些能力应建立在只读识别结果上，不要求修改 MOD 文件。
 
+当前索引进一步覆盖脸型、怪物、噗吱猪服装、家具和玩家/随从附件。怪物和噗吱猪服装由本地 `15.10.00` 中文表提供显示名；脸型、家具和附件先按稳定目录模式返回类别与原始 ID，避免把社区英文名称或猜测当作官方简体中文。冲突报告会比较同一组已启用 MOD 的 `modelKind + modelId`，把至少两个参与者共同替换的目标作为辅助提示返回；它不改变实际文件冲突规则。
+
 ## MVP 存储策略
 
 MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和部署记录。
@@ -254,7 +256,23 @@ MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和
 - 文件结构更适合学习和调试。
 - 暂时不需要引入数据库依赖。
 
-后续如果出现大量 MOD、复杂搜索、历史记录或多 Profile，再评估 SQLite。
+当前传统管理器增强阶段仍使用 JSON：Profile 保存到 `AcumodData/mods/profiles.json`，每个 Profile 保存启用 MOD ID 集合和冲突顺序快照。manifest 中的 `enabled` 和 `deployedFiles` 始终表示当前真正部署到游戏目录的状态，因此同一时刻只有一个激活 Profile。首次读取 Profile 存储时，会把现有 manifest 与 `conflict-orders.json` 迁移为“默认配置”。
+
+Profile 切换链路如下：
+
+```text
+选择目标 Profile
+  -> Rust 对比当前 manifest 与目标启用集合
+  -> 返回启用、禁用、缺失 MOD 和覆盖风险预览
+  -> 用户确认
+  -> 保存当前 Profile 快照并激活目标 Profile
+  -> 复用启用、禁用、冲突顺序应用
+  -> 将实际部署结果同步回目标 Profile
+```
+
+Profile 不是第二套 MOD 文件副本，也不修改 `content/` 中的原始 MOD。它只是对同一个本地 MOD 库保存不同的部署状态快照。
+
+如果后续出现大量 MOD、复杂搜索、历史记录或需要跨 Profile 的高频查询，再评估 SQLite。
 
 ## AI Agent 接入边界
 
@@ -384,7 +402,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 7 manifest 持久化结果，schema 1 至 6 manifest 读取时兼容补算；`vfx/mod` 附属资源不作为装备替换目标显示。
+4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 8 manifest 持久化结果，schema 1 至 7 manifest 读取时兼容补算；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容。

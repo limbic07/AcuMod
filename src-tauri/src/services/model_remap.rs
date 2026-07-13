@@ -68,6 +68,7 @@ pub struct EvamSlingerIdRewrite {
 struct RemapIndex {
     weapon_remap_targets: Vec<WeaponRemapTargetEntry>,
     armor_remap_targets: Vec<ArmorRemapTargetEntry>,
+    armor_slinger_bindings: Vec<ArmorSlingerBindingEntry>,
     hair_models: Vec<HairRemapTargetEntry>,
     palico_armor_remap_targets: Vec<SimpleRemapTargetEntry>,
     slinger_remap_targets: Vec<SimpleRemapTargetEntry>,
@@ -93,6 +94,14 @@ struct ArmorRemapTargetEntry {
     game_ids: Vec<String>,
     display_names: Vec<String>,
     affected_parts: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArmorSlingerBindingEntry {
+    armor_model_id: String,
+    gender: String,
+    slinger_model_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +136,12 @@ struct PathRemapRule {
     rename_companion_file_tokens: bool,
 }
 
+struct PairedSlingerInference {
+    targets: HashMap<String, String>,
+    warnings: Vec<String>,
+    blocking_errors: Vec<String>,
+}
+
 pub fn build_model_remap_groups(
     replacements: &[ModelReplacement],
     selections: &[ModelRemapSelection],
@@ -146,7 +161,13 @@ pub fn build_model_remap_groups(
     add_armor_groups(&mut groups, replacements, &selection_by_group, index);
     add_palico_armor_groups(&mut groups, replacements, &selection_by_group, index);
     add_hair_groups(&mut groups, replacements, &selection_by_group, index);
-    add_slinger_groups(&mut groups, replacements, &selection_by_group, index)?;
+    add_slinger_groups(
+        &mut groups,
+        &mut warnings,
+        replacements,
+        &selection_by_group,
+        index,
+    )?;
 
     let known_group_keys = groups
         .iter()
@@ -184,6 +205,13 @@ pub fn build_effective_remap_files(
         })
     {
         return Err(warnings.join(" "));
+    }
+    let index = remap_index()?;
+    let selection_by_group = selection_map(selections)?;
+    let paired_slinger_inference =
+        infer_paired_slinger_targets(replacements, &selection_by_group, index);
+    if !paired_slinger_inference.blocking_errors.is_empty() {
+        return Err(paired_slinger_inference.blocking_errors.join(" "));
     }
 
     let mut rules = Vec::new();
@@ -598,10 +626,15 @@ fn add_hair_groups(
 
 fn add_slinger_groups(
     groups: &mut Vec<ModelRemapGroup>,
+    warnings: &mut Vec<String>,
     replacements: &[ModelReplacement],
     selection_by_group: &HashMap<&str, &str>,
     index: &RemapIndex,
 ) -> Result<(), String> {
+    let inference = infer_paired_slinger_targets(replacements, selection_by_group, index);
+    warnings.extend(inference.warnings);
+    warnings.extend(inference.blocking_errors.iter().cloned());
+    let inferred_targets = inference.targets;
     let base_targets = index
         .slinger_remap_targets
         .iter()
@@ -615,7 +648,8 @@ fn add_slinger_groups(
         let group_key = format!("slinger:{}", replacement.model_id);
         let selected_target_id = selection_by_group
             .get(group_key.as_str())
-            .map(|id| (*id).to_string());
+            .map(|id| (*id).to_string())
+            .or_else(|| inferred_targets.get(&replacement.model_id).cloned());
         let mut targets = base_targets.clone();
         if let Some(selected_id) = selected_target_id.as_deref() {
             if !targets.iter().any(|target| target.target_id == selected_id) {
@@ -637,6 +671,241 @@ fn add_slinger_groups(
         });
     }
     Ok(())
+}
+
+fn infer_paired_slinger_targets(
+    replacements: &[ModelReplacement],
+    selection_by_group: &HashMap<&str, &str>,
+    index: &RemapIndex,
+) -> PairedSlingerInference {
+    let mut inference = PairedSlingerInference {
+        targets: HashMap::new(),
+        warnings: Vec::new(),
+        blocking_errors: Vec::new(),
+    };
+    let slinger_replacements = replacements
+        .iter()
+        .filter(|replacement| replacement.model_kind == "slinger")
+        .collect::<Vec<_>>();
+    let mut armor_files = BTreeMap::<String, Vec<&str>>::new();
+
+    for replacement in replacements
+        .iter()
+        .filter(|replacement| replacement.model_kind == "armor")
+    {
+        armor_files
+            .entry(replacement.model_id.clone())
+            .or_default()
+            .extend(replacement.matched_files.iter().map(String::as_str));
+    }
+
+    let mut proposals = BTreeMap::<String, BTreeMap<String, Vec<String>>>::new();
+    for (source_armor_id, matched_files) in armor_files {
+        let armor_group_key = format!("armor:{source_armor_id}");
+        let Some(target_armor_id) = selection_by_group
+            .get(armor_group_key.as_str())
+            .and_then(|target_id| target_id.strip_prefix("armor:"))
+        else {
+            continue;
+        };
+        if source_armor_id.eq_ignore_ascii_case(target_armor_id) {
+            continue;
+        }
+
+        let mut gender_has_evam = BTreeMap::<&str, bool>::new();
+        for path in matched_files {
+            let Some(gender) = armor_path_gender(path, &source_armor_id) else {
+                continue;
+            };
+            let has_evam = is_armor_evam_path(path, &source_armor_id);
+            gender_has_evam
+                .entry(gender)
+                .and_modify(|current| *current |= has_evam)
+                .or_insert(has_evam);
+        }
+
+        for (gender, has_evam) in gender_has_evam {
+            if has_evam {
+                inference.warnings.push(format!(
+                    "{}的{}资源自带 EVAM；改绑到 {} 时将保留 MOD 指定的飞翔爪绑定。",
+                    source_armor_id,
+                    gender_label(gender),
+                    target_armor_id
+                ));
+                continue;
+            }
+
+            let Some(source_binding) = armor_slinger_binding(index, &source_armor_id, gender)
+            else {
+                inference.warnings.push(format!(
+                    "原版 EVAM 表缺少 {} 的{}绑定，无法自动判断配套飞翔爪。",
+                    source_armor_id,
+                    gender_label(gender)
+                ));
+                continue;
+            };
+            let Some(source_slinger_id) = source_binding.slinger_model_id.as_deref() else {
+                continue;
+            };
+            let paired_slingers = slinger_replacements
+                .iter()
+                .filter(|replacement| {
+                    slinger_matches_original_binding(&replacement.model_id, source_slinger_id)
+                        && !replacement
+                            .associations
+                            .iter()
+                            .any(|association| association.recognition_source == "evamBinding")
+                })
+                .collect::<Vec<_>>();
+            if paired_slingers.is_empty() {
+                continue;
+            }
+
+            let Some(target_binding) = armor_slinger_binding(index, target_armor_id, gender) else {
+                inference.warnings.push(format!(
+                    "原版 EVAM 表缺少目标防具 {} 的{}绑定，配套飞翔爪 {} 不会自动改绑。",
+                    target_armor_id,
+                    gender_label(gender),
+                    source_slinger_id
+                ));
+                continue;
+            };
+            let Some(target_slinger_id) = target_binding.slinger_model_id.as_deref() else {
+                inference.warnings.push(format!(
+                    "目标防具 {} 的{}原版 EVAM 明确没有飞翔爪，{} 将保持原路径且不会被该防具调用。",
+                    target_armor_id,
+                    gender_label(gender),
+                    source_slinger_id
+                ));
+                continue;
+            };
+
+            for replacement in paired_slingers {
+                let slinger_group_key = format!("slinger:{}", replacement.model_id);
+                if selection_by_group.contains_key(slinger_group_key.as_str()) {
+                    continue;
+                }
+                proposals
+                    .entry(replacement.model_id.clone())
+                    .or_default()
+                    .entry(target_slinger_id.to_string())
+                    .or_default()
+                    .push(format!("{} {}", source_armor_id, gender_label(gender)));
+            }
+        }
+    }
+
+    let mut candidate_targets = BTreeMap::<String, (String, Vec<String>)>::new();
+    let mut target_sources = BTreeMap::<String, Vec<String>>::new();
+    for (source_slinger_id, targets) in proposals {
+        if targets.len() > 1 {
+            let details = targets
+                .iter()
+                .map(|(target, contexts)| format!("{target}（{}）", contexts.join("、")))
+                .collect::<Vec<_>>()
+                .join("；");
+            inference.blocking_errors.push(format!(
+                "配套飞翔爪 {source_slinger_id} 因男女原版绑定不同，需要同时部署到多个目标：{details}。当前不能安全地自动复制同一份资源，请分别处理男女版本。"
+            ));
+            continue;
+        }
+
+        let (target_slinger_id, contexts) = targets.into_iter().next().unwrap();
+        if source_slinger_id.eq_ignore_ascii_case(&target_slinger_id) {
+            continue;
+        }
+        target_sources
+            .entry(target_slinger_id.clone())
+            .or_default()
+            .push(source_slinger_id.clone());
+        candidate_targets.insert(source_slinger_id, (target_slinger_id, contexts));
+    }
+
+    let mut colliding_sources = HashSet::new();
+    for (target_slinger_id, mut source_slinger_ids) in target_sources {
+        source_slinger_ids.sort();
+        source_slinger_ids.dedup();
+        if source_slinger_ids.len() > 1 {
+            colliding_sources.extend(source_slinger_ids.iter().cloned());
+            inference.blocking_errors.push(format!(
+                "多个配套飞翔爪会在防具改绑后写入同一目标 {}：{}。当前不能安全合并不同资源。",
+                target_slinger_id,
+                source_slinger_ids.join("、")
+            ));
+        }
+    }
+
+    for (source_slinger_id, (target_slinger_id, contexts)) in candidate_targets {
+        if colliding_sources.contains(&source_slinger_id) {
+            continue;
+        }
+        inference.warnings.push(format!(
+            "根据原版 EVAM，防具改绑将自动同步配套飞翔爪：{} -> {}（{}）。",
+            source_slinger_id,
+            target_slinger_id,
+            contexts.join("、")
+        ));
+        inference
+            .targets
+            .insert(source_slinger_id, format!("slinger:{target_slinger_id}"));
+    }
+
+    inference
+}
+
+fn armor_slinger_binding<'a>(
+    index: &'a RemapIndex,
+    armor_model_id: &str,
+    gender: &str,
+) -> Option<&'a ArmorSlingerBindingEntry> {
+    index.armor_slinger_bindings.iter().find(|binding| {
+        binding.armor_model_id.eq_ignore_ascii_case(armor_model_id) && binding.gender == gender
+    })
+}
+
+fn armor_path_gender(path: &str, armor_model_id: &str) -> Option<&'static str> {
+    let normalized = normalize_deploy_path(path).to_ascii_lowercase();
+    let components = normalized.split('/').collect::<Vec<_>>();
+    let armor_model_id = armor_model_id.to_ascii_lowercase();
+    components.windows(3).find_map(|window| {
+        if window[0] != "pl" || window[2] != armor_model_id {
+            return None;
+        }
+        match window[1] {
+            "f_equip" => Some("female"),
+            "m_equip" => Some("male"),
+            _ => None,
+        }
+    })
+}
+
+fn is_armor_evam_path(path: &str, armor_model_id: &str) -> bool {
+    let normalized = normalize_deploy_path(path).to_ascii_lowercase();
+    let components = normalized.split('/').collect::<Vec<_>>();
+    let armor_model_id = armor_model_id.to_ascii_lowercase();
+    components.windows(6).any(|window| {
+        window[0] == "pl"
+            && matches!(window[1], "f_equip" | "m_equip")
+            && window[2] == armor_model_id
+            && window[3] == "arm"
+            && window[4] == "mod"
+            && window[5].ends_with(".evam")
+    })
+}
+
+fn slinger_matches_original_binding(actual_model_id: &str, original_model_id: &str) -> bool {
+    actual_model_id.eq_ignore_ascii_case(original_model_id)
+        || original_model_id
+            .strip_suffix("_0000")
+            .is_some_and(|legacy_id| actual_model_id.eq_ignore_ascii_case(legacy_id))
+}
+
+fn gender_label(gender: &str) -> &'static str {
+    match gender {
+        "female" => "女性",
+        "male" => "男性",
+        _ => "未知性别",
+    }
 }
 
 fn weapon_target(entry: &WeaponRemapTargetEntry) -> ModelRemapTarget {
@@ -1075,6 +1344,144 @@ mod tests {
             "nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3"
         );
         assert_eq!(effective[1].deploy_relative_path, files[1]);
+    }
+
+    #[test]
+    fn armor_remap_uses_original_evam_table_for_paired_slinger_without_mod_evam() {
+        let armor_path = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string();
+        let slinger_path = "nativePC/wp/slg/slg000_0000/mod/slg000_0000.mod3".to_string();
+        let mut armor = replacement("armor", "防具套装", "set", "pl105_0000");
+        armor.matched_files = vec![armor_path.clone()];
+        let mut slinger = replacement("slinger", "投射器", "model", "slg000_0000");
+        slinger.matched_files = vec![slinger_path.clone()];
+        let replacements = vec![armor, slinger];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl106_0000".to_string(),
+        }];
+
+        let (groups, warnings) = build_model_remap_groups(&replacements, &selections).unwrap();
+        let slinger_group = groups
+            .iter()
+            .find(|group| group.group_key == "slinger:slg000_0000")
+            .unwrap();
+        assert_eq!(
+            slinger_group.selected_target_id.as_deref(),
+            Some("slinger:slg106_0000")
+        );
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("slg000_0000 -> slg106_0000")));
+
+        let effective =
+            build_effective_remap_files(&[armor_path, slinger_path], &replacements, &selections)
+                .unwrap();
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl106_0000/body/mod/f_body106_0000.mod3"
+        );
+        assert_eq!(
+            effective[1].deploy_relative_path,
+            "nativePC/wp/slg/slg106_0000/mod/slg106_0000.mod3"
+        );
+    }
+
+    #[test]
+    fn armor_remap_preserves_custom_slinger_when_mod_provides_evam() {
+        let evam_path = "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.evam".to_string();
+        let slinger_path = "nativePC/wp/slg/slg128_0000/mod/slg128_0000.mod3".to_string();
+        let mut armor = replacement("armor", "护手", "model", "pl105_0000");
+        armor.matched_files = vec![evam_path.clone()];
+        let mut slinger = replacement("slinger", "投射器", "model", "slg128_0000");
+        slinger.matched_files = vec![slinger_path.clone()];
+        let replacements = vec![armor, slinger];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl106_0000".to_string(),
+        }];
+
+        let (groups, warnings) = build_model_remap_groups(&replacements, &selections).unwrap();
+        let slinger_group = groups
+            .iter()
+            .find(|group| group.group_key == "slinger:slg128_0000")
+            .unwrap();
+        assert_eq!(slinger_group.selected_target_id, None);
+        assert!(warnings.iter().any(|warning| warning.contains("自带 EVAM")));
+
+        let effective = build_effective_remap_files(
+            &[evam_path, slinger_path.clone()],
+            &replacements,
+            &selections,
+        )
+        .unwrap();
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl106_0000/arm/mod/f_arm106_0000.evam"
+        );
+        assert_eq!(effective[1].deploy_relative_path, slinger_path);
+        assert!(effective[0].evam_slinger_rewrite.is_none());
+    }
+
+    #[test]
+    fn armor_remap_does_not_reuse_slinger_bound_by_another_mod_evam() {
+        let armor_path = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string();
+        let other_evam_path =
+            "nativePC/pl/f_equip/pl001_0000/arm/mod/f_arm001_0000.evam".to_string();
+        let slinger_path = "nativePC/wp/slg/slg000_0000/mod/slg000_0000.mod3".to_string();
+        let mut armor = replacement("armor", "防具套装", "set", "pl105_0000");
+        armor.matched_files = vec![armor_path.clone()];
+        let mut slinger = replacement("slinger", "投射器", "model", "slg000_0000");
+        slinger.matched_files = vec![slinger_path.clone()];
+        slinger.associations.push(ModelAssociation {
+            model_kind: "armor".to_string(),
+            model_id: "pl001_0000".to_string(),
+            display_names: vec!["pl001_0000".to_string()],
+            matched_files: vec![other_evam_path.clone()],
+            recognition_source: "evamBinding".to_string(),
+        });
+        let replacements = vec![armor, slinger];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl106_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files(
+            &[armor_path, slinger_path.clone(), other_evam_path],
+            &replacements,
+            &selections,
+        )
+        .unwrap();
+        assert_eq!(effective[1].deploy_relative_path, slinger_path);
+        assert!(effective[2].evam_slinger_rewrite.is_none());
+    }
+
+    #[test]
+    fn armor_remap_rejects_one_slinger_that_needs_two_gender_targets() {
+        let female_path = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string();
+        let male_path = "nativePC/pl/m_equip/pl105_0000/body/mod/m_body105_0000.mod3".to_string();
+        let mut armor = replacement("armor", "防具套装", "set", "pl105_0000");
+        armor.matched_files = vec![female_path.clone(), male_path.clone()];
+        let slinger = replacement("slinger", "投射器", "model", "slg000_0000");
+        let replacements = vec![armor, slinger];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl019_0000".to_string(),
+        }];
+
+        let (groups, warnings) = build_model_remap_groups(&replacements, &selections).unwrap();
+        assert!(groups
+            .iter()
+            .any(|group| group.group_key == "armor:pl105_0000"));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("需要同时部署到多个目标")));
+
+        let error =
+            build_effective_remap_files(&[female_path, male_path], &replacements, &selections)
+                .unwrap_err();
+        assert!(error.contains("需要同时部署到多个目标"));
+        assert!(error.contains("slg019_0000"));
+        assert!(error.contains("slg057_0000"));
     }
 
     #[test]

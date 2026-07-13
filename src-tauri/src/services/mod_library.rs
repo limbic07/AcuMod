@@ -1871,9 +1871,10 @@ fn effective_model_replacements_for_manifest(
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
     let mut effective_replacements = recognize_model_replacements(&paths)?;
+    let (groups, _) = build_model_remap_groups(original_replacements, &manifest.model_remaps)?;
     copy_effective_slinger_associations(
         original_replacements,
-        &manifest.model_remaps,
+        &groups,
         &mut effective_replacements,
     );
     Ok(effective_replacements)
@@ -1881,7 +1882,7 @@ fn effective_model_replacements_for_manifest(
 
 fn copy_effective_slinger_associations(
     original_replacements: &[ModelReplacement],
-    selections: &[ModelRemapSelection],
+    groups: &[ModelRemapGroup],
     effective_replacements: &mut [ModelReplacement],
 ) {
     for original in original_replacements
@@ -1892,20 +1893,22 @@ fn copy_effective_slinger_associations(
             continue;
         }
         let group_key = format!("slinger:{}", original.model_id);
-        let effective_model_id = selections
+        let effective_model_id = groups
             .iter()
-            .find(|selection| selection.group_key == group_key)
-            .and_then(|selection| selection.target_id.strip_prefix("slinger:"))
+            .find(|group| group.group_key == group_key)
+            .and_then(|group| group.selected_target_id.as_deref())
+            .and_then(|target_id| target_id.strip_prefix("slinger:"))
             .unwrap_or(&original.model_id);
         let associations = original
             .associations
             .iter()
             .map(|association| {
                 let group_key = format!("armor:{}", association.model_id);
-                let effective_armor_id = selections
+                let effective_armor_id = groups
                     .iter()
-                    .find(|selection| selection.group_key == group_key)
-                    .and_then(|selection| selection.target_id.strip_prefix("armor:"))
+                    .find(|group| group.group_key == group_key)
+                    .and_then(|group| group.selected_target_id.as_deref())
+                    .and_then(|target_id| target_id.strip_prefix("armor:"))
                     .unwrap_or(&association.model_id);
                 let mut effective_association = association.clone();
                 effective_association.model_id = effective_armor_id.to_string();
@@ -5811,6 +5814,73 @@ mod tests {
             .original_model_replacements
             .iter()
             .any(|replacement| replacement.model_id == "pl105_0000"));
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn armor_remap_deploys_originally_paired_slinger_to_target_binding() {
+        let source_root = temp_root("armor_paired_slinger_source");
+        let installed_root = temp_root("armor_paired_slinger_installed");
+        let game_root = temp_root("armor_paired_slinger_game");
+        let armor_relative = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3";
+        let slinger_relative = "nativePC/wp/slg/slg000_0000/mod/slg000_0000.mod3";
+        write_file_with_contents(&source_root.join(armor_relative), "paired armor");
+        write_file_with_contents(&source_root.join(slinger_relative), "paired slinger");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let plan = preview_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl106_0000".to_string()),
+        )
+        .unwrap();
+        assert_eq!(plan.changed_file_count, 2);
+        assert_eq!(plan.evam_rewrite_count, 0);
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("slg000_0000 -> slg106_0000")));
+        assert!(plan.files.iter().any(|file| {
+            file.effective_deploy_relative_path
+                == "nativePC/wp/slg/slg106_0000/mod/slg106_0000.mod3"
+        }));
+
+        apply_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl106_0000".to_string()),
+        )
+        .unwrap();
+        enable_mod_from(&installed_root, &game_root, &installed.mod_id, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(PathBuf::from(&installed.content_path).join(slinger_relative))
+                .unwrap(),
+            "paired slinger"
+        );
+        assert_eq!(
+            fs::read_to_string(game_root.join("nativePC/wp/slg/slg106_0000/mod/slg106_0000.mod3"))
+                .unwrap(),
+            "paired slinger"
+        );
+        assert!(game_root
+            .join("nativePC/pl/f_equip/pl106_0000/body/mod/f_body106_0000.mod3")
+            .is_file());
+        assert!(!game_root.join(slinger_relative).exists());
+
+        let listed = list_installed_mods_from(&installed_root).unwrap();
+        assert!(listed.mods[0]
+            .model_replacements
+            .iter()
+            .any(|replacement| replacement.model_id == "slg106_0000"));
 
         cleanup(source_root);
         cleanup(installed_root);

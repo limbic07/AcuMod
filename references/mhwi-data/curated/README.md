@@ -42,4 +42,4 @@
 - `armorSlingerBindings[]`：原版防具 EVAM 的逐性别绑定；`slingerId: null` 表示原文件使用 `0xFFFFFFFF`，即没有飞翔爪。
 - `voiceModels[]`：人物语音文件名、性别、角色创建序号和显示名称。
 
-发型和旧式投射器路径来自社区维护的 Monster Hunter World Modding Wiki；飞翔爪显示名称资料仍保存在 `extended-assets.json`。防具与飞翔爪的运行时关系不再按同号猜测，而是使用原版 EVAM 派生表：当前包含 462 条绑定、234 个防具模型、14 条无飞翔爪记录和 5 个男女绑定不同的模型。语音序号映射来自 MIT 许可的 [MHW Voice Changer](https://github.com/NathanCruz98/MHWVoiceChanger)。发布前仍需确认原始数据与 Wiki 衍生索引的再分发许可。
+发型和旧式投射器路径来自社区维护的 Monster Hunter World Modding Wiki；飞翔爪显示名称资料仍保存在 `extended-assets.json`。防具与飞翔爪的运行时关系不再按同号猜测，而是使用原版 EVAM 派生表：当前包含 462 条绑定、234 个防具模型、14 条无飞翔爪记录和 5 个男女绑定不同的模型。防具改绑仅在 MOD 没有自带 EVAM、且确实包含原版配套 `slg` 时使用这张表推导目标路径；MOD EVAM 和用户显式选择始终优先。语音序号映射来自 MIT 许可的 [MHW Voice Changer](https://github.com/NathanCruz98/MHWVoiceChanger)。发布前仍需确认原始数据与 Wiki 衍生索引的再分发许可。

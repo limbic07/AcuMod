@@ -36,6 +36,7 @@ const emit = defineEmits<{
   enable: [mod: InstalledModSummary];
   disable: [mod: InstalledModSummary];
   uninstall: [mod: InstalledModSummary];
+  manageRemap: [mod: InstalledModSummary];
 }>();
 
 const editingCell = ref<{ modId: string; field: EditableField } | null>(null);
@@ -95,6 +96,10 @@ function categoryTags(mod: InstalledModSummary) {
 }
 
 function replacementTargetLabel(replacement: ModelReplacement) {
+  if (replacement.modelKind === "armor" && replacement.modelPart === "set") {
+    return armorSetTargetLabel(replacement);
+  }
+
   const displayName = replacement.displayNames[0];
   if (displayName) {
     return displayName;
@@ -102,6 +107,17 @@ function replacementTargetLabel(replacement: ModelReplacement) {
 
   const gameId = replacement.gameIds[0];
   return gameId ? `游戏 ID ${gameId}` : replacement.modelId;
+}
+
+function armorSetTargetLabel(replacement: ModelReplacement) {
+  for (const name of replacement.displayNames) {
+    const setName = name.replace(/[·・](?:头部|身体|腕部|腰部|脚部)$/u, "");
+    if (setName !== name && setName) {
+      return `${setName}（套装）`;
+    }
+  }
+
+  return `防具套装 · ${replacement.modelId}`;
 }
 
 function replacementSummary(mod: InstalledModSummary) {
@@ -112,6 +128,11 @@ function replacementSummary(mod: InstalledModSummary) {
 
 function remainingReplacementCount(mod: InstalledModSummary) {
   return Math.max(mod.modelReplacements.length - 2, 0);
+}
+
+function hasRemappableTarget(mod: InstalledModSummary) {
+  const supportedKinds = new Set(["weapon", "armor", "palicoArmor", "slinger", "hair"]);
+  return mod.originalModelReplacements.some((replacement) => supportedKinds.has(replacement.modelKind));
 }
 
 function isEditing(mod: InstalledModSummary, field: EditableField) {
@@ -414,8 +435,25 @@ watch(
               </button>
             </td>
 
-            <td class="replacement-summary">
-              <template v-if="mod.modelReplacements.length">
+            <td class="replacement-summary" :class="{ 'has-remap-entry': hasRemappableTarget(mod) }">
+              <button
+                v-if="hasRemappableTarget(mod)"
+                type="button"
+                class="replacement-entry-button"
+                :disabled="isRowActionDisabled()"
+                :aria-label="mod.enabled ? '查看模型替换目标，修改前需先禁用 MOD' : '修改模型替换目标'"
+                :data-tooltip="mod.enabled ? '查看替换目标，修改前需先禁用' : '修改替换目标'"
+                @click="$emit('manageRemap', mod)"
+              >
+                <span class="replacement-entry-content">
+                  <span v-for="summary in replacementSummary(mod)" :key="summary">{{ summary }}</span>
+                  <span v-if="remainingReplacementCount(mod)" class="replacement-more">
+                    +{{ remainingReplacementCount(mod) }}
+                  </span>
+                </span>
+                <span class="replacement-entry-icon" aria-hidden="true">&#8644;</span>
+              </button>
+              <template v-else-if="mod.modelReplacements.length">
                 <span v-for="summary in replacementSummary(mod)" :key="summary">{{ summary }}</span>
                 <span v-if="remainingReplacementCount(mod)" class="replacement-more">
                   +{{ remainingReplacementCount(mod) }}
@@ -516,11 +554,25 @@ watch(
               </div>
 
               <section class="replacement-details">
-                <h4>替换目标</h4>
+                <div class="replacement-heading">
+                  <h4>替换目标</h4>
+                  <span v-if="mod.modelRemapCount" class="remap-count">已改绑 {{ mod.modelRemapCount }}</span>
+                  <button
+                    v-if="hasRemappableTarget(mod)"
+                    type="button"
+                    class="detail-icon-button"
+                    :disabled="isRowActionDisabled() || mod.enabled"
+                    :aria-label="mod.enabled ? '请先禁用 MOD 再修改替换目标' : '修改模型替换目标'"
+                    :data-tooltip="mod.enabled ? '请先禁用 MOD' : '修改替换目标'"
+                    @click="$emit('manageRemap', mod)"
+                  >
+                    <span aria-hidden="true">&#8644;</span>
+                  </button>
+                </div>
                 <ul v-if="mod.modelReplacements.length">
                   <li v-for="replacement in mod.modelReplacements" :key="`${replacement.modelKind}-${replacement.modelId}`">
                     <strong>{{ modelReplacementTitle(replacement) }}</strong>
-                    <span>{{ replacement.displayNames.join("、") || replacement.modelId }}</span>
+                    <span>{{ replacementTargetLabel(replacement) }}</span>
                     <small>
                       {{ replacement.gameIds.length ? `游戏 ID：${replacement.gameIds.join("、")}` : `资源 ID：${replacement.modelId}` }}
                     </small>
@@ -833,6 +885,56 @@ watch(
   line-height: 1.4;
 }
 
+.replacement-summary.has-remap-entry {
+  padding: 5px 7px;
+}
+
+.replacement-entry-button {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 48px;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 7px 5px 9px;
+  border: 1px solid #c9dbd4;
+  border-radius: 6px;
+  color: #334b44;
+  background: #f8fbfa;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.replacement-entry-button:hover:not(:disabled),
+.replacement-entry-button:focus-visible {
+  border-color: #78a995;
+  background: #edf6f2;
+}
+
+.replacement-entry-button:disabled {
+  border-color: #dce5e2;
+  color: #61756f;
+  background: #f4f7f6;
+  cursor: not-allowed;
+}
+
+.replacement-entry-content {
+  min-width: 0;
+}
+
+.replacement-entry-icon {
+  display: grid !important;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-left: 1px solid #d5e2dd;
+  color: #24745b;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
 .replacement-summary span {
   display: block;
   overflow: hidden;
@@ -867,7 +969,8 @@ watch(
 }
 
 .status-button[data-tooltip]::after,
-.icon-button[data-tooltip]::after {
+.icon-button[data-tooltip]::after,
+.replacement-entry-button[data-tooltip]::after {
   position: absolute;
   z-index: 5;
   right: 0;
@@ -888,7 +991,9 @@ watch(
 .status-button[data-tooltip]:hover::after,
 .status-button[data-tooltip]:focus-visible::after,
 .icon-button[data-tooltip]:hover::after,
-.icon-button[data-tooltip]:focus-visible::after {
+.icon-button[data-tooltip]:focus-visible::after,
+.replacement-entry-button[data-tooltip]:hover::after,
+.replacement-entry-button[data-tooltip]:focus-visible::after {
   display: block;
 }
 
@@ -929,6 +1034,45 @@ watch(
   margin: 0 0 5px;
   color: #61756f;
   font-size: 0.74rem;
+}
+
+.replacement-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-bottom: 4px;
+}
+
+.replacement-heading h4 {
+  margin: 0;
+}
+
+.remap-count {
+  color: #17613f;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.detail-icon-button {
+  position: relative;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #cbd8d4;
+  border-radius: 6px;
+  color: #315e52;
+  background: #ffffff;
+  font-size: 1rem;
+}
+
+.detail-icon-button:hover:not(:disabled),
+.detail-icon-button:focus-visible {
+  border-color: #78a99a;
+  background: #eef7f3;
 }
 
 .mod-details-grid p,

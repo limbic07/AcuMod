@@ -215,7 +215,8 @@ src-tauri/src/services/mod_library.rs
   读取 installed/*/manifest.json 生成已安装 MOD 列表
   使用 Acumod 内置 7-Zip 解包组件解包 .zip/.7z/.rar，再复用文件夹导入逻辑
   多候选时重新校验并只导入用户选择的一个内容根
-  调用 model_recognition service，将模型替换识别结果写入 manifest schema 9
+  调用 model_recognition service，将模型替换识别结果写入当前 manifest schema 12
+  调用 model_remap service，校验并保存五类改绑选择，生成有效部署文件和 MRL3 精确贴图路径修正
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
   卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
@@ -224,8 +225,13 @@ src-tauri/src/services/mod_library.rs
 
 src-tauri/src/services/model_recognition.rs
   读取编译进应用的 references/mhwi-data/curated/model-index.json
-  识别武器模型路径、防具模型 ID 与部位标记、发型路径及 Wiki ID 映射
+  识别武器模型路径、防具模型 ID 与部位标记、发型路径，以及与防具配套的投射器/飞翔爪资源
   返回 ModelReplacement DTO；不修改 MOD 文件或部署路径
+
+src-tauri/src/services/model_remap.rs
+  读取同一份精简索引中的可选目标
+  仅支持武器、防具、随从防具、投射器和玩家发型
+  根据 manifest.modelRemaps 生成有效部署路径；人物语音始终只读
 ```
 
 当前传统管理器增强命令：
@@ -320,10 +326,18 @@ Vue UI
 例如“识别模型替换目标”：
 
 1. 导入 service 根据最终 `deployRelativePath` 调用 `recognize_model_replacements()`。
-2. Rust 查询编译进应用的武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器和人物语音精简索引；规范目录中的未知发型或投射器编号仅返回路径 ID。
-3. 结果随 `ModInstallResult` 返回并写入 manifest schema 9。
-4. `list_installed_mods` 直接读取 schema 8 或 schema 9 manifest；旧 schema 1 至 7 manifest 根据文件列表即时补算。武器和防具只在规范资源根目录识别，`vfx/mod` 中的同名模型只作为附属资源保留。
+2. Rust 查询编译进应用的武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪和人物语音精简索引；投射器未核实名称保留资源 ID，不按防具同号推断。
+3. 结果随 `ModInstallResult` 返回并写入当前 manifest schema 12。
+4. `list_installed_mods` 读取 schema 1 至 11 的旧 manifest 时按当前目录规则即时重算识别结果；武器和防具只在规范资源根目录识别，`vfx/mod` 中的同名模型只作为附属资源保留。
 5. Vue 展示模型类型、子类型、模型 ID、游戏 ID 和游戏名称摘要。
+
+例如“修改模型替换目标”：
+
+1. Vue 调用 `get_mod_remap_details`，只显示后端判定为可改绑的五类分组和同类型目标。
+2. 用户选择目标后调用 `preview_mod_remap`；Rust 返回原路径、有效路径、MRL3 修正数和警告，不写 manifest。
+3. 用户确认后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 12 manifest。
+4. `preview_enable_mod`、`enable_mod`、冲突检测和冲突顺序应用不再直接使用原始 `files[].deployRelativePath`，而是统一调用有效部署文件生成器。
+5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；本地库原文件保持不变。
 
 重新生成模型索引：
 

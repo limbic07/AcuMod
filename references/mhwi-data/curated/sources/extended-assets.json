@@ -11,6 +11,31 @@
       "url": "https://github.com/NathanCruz98/MHWVoiceChanger",
       "license": "MIT",
       "note": "The MAIN table in MHWCharacterVoices.db maps the 20 female and 20 male character-creation voice numbers to exact nbnk file names."
+    },
+    {
+      "title": "Camilla - Ciri armor and slinger replacement",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/2096",
+      "note": "The original mod page identifies slg119_0000 as the slinger used with the Ciri armor model."
+    },
+    {
+      "title": "Gala Suit Slinger",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/2298?tab=posts",
+      "note": "The original mod page identifies slg078_0000 as the Gala Suit slinger model."
+    },
+    {
+      "title": "Nim Outfit - Brigade armor and slinger replacement",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/1964",
+      "note": "The original mod page uses pl036_0000 and slg036_0000 together for the Brigade outfit."
+    },
+    {
+      "title": "Receptionist China Dress - Thermae and Oolong replacements",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/2061",
+      "note": "The original mod page pairs pl106_0000 with slg106_0000 and pl127_0000 with slg127_0000."
+    },
+    {
+      "title": "Harley Quinn - Beetle and Butterfly slinger resources",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/4317",
+      "note": "The original mod page identifies slg019_0000 and slg057_0000 as slinger resources reused by the Beetle and Butterfly armor families."
     }
   ],
   "slingerModels": [
@@ -25,6 +50,48 @@
       "modelId": "slg000_0000",
       "gameIds": ["slg000_0000"],
       "displayNames": ["通用投射器/飞翔爪"]
+    },
+    {
+      "modelPath": "wp/slg/slg019_0000",
+      "modelId": "slg019_0000",
+      "gameIds": ["slg019_0000"],
+      "displayNames": ["独角仙/燕尾蝶关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg036_0000",
+      "modelId": "slg036_0000",
+      "gameIds": ["slg036_0000"],
+      "displayNames": ["【旅团】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg057_0000",
+      "modelId": "slg057_0000",
+      "gameIds": ["slg057_0000"],
+      "displayNames": ["独角仙后/燕尾蝶男关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg078_0000",
+      "modelId": "slg078_0000",
+      "gameIds": ["slg078_0000"],
+      "displayNames": ["【盛装】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg106_0000",
+      "modelId": "slg106_0000",
+      "gameIds": ["slg106_0000"],
+      "displayNames": ["【浴场】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg119_0000",
+      "modelId": "slg119_0000",
+      "gameIds": ["slg119_0000"],
+      "displayNames": ["【希里】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg127_0000",
+      "modelId": "slg127_0000",
+      "gameIds": ["slg127_0000"],
+      "displayNames": ["【风火轮】服装关联投射器"]
     }
   ],
   "voiceModels": [

@@ -16,10 +16,14 @@ use tauri_plugin_opener::OpenerExt;
 use crate::storage::config;
 
 use super::model_recognition::{recognize_model_replacements, ModelReplacement};
+use super::model_remap::{
+    build_effective_remap_files, build_model_remap_groups, rewrite_mrl3_texture_paths,
+    EffectiveRemapFile, ModelRemapGroup, ModelRemapSelection,
+};
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 9;
-const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 8;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 12;
+const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 12;
 const USER_MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 1;
 const USER_MOD_CATEGORY_NAME_LIMIT: usize = 40;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
@@ -127,6 +131,57 @@ pub struct InstalledModSummary {
     pub detection_method: String,
     pub installed_at_unix_seconds: u64,
     pub model_replacements: Vec<ModelReplacement>,
+    pub original_model_replacements: Vec<ModelReplacement>,
+    pub model_remap_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRemapDetails {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub groups: Vec<ModelRemapGroup>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRemapPlanFile {
+    pub source_deploy_relative_path: String,
+    pub effective_deploy_relative_path: String,
+    pub path_changed: bool,
+    pub mrl3_rewrite_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRemapPlan {
+    pub mod_id: String,
+    pub name: String,
+    pub group_key: String,
+    pub source_label: String,
+    pub target_id: Option<String>,
+    pub target_label: String,
+    pub changed_file_count: usize,
+    pub mrl3_rewrite_count: usize,
+    pub files: Vec<ModRemapPlanFile>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRemapApplyResult {
+    pub mod_id: String,
+    pub name: String,
+    pub group_key: String,
+    pub target_id: Option<String>,
+    pub selection_count: usize,
+    pub changed_file_count: usize,
+    pub mrl3_rewrite_count: usize,
+    pub message: String,
 }
 
 #[derive(Serialize)]
@@ -388,6 +443,8 @@ struct InstalledModManifest {
     #[serde(default)]
     model_replacements: Vec<ModelReplacement>,
     #[serde(default)]
+    model_remaps: Vec<ModelRemapSelection>,
+    #[serde(default)]
     deployed_files: Vec<DeployedModFile>,
 }
 
@@ -457,6 +514,13 @@ struct InstalledManifestContext {
     content_path: PathBuf,
     manifest_path: PathBuf,
     manifest: InstalledModManifest,
+}
+
+#[derive(Clone)]
+struct EffectiveInstalledModFile {
+    installed_file: InstalledModFile,
+    deploy_relative_path: String,
+    texture_path_rewrites: BTreeMap<String, String>,
 }
 
 pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus, String> {
@@ -868,6 +932,37 @@ fn installed_mod_content_path(installed_root: &Path, mod_id: &str) -> Result<Pat
     Ok(context.content_path)
 }
 
+pub fn get_mod_remap_details(
+    app: &tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModRemapDetails, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    get_mod_remap_details_from(&paths.installed_path, &mod_id)
+}
+
+pub fn preview_mod_remap(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<ModRemapPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    preview_mod_remap_from(&paths.installed_path, &mod_id, &group_key, target_id)
+}
+
+pub fn apply_mod_remap(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<ModRemapApplyResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    apply_mod_remap_from(&paths.installed_path, &mod_id, &group_key, target_id)
+}
+
 pub fn preview_enable_mod(
     app: &tauri::AppHandle,
     mod_id: String,
@@ -1111,6 +1206,7 @@ fn install_mod_from_folder_into_with_options(
             file_count: installed_files.len(),
             files: installed_files.clone(),
             model_replacements: model_replacements.clone(),
+            model_remaps: Vec::new(),
             deployed_files: Vec::new(),
         };
         let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -1604,7 +1700,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
                 )
             })?;
 
-        let model_replacements = match model_replacements_for_manifest(&manifest) {
+        let original_model_replacements = match model_replacements_for_manifest(&manifest) {
             Ok(model_replacements) => model_replacements,
             Err(error) => {
                 warnings.push(format!(
@@ -1612,6 +1708,19 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
                     manifest.name
                 ));
                 Vec::new()
+            }
+        };
+        let model_replacements = match effective_model_replacements_for_manifest(
+            &manifest,
+            &original_model_replacements,
+        ) {
+            Ok(model_replacements) => model_replacements,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not apply saved model remaps for {}: {error}",
+                    manifest.name
+                ));
+                original_model_replacements.clone()
             }
         };
 
@@ -1643,6 +1752,8 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             detection_method: manifest.detection_method,
             installed_at_unix_seconds: manifest.installed_at_unix_seconds,
             model_replacements,
+            original_model_replacements,
+            model_remap_count: manifest.model_remaps.len(),
         });
     }
 
@@ -1679,6 +1790,18 @@ fn model_replacements_for_manifest(
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
     recognize_model_replacements(&deploy_relative_paths)
+}
+
+fn effective_model_replacements_for_manifest(
+    manifest: &InstalledModManifest,
+    original_replacements: &[ModelReplacement],
+) -> Result<Vec<ModelReplacement>, String> {
+    let effective_files = effective_remap_files_for_manifest(manifest, original_replacements)?;
+    let paths = effective_files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
+    recognize_model_replacements(&paths)
 }
 
 fn refresh_manifest_model_replacements(manifest: &mut InstalledModManifest) -> Result<(), String> {
@@ -1729,6 +1852,347 @@ fn model_kind_label(model_kind: &str) -> &str {
         "palicoAccessory" => "随从附件",
         _ => "未识别",
     }
+}
+
+fn get_mod_remap_details_from(
+    installed_root: &Path,
+    mod_id: &str,
+) -> Result<ModRemapDetails, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    let replacements = model_replacements_for_manifest(&context.manifest)?;
+    let (groups, warnings) =
+        build_model_remap_groups(&replacements, &context.manifest.model_remaps)?;
+    let message = if groups.is_empty() {
+        "该 MOD 没有支持改绑的模型目标；人物语音仅保留识别。".to_string()
+    } else if context.manifest.enabled || !context.manifest.deployed_files.is_empty() {
+        "请先禁用并清理该 MOD 的部署记录，再修改替换目标。".to_string()
+    } else {
+        format!("可修改 {} 个模型替换分组。", groups.len())
+    };
+
+    Ok(ModRemapDetails {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        enabled: context.manifest.enabled,
+        groups,
+        warnings,
+        message,
+    })
+}
+
+fn preview_mod_remap_from(
+    installed_root: &Path,
+    mod_id: &str,
+    group_key: &str,
+    target_id: Option<String>,
+) -> Result<ModRemapPlan, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    ensure_manifest_can_remap(&context.manifest)?;
+    let replacements = model_replacements_for_manifest(&context.manifest)?;
+    let (current_groups, _) =
+        build_model_remap_groups(&replacements, &context.manifest.model_remaps)?;
+    let current_group = current_groups
+        .iter()
+        .find(|group| group.group_key == group_key)
+        .ok_or_else(|| format!("未找到可改绑模型分组：{group_key}"))?;
+    let normalized_target_id = normalize_requested_target_id(current_group, target_id)?;
+    let selections = updated_model_remap_selections(
+        &context.manifest.model_remaps,
+        current_group,
+        normalized_target_id.clone(),
+    );
+    let (preview_groups, mut warnings) = build_model_remap_groups(&replacements, &selections)?;
+    let preview_group = preview_groups
+        .iter()
+        .find(|group| group.group_key == group_key)
+        .ok_or_else(|| format!("未找到可改绑模型分组：{group_key}"))?;
+
+    let mut preview_manifest = context.manifest.clone();
+    preview_manifest.model_remaps = selections;
+    let effective_files = effective_installed_files_for_manifest(&preview_manifest, &replacements)?;
+    let mut files = Vec::new();
+    let mut total_mrl3_rewrite_count = 0;
+
+    for effective_file in &effective_files {
+        let source_path = source_path_for_installed_file(&context, &effective_file.installed_file)?;
+        let mrl3_rewrite_count = preview_mrl3_rewrite_count(&source_path, effective_file)?;
+        let path_changed = !effective_file
+            .installed_file
+            .deploy_relative_path
+            .eq_ignore_ascii_case(&effective_file.deploy_relative_path);
+        if path_changed || mrl3_rewrite_count > 0 {
+            files.push(ModRemapPlanFile {
+                source_deploy_relative_path: effective_file
+                    .installed_file
+                    .deploy_relative_path
+                    .clone(),
+                effective_deploy_relative_path: effective_file.deploy_relative_path.clone(),
+                path_changed,
+                mrl3_rewrite_count,
+            });
+        }
+        total_mrl3_rewrite_count += mrl3_rewrite_count;
+    }
+
+    if files.is_empty() {
+        warnings.push("当前选择不会改变原始部署路径。".to_string());
+    }
+    let target_label = normalized_target_id
+        .as_deref()
+        .map(|target_id| remap_target_label(preview_group, target_id))
+        .transpose()?
+        .unwrap_or_else(|| "恢复导入时的原始目标".to_string());
+    let source_label = remap_source_label(current_group);
+    let changed_file_count = files.len();
+
+    Ok(ModRemapPlan {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        group_key: group_key.to_string(),
+        source_label,
+        target_id: normalized_target_id,
+        target_label,
+        changed_file_count,
+        mrl3_rewrite_count: total_mrl3_rewrite_count,
+        files,
+        warnings,
+        message: format!(
+            "本次改绑会改变 {changed_file_count} 个部署文件，并精确修正 {total_mrl3_rewrite_count} 条 MRL3 贴图路径。"
+        ),
+    })
+}
+
+fn apply_mod_remap_from(
+    installed_root: &Path,
+    mod_id: &str,
+    group_key: &str,
+    target_id: Option<String>,
+) -> Result<ModRemapApplyResult, String> {
+    let plan = preview_mod_remap_from(installed_root, mod_id, group_key, target_id.clone())?;
+    let mut context = load_installed_manifest(installed_root, mod_id)?;
+    ensure_manifest_can_remap(&context.manifest)?;
+    refresh_manifest_model_replacements(&mut context.manifest)?;
+    let replacements = context.manifest.model_replacements.clone();
+    let (groups, _) = build_model_remap_groups(&replacements, &context.manifest.model_remaps)?;
+    let group = groups
+        .iter()
+        .find(|group| group.group_key == group_key)
+        .ok_or_else(|| format!("未找到可改绑模型分组：{group_key}"))?;
+    let normalized_target_id = normalize_requested_target_id(group, target_id)?;
+    context.manifest.model_remaps = updated_model_remap_selections(
+        &context.manifest.model_remaps,
+        group,
+        normalized_target_id.clone(),
+    );
+    context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+    save_manifest(&context.manifest_path, &context.manifest)?;
+
+    Ok(ModRemapApplyResult {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        group_key: group_key.to_string(),
+        target_id: normalized_target_id,
+        selection_count: context.manifest.model_remaps.len(),
+        changed_file_count: plan.changed_file_count,
+        mrl3_rewrite_count: plan.mrl3_rewrite_count,
+        message: "模型替换目标已保存，本地 MOD 原始副本未被修改。".to_string(),
+    })
+}
+
+fn ensure_manifest_can_remap(manifest: &InstalledModManifest) -> Result<(), String> {
+    if manifest.enabled {
+        return Err("请先禁用该 MOD，再修改模型替换目标。".to_string());
+    }
+    if !manifest.deployed_files.is_empty() {
+        return Err("该 MOD 仍有部署记录，请先完成禁用清理再修改模型替换目标。".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_requested_target_id(
+    group: &ModelRemapGroup,
+    target_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let Some(target_id) = target_id else {
+        return Ok(None);
+    };
+    let target_id = target_id.trim();
+    if target_id.is_empty() {
+        return Ok(None);
+    }
+    let normalized = if group.model_kind == "slinger" && target_id.starts_with("slg") {
+        format!("slinger:{target_id}")
+    } else {
+        target_id.to_string()
+    };
+    if group.original_target_id.as_deref() == Some(normalized.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some(normalized))
+}
+
+fn updated_model_remap_selections(
+    current: &[ModelRemapSelection],
+    group: &ModelRemapGroup,
+    target_id: Option<String>,
+) -> Vec<ModelRemapSelection> {
+    let mut selections = current
+        .iter()
+        .filter(|selection| selection.group_key != group.group_key)
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(target_id) = target_id {
+        selections.push(ModelRemapSelection {
+            group_key: group.group_key.clone(),
+            target_id,
+        });
+    }
+    selections.sort_by(|left, right| left.group_key.cmp(&right.group_key));
+    selections
+}
+
+fn remap_source_label(group: &ModelRemapGroup) -> String {
+    if group.model_kind == "armor" {
+        return armor_set_label(
+            &group.source_display_names,
+            group
+                .source_model_ids
+                .first()
+                .map(String::as_str)
+                .unwrap_or("未知 ID"),
+        );
+    }
+
+    group
+        .source_display_names
+        .first()
+        .cloned()
+        .unwrap_or_else(|| group.source_model_ids.join(" + "))
+}
+
+fn remap_target_label(group: &ModelRemapGroup, target_id: &str) -> Result<String, String> {
+    let target = group
+        .targets
+        .iter()
+        .find(|target| target.target_id == target_id)
+        .ok_or_else(|| format!("目标不适用于当前分组：{target_id}"))?;
+    if group.model_kind == "armor" {
+        return Ok(armor_set_label(&target.display_names, &target.model_id));
+    }
+
+    Ok(target
+        .display_names
+        .first()
+        .cloned()
+        .unwrap_or_else(|| target.model_id.clone()))
+}
+
+fn armor_set_label(display_names: &[String], model_id: &str) -> String {
+    for display_name in display_names {
+        for suffix in ["·头部", "·身体", "·腕部", "·腰部", "·脚部"] {
+            if let Some(set_name) = display_name.strip_suffix(suffix) {
+                if !set_name.is_empty() {
+                    return format!("{set_name}（套装）");
+                }
+            }
+        }
+    }
+
+    format!("防具套装 · {model_id}")
+}
+
+fn effective_remap_files_for_manifest(
+    manifest: &InstalledModManifest,
+    replacements: &[ModelReplacement],
+) -> Result<Vec<EffectiveRemapFile>, String> {
+    let paths = manifest
+        .files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
+    build_effective_remap_files(&paths, replacements, &manifest.model_remaps)
+}
+
+fn effective_installed_files_for_manifest(
+    manifest: &InstalledModManifest,
+    replacements: &[ModelReplacement],
+) -> Result<Vec<EffectiveInstalledModFile>, String> {
+    effective_remap_files_for_manifest(manifest, replacements)?
+        .into_iter()
+        .map(|effective| {
+            let installed_file = manifest
+                .files
+                .get(effective.file_index)
+                .cloned()
+                .ok_or_else(|| "有效部署文件索引超出范围。".to_string())?;
+            Ok(EffectiveInstalledModFile {
+                installed_file,
+                deploy_relative_path: effective.deploy_relative_path,
+                texture_path_rewrites: effective.texture_path_rewrites,
+            })
+        })
+        .collect()
+}
+
+fn effective_installed_files_for_context(
+    context: &InstalledManifestContext,
+) -> Result<Vec<EffectiveInstalledModFile>, String> {
+    let replacements = model_replacements_for_manifest(&context.manifest)?;
+    effective_installed_files_for_manifest(&context.manifest, &replacements)
+}
+
+fn preview_mrl3_rewrite_count(
+    source_path: &Path,
+    file: &EffectiveInstalledModFile,
+) -> Result<usize, String> {
+    if !path_has_extension(source_path, "mrl3") || file.texture_path_rewrites.is_empty() {
+        return Ok(0);
+    }
+    let bytes = fs::read(source_path).map_err(|error| {
+        format!(
+            "无法读取用于改绑预览的 MRL3 文件 {}：{error}",
+            source_path.display()
+        )
+    })?;
+    rewrite_mrl3_texture_paths(&bytes, &file.texture_path_rewrites)
+        .map(|(_, count)| count)
+        .map_err(|error| format!("无法预览 MRL3 文件 {}：{error}", source_path.display()))
+}
+
+fn deploy_effective_file(
+    context: &InstalledManifestContext,
+    file: &EffectiveInstalledModFile,
+    target_path: &Path,
+) -> Result<(), String> {
+    let source_path = source_path_for_installed_file(context, &file.installed_file)?;
+    if path_has_extension(&source_path, "mrl3") && !file.texture_path_rewrites.is_empty() {
+        let source_bytes = fs::read(&source_path)
+            .map_err(|error| format!("无法读取 MRL3 文件 {}：{error}", source_path.display()))?;
+        let (output, _) = rewrite_mrl3_texture_paths(&source_bytes, &file.texture_path_rewrites)
+            .map_err(|error| format!("无法改绑 MRL3 文件 {}：{error}", source_path.display()))?;
+        fs::write(target_path, output).map_err(|error| {
+            format!(
+                "无法把改绑后的 MRL3 文件 {} 部署到 {}：{error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+    } else {
+        fs::copy(&source_path, target_path).map_err(|error| {
+            format!(
+                "无法把 {} 部署到 {}：{error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn path_has_extension(path: &Path, extension: &str) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
 }
 
 fn preview_enable_mod_from(
@@ -1793,8 +2257,8 @@ fn enable_mod_from(
     let deployed_at = unix_seconds_now()?;
     let mut deployed_files = Vec::new();
 
-    for file in &context.manifest.files {
-        let source_path = source_path_for_installed_file(&context, file)?;
+    let effective_files = effective_installed_files_for_context(&context)?;
+    for file in &effective_files {
         let target_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
         let target_path = game_root.join(target_relative_path);
 
@@ -1807,13 +2271,7 @@ fn enable_mod_from(
             })?;
         }
 
-        fs::copy(&source_path, &target_path).map_err(|error| {
-            format!(
-                "Could not deploy {} to {}: {error}",
-                source_path.display(),
-                target_path.display()
-            )
-        })?;
+        deploy_effective_file(&context, file, &target_path)?;
 
         deployed_files.push(DeployedModFile {
             deploy_relative_path: file.deploy_relative_path.clone(),
@@ -1853,9 +2311,7 @@ fn disable_mod_from(
 ) -> Result<ModDeploymentResult, String> {
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     let deployed_files = context.manifest.deployed_files.clone();
-    let disabled_file_paths = context
-        .manifest
-        .files
+    let disabled_file_paths = deployed_files
         .iter()
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
@@ -2093,7 +2549,7 @@ fn preview_apply_conflict_order_from(
     let store = read_conflict_order_store(installed_root)?;
     let report = build_mod_conflict_report(&contexts, &store)?;
     let group = find_conflict_group(&report, group_id)?;
-    let conflict_paths = conflict_paths_for_group(&contexts, group);
+    let conflict_paths = conflict_paths_for_group(&contexts, group)?;
     let deployed_file_index = deployed_file_index(installed_root)?;
     let mut warnings = Vec::new();
     let mut requires_overwrite_confirmation = false;
@@ -2159,7 +2615,7 @@ fn apply_conflict_order_from(
     let store = read_conflict_order_store(installed_root)?;
     let report = build_mod_conflict_report(&contexts, &store)?;
     let group = find_conflict_group(&report, group_id)?;
-    let conflict_paths = conflict_paths_for_group(&contexts, group);
+    let conflict_paths = conflict_paths_for_group(&contexts, group)?;
     let deployed_at = unix_seconds_now()?;
     let mut applied_file_count = 0;
 
@@ -2171,17 +2627,13 @@ fn apply_conflict_order_from(
             .iter()
             .position(|context| context.manifest.id == winner_mod_id)
             .ok_or_else(|| format!("Conflict winner was not found: {winner_mod_id}"))?;
-        let source_file = contexts[winner_index]
-            .manifest
-            .files
-            .iter()
+        let source_file = effective_installed_files_for_context(&contexts[winner_index])?
+            .into_iter()
             .find(|file| {
                 conflict_path_key(&file.deploy_relative_path)
                     == conflict_path_key(&conflict_path.deploy_relative_path)
             })
-            .cloned()
             .ok_or_else(|| "Conflict winner does not contain the selected file.".to_string())?;
-        let source_path = source_path_for_installed_file(&contexts[winner_index], &source_file)?;
         let target_path = game_root.join(relative_string_to_path(
             &conflict_path.deploy_relative_path,
         )?);
@@ -2195,13 +2647,7 @@ fn apply_conflict_order_from(
             })?;
         }
 
-        fs::copy(&source_path, &target_path).map_err(|error| {
-            format!(
-                "Could not apply conflict winner {} to {}: {error}",
-                source_path.display(),
-                target_path.display()
-            )
-        })?;
+        deploy_effective_file(&contexts[winner_index], &source_file, &target_path)?;
 
         for context in &mut contexts {
             context.manifest.deployed_files.retain(|file| {
@@ -2238,7 +2684,7 @@ fn build_mod_conflict_report(
     contexts: &[InstalledManifestContext],
     store: &ConflictOrderStore,
 ) -> Result<ModConflictReport, String> {
-    let conflict_paths = collect_conflict_path_groups(contexts);
+    let conflict_paths = collect_conflict_path_groups(contexts)?;
     let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
 
     for conflict_path in &conflict_paths {
@@ -2365,7 +2811,10 @@ fn shared_model_targets_for_group(
         .iter()
         .filter(|context| participant_ids.contains(&context.manifest.id))
     {
-        for replacement in model_replacements_for_manifest(&context.manifest)? {
+        let original_replacements = model_replacements_for_manifest(&context.manifest)?;
+        for replacement in
+            effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?
+        {
             let key = (replacement.model_kind.clone(), replacement.model_id.clone());
             let target = targets
                 .entry(key)
@@ -2418,7 +2867,9 @@ fn find_conflict_group<'a>(
         .ok_or_else(|| format!("No conflict group was found for: {group_id}"))
 }
 
-fn collect_conflict_path_groups(contexts: &[InstalledManifestContext]) -> Vec<ConflictPathGroup> {
+fn collect_conflict_path_groups(
+    contexts: &[InstalledManifestContext],
+) -> Result<Vec<ConflictPathGroup>, String> {
     let mut participants_by_path: HashMap<String, (String, HashSet<String>)> = HashMap::new();
 
     for context in contexts {
@@ -2426,7 +2877,7 @@ fn collect_conflict_path_groups(contexts: &[InstalledManifestContext]) -> Vec<Co
             continue;
         }
 
-        for file in &context.manifest.files {
+        for file in effective_installed_files_for_context(context)? {
             participants_by_path
                 .entry(conflict_path_key(&file.deploy_relative_path))
                 .or_insert_with(|| (file.deploy_relative_path.clone(), HashSet::new()))
@@ -2454,7 +2905,7 @@ fn collect_conflict_path_groups(contexts: &[InstalledManifestContext]) -> Vec<Co
         conflict_path_key(&left.deploy_relative_path)
             .cmp(&conflict_path_key(&right.deploy_relative_path))
     });
-    groups
+    Ok(groups)
 }
 
 fn conflict_group_id(participant_ids: &[String]) -> String {
@@ -2491,21 +2942,21 @@ fn find_best_stored_order<'a>(
 fn conflict_paths_for_group(
     contexts: &[InstalledManifestContext],
     group: &ModConflictGroup,
-) -> Vec<ConflictPathGroup> {
+) -> Result<Vec<ConflictPathGroup>, String> {
     let participant_ids = group
         .participants
         .iter()
         .map(|participant| participant.mod_id.as_str())
         .collect::<HashSet<_>>();
 
-    collect_conflict_path_groups(contexts)
+    Ok(collect_conflict_path_groups(contexts)?
         .into_iter()
         .filter(|path| {
             path.participant_ids
                 .iter()
                 .any(|participant_id| participant_ids.contains(participant_id.as_str()))
         })
-        .collect()
+        .collect())
 }
 
 fn winner_for_conflict_path<'a>(
@@ -2600,6 +3051,15 @@ fn restore_enabled_versions_for_paths(
     let deployed_at = unix_seconds_now()?;
     let mut seen_paths = HashSet::new();
     let mut changed = false;
+    let effective_files_by_mod = contexts
+        .iter()
+        .map(|context| {
+            Ok((
+                context.manifest.id.clone(),
+                effective_installed_files_for_context(context)?,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
 
     for deploy_relative_path in deploy_relative_paths {
         let path_key = conflict_path_key(deploy_relative_path);
@@ -2612,10 +3072,10 @@ fn restore_enabled_versions_for_paths(
             .iter()
             .filter(|context| {
                 context.manifest.enabled
-                    && context
-                        .manifest
-                        .files
-                        .iter()
+                    && effective_files_by_mod
+                        .get(&context.manifest.id)
+                        .into_iter()
+                        .flatten()
                         .any(|file| conflict_path_key(&file.deploy_relative_path) == path_key)
             })
             .map(|context| ModConflictParticipant {
@@ -2644,16 +3104,15 @@ fn restore_enabled_versions_for_paths(
         else {
             continue;
         };
-        let Some(source_file) = contexts[winner_index]
-            .manifest
-            .files
-            .iter()
+        let Some(source_file) = effective_files_by_mod
+            .get(&winner_mod_id)
+            .into_iter()
+            .flatten()
             .find(|file| conflict_path_key(&file.deploy_relative_path) == path_key)
             .cloned()
         else {
             continue;
         };
-        let source_path = source_path_for_installed_file(&contexts[winner_index], &source_file)?;
         let target_path = game_root.join(relative_string_to_path(deploy_relative_path)?);
         let copy_result = (|| {
             if let Some(parent) = target_path.parent() {
@@ -2665,13 +3124,7 @@ fn restore_enabled_versions_for_paths(
                 })?;
             }
 
-            fs::copy(&source_path, &target_path).map_err(|error| {
-                format!(
-                    "Could not restore enabled MOD file {} to {}: {error}",
-                    source_path.display(),
-                    target_path.display()
-                )
-            })?;
+            deploy_effective_file(&contexts[winner_index], &source_file, &target_path)?;
             Ok::<(), String>(())
         })();
 
@@ -2794,8 +3247,10 @@ fn build_deployment_plan(
     let mut warnings = Vec::new();
     let mut requires_overwrite_confirmation = false;
 
-    for file in &context.manifest.files {
-        let source_path = source_path_for_installed_file(context, file)?;
+    let effective_files = effective_installed_files_for_context(context)?;
+    for file in &effective_files {
+        let source_path = source_path_for_installed_file(context, &file.installed_file)?;
+        preview_mrl3_rewrite_count(&source_path, file)?;
         let target_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
         let target_path = game_root.join(target_relative_path);
         let target_key = deployment_key(&target_path);
@@ -2855,7 +3310,7 @@ fn build_deployment_plan(
         name: manifest_display_name(&context.manifest),
         status: status.to_string(),
         message: message.to_string(),
-        file_count: context.manifest.files.len(),
+        file_count: effective_files.len(),
         files,
         warnings,
         requires_overwrite_confirmation,
@@ -3806,16 +4261,33 @@ mod tests {
     };
 
     use super::{
-        apply_conflict_order_from, clear_category_override_from_manifests, clear_import_staging,
-        disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
-        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
-        list_installed_mods_from, move_conflict_participant_from, preview_disable_mod_from,
-        preview_enable_mod_from, preview_mod_import, preview_restore_all_mods_from,
+        apply_conflict_order_from, apply_mod_remap_from, armor_set_label,
+        clear_category_override_from_manifests, clear_import_staging, disable_mod_from,
+        enable_mod_from, get_mod_conflict_report_from, install_mod_from_candidate_into,
+        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
+        move_conflict_participant_from, preview_disable_mod_from, preview_enable_mod_from,
+        preview_mod_import, preview_mod_remap_from, preview_restore_all_mods_from,
         preview_uninstall_mod_from, read_conflict_order_store, remove_mod_from_conflict_orders,
         restore_all_mods_from, save_user_mod_category_store, uninstall_mod_from,
         validate_archive_path, UserModCategory, UserModCategoryStore,
         USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn summarizes_complete_armor_target_as_set_name() {
+        let display_names = vec![
+            "【冰狼】服装·头部".to_string(),
+            "【冰狼】服装·身体".to_string(),
+            "【冰狼】服装·腕部".to_string(),
+            "【冰狼】服装·腰部".to_string(),
+            "【冰狼】服装·脚部".to_string(),
+        ];
+
+        assert_eq!(
+            armor_set_label(&display_names, "pl105_0000"),
+            "【冰狼】服装（套装）"
+        );
+    }
 
     #[test]
     fn previews_native_pc_directory() {
@@ -4120,6 +4592,47 @@ mod tests {
         assert_eq!(hair.model_id, "hair100");
         assert_eq!(hair.game_ids, ["1-1"]);
         assert_eq!(hair.display_names, ["发型 1-1"]);
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn refreshes_partial_armor_recognition_from_schema_ten_manifest() {
+        let root = temp_root("schema_ten_partial_armor_source");
+        let installed_root = temp_root("schema_ten_partial_armor_target");
+        for part in ["helm", "body", "arm", "wst"] {
+            write_file(
+                &root
+                    .join("nativePC/pl/f_equip/pl105_0000")
+                    .join(part)
+                    .join("mod/model.mod3"),
+            );
+        }
+
+        let result =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
+        manifest["schemaVersion"] = serde_json::Value::from(10);
+        manifest["modelReplacements"] = serde_json::json!([]);
+        fs::write(
+            &result.manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let list = list_installed_mods_from(&installed_root).unwrap();
+        let armor = list.mods[0]
+            .model_replacements
+            .iter()
+            .filter(|replacement| replacement.model_kind == "armor")
+            .collect::<Vec<_>>();
+
+        assert_eq!(armor.len(), 4);
+        assert!(armor
+            .iter()
+            .all(|replacement| replacement.model_part != "set"));
 
         cleanup(root);
         cleanup(installed_root);
@@ -5057,6 +5570,124 @@ mod tests {
 
         cleanup(first_source);
         cleanup(second_source);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn saves_armor_remap_without_modifying_the_local_library_copy() {
+        let source_root = temp_root("armor_remap_source");
+        let installed_root = temp_root("armor_remap_installed");
+        let game_root = temp_root("armor_remap_game");
+        let source_file =
+            source_root.join("nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3");
+        write_file_with_contents(&source_file, "original armor data");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let plan = preview_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl001_0000".to_string()),
+        )
+        .unwrap();
+        assert_eq!(plan.changed_file_count, 1);
+        assert_eq!(
+            plan.files[0].effective_deploy_relative_path,
+            "nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3"
+        );
+
+        apply_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl001_0000".to_string()),
+        )
+        .unwrap();
+        let local_source = PathBuf::from(&installed.content_path)
+            .join("nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3");
+        assert_eq!(
+            fs::read_to_string(&local_source).unwrap(),
+            "original armor data"
+        );
+
+        enable_mod_from(&installed_root, &game_root, &installed.mod_id, false).unwrap();
+        let effective_target =
+            game_root.join("nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3");
+        assert_eq!(
+            fs::read_to_string(&effective_target).unwrap(),
+            "original armor data"
+        );
+        assert!(!game_root
+            .join("nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3")
+            .exists());
+
+        let listed = list_installed_mods_from(&installed_root).unwrap();
+        assert_eq!(listed.mods[0].model_remap_count, 1);
+        assert!(listed.mods[0]
+            .model_replacements
+            .iter()
+            .any(|replacement| replacement.model_id == "pl001_0000"));
+        assert!(listed.mods[0]
+            .original_model_replacements
+            .iter()
+            .any(|replacement| replacement.model_id == "pl105_0000"));
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn conflict_and_disable_restore_use_effective_remap_paths() {
+        let remapped_source = temp_root("remap_conflict_first_source");
+        let original_source = temp_root("remap_conflict_second_source");
+        let installed_root = temp_root("remap_conflict_installed");
+        let game_root = temp_root("remap_conflict_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        write_file_with_contents(
+            &remapped_source.join("nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3"),
+            "remapped winner candidate",
+        );
+        write_file_with_contents(
+            &original_source.join("nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3"),
+            "original target winner",
+        );
+        let remapped =
+            install_mod_from_folder_into(root_to_string(&remapped_source), false, &installed_root)
+                .unwrap();
+        let original =
+            install_mod_from_folder_into(root_to_string(&original_source), false, &installed_root)
+                .unwrap();
+        apply_mod_remap_from(
+            &installed_root,
+            &remapped.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl001_0000".to_string()),
+        )
+        .unwrap();
+
+        enable_mod_from(&installed_root, &game_root, &remapped.mod_id, false).unwrap();
+        enable_mod_from(&installed_root, &game_root, &original.mod_id, true).unwrap();
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+        assert_eq!(report.groups.len(), 1);
+        assert!(report.groups[0]
+            .shared_model_targets
+            .iter()
+            .any(|target| target.model_id == "pl001_0000"));
+
+        disable_mod_from(&installed_root, &game_root, &original.mod_id).unwrap();
+        let target = game_root.join("nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3");
+        assert_eq!(
+            fs::read_to_string(target).unwrap(),
+            "remapped winner candidate"
+        );
+
+        cleanup(remapped_source);
+        cleanup(original_source);
         cleanup(installed_root);
         cleanup(game_root);
     }

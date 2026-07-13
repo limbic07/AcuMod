@@ -97,6 +97,72 @@ export interface InstalledModSummary {
   detectionMethod: string;
   installedAtUnixSeconds: number;
   modelReplacements: ModelReplacement[];
+  originalModelReplacements: ModelReplacement[];
+  modelRemapCount: number;
+}
+
+export interface ModelRemapTarget {
+  targetId: string;
+  modelId: string;
+  modelPaths: string[];
+  gameIds: string[];
+  displayNames: string[];
+  affectedParts: string[];
+}
+
+export interface ModelRemapGroup {
+  groupKey: string;
+  modelKind: string;
+  subKind: string;
+  sourceModelIds: string[];
+  sourceGameIds: string[];
+  sourceDisplayNames: string[];
+  sourceAffectedParts: string[];
+  originalTargetId: string | null;
+  selectedTargetId: string | null;
+  allowsManualTarget: boolean;
+  targets: ModelRemapTarget[];
+}
+
+export interface ModRemapDetails {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  groups: ModelRemapGroup[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModRemapPlanFile {
+  sourceDeployRelativePath: string;
+  effectiveDeployRelativePath: string;
+  pathChanged: boolean;
+  mrl3RewriteCount: number;
+}
+
+export interface ModRemapPlan {
+  modId: string;
+  name: string;
+  groupKey: string;
+  sourceLabel: string;
+  targetId: string | null;
+  targetLabel: string;
+  changedFileCount: number;
+  mrl3RewriteCount: number;
+  files: ModRemapPlanFile[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModRemapApplyResult {
+  modId: string;
+  name: string;
+  groupKey: string;
+  targetId: string | null;
+  selectionCount: number;
+  changedFileCount: number;
+  mrl3RewriteCount: number;
+  message: string;
 }
 
 export interface InstalledModList {
@@ -334,6 +400,34 @@ export function deleteUserModCategory(
 export function openInstalledModFolder(modId: string): Promise<void> {
   return invoke<void>("open_installed_mod_folder", {
     modId,
+  });
+}
+
+export function getModRemapDetails(modId: string): Promise<ModRemapDetails> {
+  return invoke<ModRemapDetails>("get_mod_remap_details", { modId });
+}
+
+export function previewModRemap(
+  modId: string,
+  groupKey: string,
+  targetId: string | null,
+): Promise<ModRemapPlan> {
+  return invoke<ModRemapPlan>("preview_mod_remap", {
+    modId,
+    groupKey,
+    targetId,
+  });
+}
+
+export function applyModRemap(
+  modId: string,
+  groupKey: string,
+  targetId: string | null,
+): Promise<ModRemapApplyResult> {
+  return invoke<ModRemapApplyResult>("apply_mod_remap", {
+    modId,
+    groupKey,
+    targetId,
   });
 }
 

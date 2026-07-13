@@ -15,6 +15,7 @@ import {
   type GameDirectoryStatus,
 } from "./api/game";
 import {
+  applyModRemap,
   applyConflictOrder,
   createUserModCategory,
   deleteUserModCategory,
@@ -22,6 +23,7 @@ import {
   enableMod,
   getModConflictReport,
   getModLibraryStatus,
+  getModRemapDetails,
   installModFromArchive,
   installModFromCandidate,
   installModFromFolder,
@@ -33,6 +35,7 @@ import {
   previewDisableMod,
   previewEnableMod,
   previewModImport,
+  previewModRemap,
   previewRestoreAllMods,
   previewUninstallMod,
   renameUserModCategory,
@@ -51,6 +54,9 @@ import {
   type ModInstallResult,
   type ModLibraryStatus,
   type ModMetadataPatch,
+  type ModRemapDetails,
+  type ModelRemapGroup,
+  type ModRemapPlan,
   type ModelReplacement,
   type ModUninstallPlan,
   type ModUninstallResult,
@@ -76,6 +82,14 @@ const conflictReport = ref<ModConflictReport | null>(null);
 const userModCategories = ref<UserModCategory[]>([]);
 const conflictOrderPlan = ref<ApplyConflictOrderPlan | null>(null);
 const conflictOrderResult = ref<ApplyConflictOrderResult | null>(null);
+const remapDetails = ref<ModRemapDetails | null>(null);
+const remapPlan = ref<ModRemapPlan | null>(null);
+const selectedRemapGroupKey = ref("");
+const selectedRemapTargetId = ref("");
+const manualSlingerTargetId = ref("");
+const remapError = ref("");
+const isLoadingRemap = ref(false);
+const isApplyingRemap = ref(false);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
@@ -311,6 +325,9 @@ const selectedConflictGroup = computed(() =>
     (group) => group.groupId === selectedConflictGroupId.value,
   ),
 );
+const selectedRemapGroup = computed(() =>
+  remapDetails.value?.groups.find((group) => group.groupKey === selectedRemapGroupKey.value),
+);
 
 function modelReplacementTitle(replacement: ModelReplacement) {
   if (replacement.modelKind === "weapon") {
@@ -383,11 +400,19 @@ function summarizeSharedModelTarget(target: {
   modelId: string;
   displayNames: string[];
 }) {
+  if (target.modelKind === "armor" && target.subKind.includes("防具套装")) {
+    return `防具 · ${armorSetTargetLabel(target)}`;
+  }
+
   const name = target.displayNames[0] ?? target.modelId;
   return `${modelKindLabel(target.modelKind)} · ${target.subKind} · ${name}`;
 }
 
 function summarizeModelNames(replacement: ModelReplacement) {
+  if (replacement.modelKind === "armor" && replacement.modelPart === "set") {
+    return armorSetTargetLabel(replacement);
+  }
+
   if (!replacement.displayNames.length) {
     return replacement.recognitionSource === "pathPattern"
       ? "当前 ID 表暂无名称，已按资源路径识别"
@@ -399,6 +424,17 @@ function summarizeModelNames(replacement: ModelReplacement) {
   return remainingCount > 0
     ? `${visibleNames.join("、")}，另有 ${remainingCount} 个共用模型名称`
     : visibleNames.join("、");
+}
+
+function armorSetTargetLabel(target: { displayNames: string[]; modelId: string }) {
+  for (const name of target.displayNames) {
+    const setName = name.replace(/[·・](?:头部|身体|腕部|腰部|脚部)$/u, "");
+    if (setName !== name && setName) {
+      return `${setName}（套装）`;
+    }
+  }
+
+  return `防具套装 · ${target.modelId}`;
 }
 
 function summarizeGameIds(replacement: ModelReplacement) {
@@ -414,6 +450,10 @@ function summarizeGameIds(replacement: ModelReplacement) {
 }
 
 function summarizeAffectedParts(replacement: ModelReplacement) {
+  if (replacement.modelKind === "armor" && replacement.modelPart === "set") {
+    return "";
+  }
+
   return replacement.affectedParts.length
     ? `替换部位：${replacement.affectedParts.join("、")}`
     : "";
@@ -899,6 +939,162 @@ async function showInstalledModFolder(mod: InstalledModSummary) {
     modLibraryError.value = error instanceof Error ? error.message : String(error);
   } finally {
     openingModFolderId.value = "";
+  }
+}
+
+function remapTargetOptionLabel(group: ModelRemapGroup, targetId: string) {
+  const target = group.targets.find((candidate) => candidate.targetId === targetId);
+  if (!target) {
+    return targetId;
+  }
+
+  if (group.modelKind === "armor") {
+    const setLabel = armorSetTargetLabel(target);
+    return setLabel.includes(target.modelId) ? setLabel : `${setLabel} · ${target.modelId}`;
+  }
+
+  const displayName = target.displayNames[0] ?? target.modelId;
+  const sharedCount = Math.max(target.displayNames.length - 1, 0);
+  return sharedCount ? `${displayName} 等 ${target.displayNames.length} 个名称 · ${target.modelId}` : `${displayName} · ${target.modelId}`;
+}
+
+function remapGroupSourceLabel(group: ModelRemapGroup) {
+  if (group.modelKind === "armor") {
+    return armorSetTargetLabel({
+      displayNames: group.sourceDisplayNames,
+      modelId: group.sourceModelIds[0] ?? "未知 ID",
+    });
+  }
+
+  return group.sourceDisplayNames[0] ?? group.sourceModelIds.join(" + ");
+}
+
+function selectRemapGroup(groupKey: string) {
+  selectedRemapGroupKey.value = groupKey;
+  const group = remapDetails.value?.groups.find((candidate) => candidate.groupKey === groupKey);
+  selectedRemapTargetId.value = group?.selectedTargetId ?? "";
+  manualSlingerTargetId.value =
+    group?.modelKind === "slinger" && group.selectedTargetId?.startsWith("slinger:")
+      ? group.selectedTargetId.slice("slinger:".length)
+      : "";
+  remapPlan.value = null;
+  remapError.value = "";
+}
+
+function updateRemapGroup(event: Event) {
+  selectRemapGroup((event.target as HTMLSelectElement).value);
+}
+
+function updateRemapTarget(event: Event) {
+  selectedRemapTargetId.value = (event.target as HTMLSelectElement).value;
+  manualSlingerTargetId.value = "";
+  remapPlan.value = null;
+  remapError.value = "";
+}
+
+function updateManualSlingerTarget(event: Event) {
+  manualSlingerTargetId.value = (event.target as HTMLInputElement).value;
+  remapPlan.value = null;
+  remapError.value = "";
+}
+
+function requestedRemapTargetId() {
+  const group = selectedRemapGroup.value;
+  if (!group) {
+    return null;
+  }
+  const manualTarget = manualSlingerTargetId.value.trim().toLowerCase();
+  if (group.modelKind === "slinger" && manualTarget) {
+    return manualTarget;
+  }
+  return selectedRemapTargetId.value || null;
+}
+
+async function openRemapManager(mod: InstalledModSummary) {
+  isLoadingRemap.value = true;
+  remapDetails.value = null;
+  remapError.value = "";
+  remapPlan.value = null;
+
+  try {
+    remapDetails.value = await getModRemapDetails(mod.id);
+    modLibraryError.value = "";
+    const firstGroup = remapDetails.value.groups[0];
+    selectedRemapGroupKey.value = "";
+    if (firstGroup) {
+      selectRemapGroup(firstGroup.groupKey);
+    }
+  } catch (error) {
+    remapError.value = error instanceof Error ? error.message : String(error);
+    modLibraryError.value = remapError.value;
+  } finally {
+    isLoadingRemap.value = false;
+  }
+}
+
+function closeRemapManager(force = false) {
+  if (isApplyingRemap.value && !force) {
+    return;
+  }
+  remapDetails.value = null;
+  remapPlan.value = null;
+  selectedRemapGroupKey.value = "";
+  selectedRemapTargetId.value = "";
+  manualSlingerTargetId.value = "";
+  remapError.value = "";
+}
+
+async function previewSelectedRemap() {
+  const details = remapDetails.value;
+  const group = selectedRemapGroup.value;
+  if (!details || !group) {
+    return;
+  }
+
+  isLoadingRemap.value = true;
+  remapError.value = "";
+  try {
+    remapPlan.value = await previewModRemap(
+      details.modId,
+      group.groupKey,
+      requestedRemapTargetId(),
+    );
+  } catch (error) {
+    remapPlan.value = null;
+    remapError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isLoadingRemap.value = false;
+  }
+}
+
+async function applySelectedRemap() {
+  const details = remapDetails.value;
+  const group = selectedRemapGroup.value;
+  const plan = remapPlan.value;
+  if (!details || !group || !plan) {
+    return;
+  }
+
+  const shouldApply = window.confirm(
+    `确认将“${plan.sourceLabel}”调整为“${plan.targetLabel}”？\n将改变 ${plan.changedFileCount} 个部署文件，并修正 ${plan.mrl3RewriteCount} 条 MRL3 贴图路径。本地 MOD 原文件不会修改。`,
+  );
+  if (!shouldApply) {
+    return;
+  }
+
+  isApplyingRemap.value = true;
+  remapError.value = "";
+  try {
+    await applyModRemap(details.modId, group.groupKey, plan.targetId);
+    await refreshModViews();
+    closeRemapManager(true);
+  } catch (error) {
+    remapError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isApplyingRemap.value = false;
+    if (remapDetails.value === null) {
+      remapPlan.value = null;
+    }
   }
 }
 
@@ -1449,6 +1645,7 @@ onBeforeUnmount(() => {
           @open-folder="showInstalledModFolder"
           @enable="enableInstalledMod"
           @disable="disableInstalledMod"
+          @manage-remap="openRemapManager"
           @uninstall="uninstallInstalledMod"
         />
       </div>
@@ -1704,6 +1901,106 @@ onBeforeUnmount(() => {
     @rename="renameUserCategory"
     @delete="deleteUserCategory"
   />
+
+  <div v-if="remapDetails" class="dialog-backdrop" role="presentation">
+    <section class="confirm-dialog remap-dialog" role="dialog" aria-modal="true" aria-labelledby="remap-dialog-title">
+      <div class="remap-dialog-heading">
+        <div>
+          <h2 id="remap-dialog-title">模型替换目标</h2>
+          <p>{{ remapDetails.name }}</p>
+        </div>
+        <button
+          type="button"
+          class="dialog-close-button"
+          :disabled="isApplyingRemap"
+          aria-label="关闭"
+          data-tooltip="关闭"
+          @click="closeRemapManager()"
+        >
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+
+      <ul v-if="remapDetails.warnings.length" class="compact-list remap-warnings">
+        <li v-for="warning in remapDetails.warnings" :key="warning"><span>{{ warning }}</span></li>
+      </ul>
+
+      <p v-if="remapDetails.enabled" class="hint remap-disabled-hint">{{ remapDetails.message }}</p>
+
+      <template v-if="selectedRemapGroup">
+        <div class="remap-fields">
+          <label>
+            <span>替换分组</span>
+            <select :value="selectedRemapGroupKey" :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled" @change="updateRemapGroup">
+              <option v-for="group in remapDetails.groups" :key="group.groupKey" :value="group.groupKey">
+                {{ group.subKind }} · {{ remapGroupSourceLabel(group) }}
+              </option>
+            </select>
+          </label>
+
+          <div class="remap-source">
+            <span>导入时目标</span>
+            <strong>{{ remapGroupSourceLabel(selectedRemapGroup) }}</strong>
+            <small>{{ selectedRemapGroup.sourceModelIds.join(" + ") }}</small>
+          </div>
+
+          <label>
+            <span>部署目标</span>
+            <select :value="selectedRemapTargetId" :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled" @change="updateRemapTarget">
+              <option value="">恢复导入时目标</option>
+              <option v-for="target in selectedRemapGroup.targets" :key="target.targetId" :value="target.targetId">
+                {{ remapTargetOptionLabel(selectedRemapGroup, target.targetId) }}
+              </option>
+            </select>
+          </label>
+
+          <label v-if="selectedRemapGroup.allowsManualTarget">
+            <span>自定义投射器 ID</span>
+            <input
+              :value="manualSlingerTargetId"
+              :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled"
+              placeholder="例如 slg106_0000"
+              @input="updateManualSlingerTarget"
+            />
+          </label>
+        </div>
+
+        <p v-if="remapError" class="error">{{ remapError }}</p>
+
+        <section v-if="remapPlan" class="remap-plan">
+          <div class="remap-plan-summary">
+            <span>{{ remapPlan.sourceLabel }}</span>
+            <strong aria-hidden="true">&#8594;</strong>
+            <span>{{ remapPlan.targetLabel }}</span>
+          </div>
+          <p>
+            {{ remapPlan.changedFileCount }} 个部署文件变化，{{ remapPlan.mrl3RewriteCount }} 条 MRL3 贴图路径修正
+          </p>
+          <ul v-if="remapPlan.warnings.length" class="compact-list remap-warnings">
+            <li v-for="warning in remapPlan.warnings" :key="warning"><span>{{ warning }}</span></li>
+          </ul>
+          <div v-if="remapPlan.files.length" class="remap-file-list">
+            <div v-for="file in remapPlan.files" :key="`${file.sourceDeployRelativePath}-${file.effectiveDeployRelativePath}`">
+              <span>{{ file.sourceDeployRelativePath }}</span>
+              <strong>{{ file.effectiveDeployRelativePath }}</strong>
+              <small v-if="file.mrl3RewriteCount">MRL3 修正 {{ file.mrl3RewriteCount }} 条</small>
+            </div>
+          </div>
+        </section>
+
+        <div class="section-actions">
+          <button type="button" class="secondary-button" :disabled="isApplyingRemap" @click="closeRemapManager()">取消</button>
+          <button type="button" class="secondary-button" :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled" @click="previewSelectedRemap">
+            {{ isLoadingRemap ? "预览中" : "生成预览" }}
+          </button>
+          <button type="button" :disabled="!remapPlan || isApplyingRemap || remapDetails.enabled" @click="applySelectedRemap">
+            {{ isApplyingRemap ? "保存中" : "确认保存" }}
+          </button>
+        </div>
+      </template>
+      <p v-else class="hint">没有可改绑的模型目标。人物语音仅保留识别。</p>
+    </section>
+  </div>
 
   <div v-if="isDragActive" class="drag-overlay">
     <div>
@@ -2552,6 +2849,143 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.remap-dialog {
+  width: min(780px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.remap-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.remap-dialog-heading > div {
+  display: grid;
+  gap: 5px;
+}
+
+.remap-dialog-heading p {
+  color: #52645f;
+}
+
+.dialog-close-button {
+  position: relative;
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  flex: 0 0 34px;
+  place-items: center;
+  border-color: #cbd8d4;
+  color: #435650;
+  background: #ffffff;
+  font-size: 1.25rem;
+}
+
+.remap-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.remap-fields label,
+.remap-source {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.remap-fields label > span,
+.remap-source > span {
+  color: #61756f;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.remap-source {
+  align-content: center;
+  min-height: 70px;
+  padding: 10px 12px;
+  border: 1px solid #dce5e2;
+  border-radius: 6px;
+  background: #f7faf9;
+}
+
+.remap-source strong,
+.remap-source small {
+  overflow-wrap: anywhere;
+}
+
+.remap-source small {
+  color: #61756f;
+}
+
+.remap-plan {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #b8d6cb;
+  border-radius: 6px;
+  background: #f2f8f5;
+}
+
+.remap-plan > p {
+  color: #52645f;
+  font-size: 0.82rem;
+}
+
+.remap-plan-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  color: #24332f;
+}
+
+.remap-plan-summary span:last-child {
+  color: #17613f;
+  font-weight: 700;
+}
+
+.remap-file-list {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid #dce8e3;
+}
+
+.remap-file-list > div {
+  display: grid;
+  gap: 3px;
+  padding: 9px 0;
+  border-bottom: 1px solid #dce8e3;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.remap-file-list span,
+.remap-file-list small {
+  color: #61756f;
+}
+
+.remap-warnings li {
+  grid-template-columns: minmax(0, 1fr);
+  border-color: #f1cf8a;
+  color: #7a4d00;
+  background: #fff7e6;
+}
+
+.remap-disabled-hint {
+  padding: 9px 11px;
+  border-left: 3px solid #c48a2c;
+  color: #694800;
+  background: #fff8e8;
+}
+
 .drag-error {
   position: fixed;
   z-index: 11;
@@ -2573,6 +3007,14 @@ dd {
 
   .workspace-content {
     padding: 16px 12px 40px;
+  }
+
+  .remap-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .remap-plan-summary {
+    grid-template-columns: 1fr;
   }
 
   .conflict-workspace {

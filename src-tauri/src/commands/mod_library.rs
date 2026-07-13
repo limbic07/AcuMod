@@ -2,9 +2,9 @@ use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
     ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
-    ModMetadataPatch, ModMetadataUpdateResult, ModUninstallPlan, ModUninstallResult,
-    RestoreAllPlan, RestoreAllResult, UserModCategory, UserModCategoryDeleteResult,
-    UserModCategoryList,
+    ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan,
+    ModUninstallPlan, ModUninstallResult, RestoreAllPlan, RestoreAllResult, UserModCategory,
+    UserModCategoryDeleteResult, UserModCategoryList,
 };
 
 #[tauri::command]
@@ -97,6 +97,34 @@ pub fn delete_user_mod_category(
 #[tauri::command]
 pub fn open_installed_mod_folder(app: tauri::AppHandle, mod_id: String) -> Result<(), String> {
     mod_library::open_installed_mod_folder(&app, mod_id)
+}
+
+#[tauri::command]
+pub fn get_mod_remap_details(
+    app: tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModRemapDetails, String> {
+    mod_library::get_mod_remap_details(&app, mod_id)
+}
+
+#[tauri::command]
+pub fn preview_mod_remap(
+    app: tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<ModRemapPlan, String> {
+    mod_library::preview_mod_remap(&app, mod_id, group_key, target_id)
+}
+
+#[tauri::command]
+pub fn apply_mod_remap(
+    app: tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<ModRemapApplyResult, String> {
+    mod_library::apply_mod_remap(&app, mod_id, group_key, target_id)
 }
 
 #[tauri::command]

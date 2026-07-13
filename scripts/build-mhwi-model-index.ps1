@@ -173,6 +173,46 @@ $weaponModels = @($weaponModelRows |
     } |
     Sort-Object { [int]$_.weaponTypeId }, modelPath, modelPart)
 
+# Recognition is grouped by one resource path, while remapping needs the main
+# and optional accessory paths that form one usable in-game appearance.
+$weaponRemapRows = foreach ($row in $weaponRows) {
+    $mainModelPath = Normalize-ModelPath $row.主模型地址
+    if ($null -eq $mainModelPath) {
+        continue
+    }
+
+    [pscustomobject]@{
+        weaponType = [string]$row.武器类型
+        weaponTypeId = [string]$row.武器类型ID
+        mainModelPath = $mainModelPath
+        accessoryModelPath = Normalize-ModelPath $row.附件模型地址
+        weaponId = [string]$row.武器ID
+        displayName = [string]$row.武器名称
+    }
+}
+
+$weaponRemapTargets = @($weaponRemapRows |
+    Group-Object weaponType, weaponTypeId, mainModelPath, accessoryModelPath |
+    ForEach-Object {
+        $first = $_.Group[0]
+        $modelPaths = @($first.mainModelPath)
+        if ($null -ne $first.accessoryModelPath) {
+            $modelPaths += $first.accessoryModelPath
+        }
+
+        [pscustomobject]@{
+            targetId = "weapon:$($first.weaponTypeId):$($first.mainModelPath)|$($first.accessoryModelPath)"
+            weaponType = $first.weaponType
+            weaponTypeId = $first.weaponTypeId
+            mainModelPath = $first.mainModelPath
+            accessoryModelPath = $first.accessoryModelPath
+            modelPaths = @($modelPaths)
+            gameIds = @(Get-SortedIds @($_.Group.weaponId))
+            displayNames = @(Get-SortedNames @($_.Group.displayName))
+        }
+    } |
+    Sort-Object { [int]$_.weaponTypeId }, mainModelPath, accessoryModelPath)
+
 $armorModelRows = foreach ($row in $armorRows) {
     $modelPath = Normalize-ModelPath $row.模型地址
     if ($null -eq $modelPath -or $row.部位名称 -eq "护石") {
@@ -203,6 +243,21 @@ $armorModels = @($armorModelRows |
         }
     } |
     Sort-Object { [int]$_.armorPartId }, modelPath)
+
+$armorRemapTargets = @($armorModelRows |
+    Group-Object modelPath |
+    ForEach-Object {
+        $first = $_.Group[0]
+        [pscustomobject]@{
+            targetId = "armor:$($first.modelPath)"
+            modelId = $first.modelPath
+            gameIds = @(Get-SortedIds @($_.Group.armorId))
+            variantIds = @(Get-SortedIds @($_.Group.layeredArmorId))
+            displayNames = @(Get-SortedNames @($_.Group.displayName))
+            affectedParts = @($_.Group | Sort-Object { [int]$_.armorPartId } | ForEach-Object { $_.armorPart } | Select-Object -Unique)
+        }
+    } |
+    Sort-Object modelId)
 
 $hairModels = @($hairSource.hairstyles |
     ForEach-Object {
@@ -380,6 +435,7 @@ $assetModelRows = @(
             }
         }
     }
+
 )
 
 $assetModels = @($assetModelRows |
@@ -406,6 +462,43 @@ $assetModels = @($assetModelRows |
     } |
     Sort-Object modelKind, modelPath, subKind)
 
+$palicoArmorRemapTargets = @($palicoArmorRows |
+    ForEach-Object {
+        $modelPath = Normalize-ModelPath $_.模型地址
+        if ($null -ne $modelPath -and $modelPath -match '^otomo/equip/(ot[0-9]{3})/(helm|body)$') {
+            [pscustomobject]@{
+                modelId = $Matches[1]
+                armorId = [string]$_.防具ID
+                displayName = [string]$_.防具名称
+                armorPart = [string]$_.部位名称
+            }
+        }
+    } |
+    Group-Object modelId |
+    ForEach-Object {
+        $first = $_.Group[0]
+        [pscustomobject]@{
+            targetId = "palicoArmor:$($first.modelId)"
+            modelId = $first.modelId
+            gameIds = @(Get-SortedIds @($_.Group.armorId))
+            displayNames = @(Get-SortedNames @($_.Group.displayName))
+            affectedParts = @($_.Group.armorPart | Sort-Object -Unique)
+        }
+    } |
+    Sort-Object modelId)
+
+$slingerRemapTargets = @($assetModels |
+    Where-Object { $_.modelKind -eq "slinger" } |
+    ForEach-Object {
+        [pscustomobject]@{
+            targetId = "slinger:$($_.modelId)"
+            modelId = $_.modelId
+            gameIds = @($_.gameIds)
+            displayNames = @($_.displayNames)
+        }
+    } |
+    Sort-Object modelId)
+
 $voiceModels = @($extendedAssetSource.voiceModels |
     ForEach-Object {
         $genderLabel = switch ([string]$_.gender) {
@@ -429,7 +522,7 @@ $voiceModels = @($extendedAssetSource.voiceModels |
     Sort-Object gender, { [int]$_.voiceNumber })
 
 $index = [ordered]@{
-    schemaVersion = 6
+    schemaVersion = 7
     gameVersion = "15.10.00"
     sourceFiles = @(
         "02_weapons.csv",
@@ -447,9 +540,13 @@ $index = [ordered]@{
     )
     sourceReferences = @($hairSource.source) + @($extendedAssetSource.sources) + @($additionalAssetSource.sources)
     weaponModels = $weaponModels
+    weaponRemapTargets = $weaponRemapTargets
     armorModels = $armorModels
+    armorRemapTargets = $armorRemapTargets
     hairModels = $hairModels
     assetModels = $assetModels
+    palicoArmorRemapTargets = $palicoArmorRemapTargets
+    slingerRemapTargets = $slingerRemapTargets
     voiceModels = $voiceModels
 }
 
@@ -458,5 +555,6 @@ $outputDirectory = Split-Path -Parent $OutputPath
 $json = $index | ConvertTo-Json -Depth 8 -Compress
 [System.IO.File]::WriteAllText($OutputPath, $json, [System.Text.UTF8Encoding]::new($false))
 
-Write-Output "Generated $($weaponModels.Count) weapon, $($armorModels.Count) armor, $($hairModels.Count) hairstyle, $($assetModels.Count) extended asset, and $($voiceModels.Count) voice entries."
+Write-Output "Generated $($weaponModels.Count) weapon recognition and $($weaponRemapTargets.Count) weapon remap entries."
+Write-Output "Generated $($armorModels.Count) armor recognition, $($armorRemapTargets.Count) armor remap, $($palicoArmorRemapTargets.Count) Palico armor remap, $($hairModels.Count) hairstyle, $($slingerRemapTargets.Count) slinger, $($assetModels.Count) extended asset, and $($voiceModels.Count) voice entries."
 Write-Output "Output: $OutputPath"

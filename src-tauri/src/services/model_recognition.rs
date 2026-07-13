@@ -671,8 +671,16 @@ fn merge_armor_set_matches(replacements: &mut Vec<ModelReplacement>) {
     for (_, mut set_parts) in armor_sets {
         set_parts.sort_by_key(|replacement| armor_part_order(&replacement.sub_kind));
 
-        if set_parts.len() == 1 {
-            remaining_replacements.push(set_parts.pop().expect("armor set has one part"));
+        let matched_parts = set_parts
+            .iter()
+            .map(|replacement| replacement.sub_kind.as_str())
+            .collect::<HashSet<_>>();
+        let is_complete_set = ["头盔", "铠甲", "护手", "腰甲", "护腿"]
+            .into_iter()
+            .all(|part| matched_parts.contains(part));
+
+        if !is_complete_set {
+            remaining_replacements.extend(set_parts);
             continue;
         }
 
@@ -1089,6 +1097,39 @@ mod tests {
         assert!(!replacements
             .iter()
             .any(|replacement| replacement.model_id == "pl126_0000"));
+    }
+
+    #[test]
+    fn keeps_partial_armor_replacements_as_specific_parts() {
+        let paths = vec![
+            "nativePC/pl/f_equip/pl105_0000/helm/mod/f_helm105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.mod3".to_string(),
+            "nativePC/pl/f_equip/pl105_0000/wst/mod/f_wst105_0000.mod3".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let armor_replacements = replacements
+            .iter()
+            .filter(|replacement| replacement.model_kind == "armor")
+            .collect::<Vec<_>>();
+
+        assert_eq!(armor_replacements.len(), 4);
+        assert!(armor_replacements
+            .iter()
+            .any(|replacement| replacement.sub_kind == "头盔"));
+        assert!(armor_replacements
+            .iter()
+            .any(|replacement| replacement.sub_kind == "铠甲"));
+        assert!(armor_replacements
+            .iter()
+            .any(|replacement| replacement.sub_kind == "护手"));
+        assert!(armor_replacements
+            .iter()
+            .any(|replacement| replacement.sub_kind == "腰甲"));
+        assert!(armor_replacements
+            .iter()
+            .all(|replacement| replacement.model_part != "set"));
     }
 
     #[test]

@@ -53,6 +53,15 @@ export interface ModelReplacement {
   variantIds: string[];
   displayNames: string[];
   affectedParts: string[];
+  associations: ModelAssociation[];
+  matchedFiles: string[];
+  recognitionSource: string;
+}
+
+export interface ModelAssociation {
+  modelKind: string;
+  modelId: string;
+  displayNames: string[];
   matchedFiles: string[];
   recognitionSource: string;
 }
@@ -138,6 +147,7 @@ export interface ModRemapPlanFile {
   effectiveDeployRelativePath: string;
   pathChanged: boolean;
   mrl3RewriteCount: number;
+  evamRewriteCount: number;
 }
 
 export interface ModRemapPlan {
@@ -149,6 +159,7 @@ export interface ModRemapPlan {
   targetLabel: string;
   changedFileCount: number;
   mrl3RewriteCount: number;
+  evamRewriteCount: number;
   files: ModRemapPlanFile[];
   warnings: string[];
   message: string;
@@ -162,6 +173,7 @@ export interface ModRemapApplyResult {
   selectionCount: number;
   changedFileCount: number;
   mrl3RewriteCount: number;
+  evamRewriteCount: number;
   message: string;
 }
 

@@ -163,11 +163,12 @@ AppData/
       installed/           已导入并由 Acumod 管理的 MOD 副本
       staging/
         imports/           压缩包解包和导入预览的暂存目录
+        downloads/         Nexus 下载中的 .part 文件和待导入归档
 ```
 
 MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装包时，需要确保软件目录对普通用户可写；如果安装到 `Program Files` 等受限目录，应提供 MOD 库位置设置或选择用户可写安装位置。
 
-`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
+`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`staging/downloads` 后续只保存 Nexus 下载中的 `.part` 文件和等待用户确认导入的归档。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
 `AcumodData/mods/categories.json` 保存用户创建的全局分类定义。每个 `installed/<mod_id>/manifest.json` 只保存可选的分类 ID 覆盖；分类定义不修改 MOD 内容。删除分类时，服务层必须先清除全部 manifest 对该分类 ID 的引用，使对应 MOD 自动回退到 ID 表推导的分类。
 
@@ -230,9 +231,11 @@ MOD 文件列表
 
 当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型必须命中头盔、铠甲、护手、腰甲和护腿五个标准部位才合并为一个套装 DTO，只有部分部位时继续返回独立 DTO。UI 遇到套装 DTO 时从官方分部位名称提取套装级名称，不得用第一条部位名称作为摘要。
 
-新导入 MOD 使用 manifest schema 12 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注和可选 `categoryOverride`。schema 1 至 11 的旧 manifest 会按当前目录规则即时重算识别结果，schema 10 以后已保存的改绑选择仍会保留。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。
+新导入 MOD 使用 manifest schema 13 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注和可选 `categoryOverride`。schema 1 至 12 的旧 manifest 会结合本地库路径和 `.evam` 内容即时重算识别结果，schema 10 以后已保存的改绑选择仍会保留。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。
 
-投射器/飞翔爪接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录。已核对条目来自原始 MOD 页面；其它规范目录只返回 `pathPattern` 底层 ID，不按防具同号猜测。普通文件名不参与投射器识别，也不识别 `Assets/gm/gm000` 下的投射器弹药。防具手臂 `.evam` 才是防具到飞翔爪 ID 的直接绑定来源，后续完整映射应解析该 26 字节文件，而不是依赖目录编号相等。
+投射器/飞翔爪接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录。已核对条目来自原始 MOD 页面；其它规范目录只返回 `pathPattern` 底层 ID，不按防具同号猜测。普通文件名不参与投射器识别，也不识别 `Assets/gm/gm000` 下的投射器弹药。
+
+防具手臂 `pl/{f,m}_equip/plNNN_NNNN/arm/mod/*.evam` 是防具到飞翔爪编号的直接绑定来源。识别器严格校验 26 字节长度、`EVAM` 标记和版本 3，再读取偏移 `0x10` 的小端编号。只有同一 MOD 内存在编号匹配的 `wp/slg` 模型时，才在该飞翔爪 `ModelReplacement.associations` 中附加关联防具；孤立 `.evam` 不产生替换结果。完整防具显示官方套装级名称，例如“【冰狼】服装”，不追加“（套装）”。
 
 `model_remap` service 从原始 `ModelReplacement` 构建可改绑分组，并按类别校验目标。manifest 只保存用户选择；本地 `content/` 始终保持导入时的单份原始文件。列表展示和部署时，Rust 即时生成有效文件路径并重新识别有效目标。
 
@@ -245,7 +248,27 @@ Vue 改绑对话框
   -> preview_enable_mod / enable_mod / conflict service 复用有效文件表
 ```
 
-目录改名之外，部分 `.mrl3` 材质文件内保存贴图资源路径。部署器只解析已验证的 MRL3 头和贴图表，对恰好对应已移动 `.tex` 文件的路径做精确替换；字符串越界、格式异常或目标路径碰撞都会阻止保存或部署。人物语音不进入该链路。
+目录改名之外，部分 `.mrl3` 材质文件内保存贴图资源路径。部署器只解析已验证的 MRL3 头和贴图表，对恰好对应已移动 `.tex` 文件的路径做精确替换；飞翔爪改绑还会在部署副本中同步修改已关联 `.evam` 的偏移 `0x10` 编号。字符串越界、EVAM 源 ID 不一致、格式异常或目标路径碰撞都会阻止保存或部署，本地 MOD 库原件始终不变。人物语音不进入该链路。
+
+## Nexus Mods 下载边界
+
+Slice 15 采用独立的 Nexus 适配层，网络协议和凭据不能进入现有 `mod_library` service：
+
+```text
+Vue 下载页
+  -> typed invoke wrapper
+  -> nexus commands
+  -> nexus auth / metadata / download services
+  -> staging/downloads/<task_id>/<file>.part
+  -> 大小与哈希校验
+  -> 现有 archive import preview
+  -> 用户确认候选分支
+  -> 本地 MOD 库 manifest
+```
+
+建议 Rust 模块为 `commands/nexus.rs`、`services/nexus/client.rs`、`auth.rs`、`download.rs` 和 `storage/credentials.rs`。Vue 不接收 API key、签名下载地址或任意磁盘目标路径，只传递后端签发的 task ID、MHW mod ID 和 file ID。
+
+Nexus 当前主线元数据接口为 API v3，但下载链接仍需要由适配层兼容现有下载接口。正式版本使用已注册 Acumod application slug 的 Nexus SSO；开发期 Personal API key 只用于本机验证。Premium 用户可直接生成下载链接，免费用户必须从 Nexus 页面取得 NXM 的临时 `key/expires`。下载完成后仍复用 Acumod 已有的解包、候选选择、游戏根目录确认和同名去重规则，不允许 Nexus command 直接写入游戏目录。
 
 ## ID 表后续用途
 
@@ -409,7 +432,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 12 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
+4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 13 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容；Slice 14 的受控改绑建立在该识别结果上。

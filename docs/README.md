@@ -75,11 +75,12 @@ Acumod 已确定只维护一套当前部署状态，不再提供多配置、状�
 - MOD 部署方式：只使用复制式部署。安装时在 Acumod 软件目录保存一份 MOD；启用时复制到 MHW 游戏目录；禁用时删除游戏目录中的已部署副本；卸载 MOD 时删除软件目录中的 MOD 副本。
 - MOD 导入方式：第一版支持文件夹导入，以及 `rar`、`zip`、`7z` 压缩包导入；当前压缩包导入使用随 Acumod 打包的 7-Zip 解包组件，不要求用户另行安装 7-Zip。解包目录只作临时识别，成功后只长期保存所选分支的一份本地库副本。
 - MOD 导入识别：优先识别 `nativePC`；缺少 `nativePC` 但出现常见 nativePC 内部目录时自动补成 `nativePC/...`；用户直接选择 `plugins`、`weapon` 等内部目录时保留目录名并映射到 `nativePC/<目录名>/...`；仍无法识别时允许用户确认按游戏根目录相对路径导入。
-- MHW 替换识别：`references/mhwi-data/curated/model-index.json` 内置维护武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪和人物语音索引；只把规范资源根目录中的文件显示为游戏内替换目标，`vfx/mod` 等附属特效资源仍部署但不冒充装备替换。投射器/飞翔爪只显示已核对的关联防具，其余保留资源 ID；`Assets/gm/gm000` 弹药资源不属于该识别范围。
+- MHW 替换识别：`references/mhwi-data/curated/model-index.json` 内置维护武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪和人物语音索引；只把规范资源根目录中的文件显示为游戏内替换目标，`vfx/mod` 等附属特效资源仍部署但不冒充装备替换。飞翔爪只在 MOD 同时包含模型和匹配 `.evam` 时显示关联防具，孤立 `.evam` 不产生识别结果；`Assets/gm/gm000` 弹药资源不属于该识别范围。
 - 单一当前配置：每个 MOD manifest 的 `enabled` 与 `deployedFiles` 表示当前实际部署状态，`conflict-orders.json` 保存冲突组覆盖顺序。旧版本留下的 `profiles.json` 不再读取或写入，也不会被程序自动删除。
 - MVP 不包含下载、更新、AI Agent 和模型改绑；MVP 后的 Slice 14 支持武器、防具、随从防具、投射器和发型改绑，人物语音继续仅识别。
 - 当前阶段能力：基于 MHW 文件 ID 表对 MOD 自动分类、搜索、筛选和浏览排序；稳定识别脸型、怪物、噗吱猪服装、家具及玩家/随从附件，并在冲突组中提示相同替换目标。
-- 当前 Slice 14：manifest schema 12 保留 schema 10 引入的改绑选择，并包含防具套装及投射器扩展识别语义；本地 MOD 原始副本不改写，有效部署计划统一驱动预览、复制和冲突检测，并精确修正 MRL3 贴图路径。
+- 当前 Slice 14：manifest schema 13 保留 schema 10 引入的改绑选择，并加入飞翔爪 `.evam` 关联；本地 MOD 原始副本不改写，有效部署计划统一驱动预览、复制和冲突检测，并精确修正 MRL3 贴图路径与 EVAM 飞翔爪绑定。
+- 下一步 Slice 15：先在传统 UI 中实现 Nexus Mods 账号验证、文件选择、受控下载和现有导入预览桥接，再把相同入口开放给 AI Agent。
 - 后续非 MVP 能力：Nexus Mods 下载和更新，以及 AI Agent 的术语感知翻译、联网搜索和受控安装。
 
 ## 实现前需要细化
@@ -88,7 +89,7 @@ Acumod 已确定只维护一套当前部署状态，不再提供多配置、状�
 
 - 社区 Wiki 发型表及衍生索引的最终发布再分发许可。
 - 后续 MHW 游戏术语表的数据来源和翻译规则。
-- 后续 Nexus Mods API、SSO 登录和 Agent 下载确认流程。
+- Nexus SSO 正式 application slug 需要在可演示测试版本完成后向 Nexus Mods 申请；开发期 Personal API key 不进入公开版本。
 
 ## 文档维护规则
 

@@ -113,11 +113,18 @@ function armorSetTargetLabel(replacement: ModelReplacement) {
   for (const name of replacement.displayNames) {
     const setName = name.replace(/[·・](?:头部|身体|腕部|腰部|脚部)$/u, "");
     if (setName !== name && setName) {
-      return `${setName}（套装）`;
+      return setName;
     }
   }
 
-  return `防具套装 · ${replacement.modelId}`;
+  return replacement.modelId;
+}
+
+function associationLabel(replacement: ModelReplacement) {
+  const armorNames = replacement.associations
+    .filter((association) => association.modelKind === "armor")
+    .map((association) => association.displayNames[0] ?? association.modelId);
+  return armorNames.length ? `关联防具：${armorNames.join("、")}` : "";
 }
 
 function replacementSummary(mod: InstalledModSummary) {
@@ -575,6 +582,9 @@ watch(
                     <span>{{ replacementTargetLabel(replacement) }}</span>
                     <small>
                       {{ replacement.gameIds.length ? `游戏 ID：${replacement.gameIds.join("、")}` : `资源 ID：${replacement.modelId}` }}
+                    </small>
+                    <small v-if="associationLabel(replacement)" class="model-association">
+                      {{ associationLabel(replacement) }}
                     </small>
                   </li>
                 </ul>

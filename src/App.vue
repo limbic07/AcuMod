@@ -248,6 +248,10 @@ const filteredInstalledMods = computed(() => {
         replacement.modelId,
         ...replacement.gameIds,
         ...replacement.displayNames,
+        ...replacement.associations.flatMap((association) => [
+          association.modelId,
+          ...association.displayNames,
+        ]),
       ]),
     ]
       .join(" ")
@@ -430,11 +434,18 @@ function armorSetTargetLabel(target: { displayNames: string[]; modelId: string }
   for (const name of target.displayNames) {
     const setName = name.replace(/[·・](?:头部|身体|腕部|腰部|脚部)$/u, "");
     if (setName !== name && setName) {
-      return `${setName}（套装）`;
+      return setName;
     }
   }
 
-  return `防具套装 · ${target.modelId}`;
+  return target.modelId;
+}
+
+function summarizeModelAssociations(replacement: ModelReplacement) {
+  const armorNames = replacement.associations
+    .filter((association) => association.modelKind === "armor")
+    .map((association) => association.displayNames[0] ?? association.modelId);
+  return armorNames.length ? `关联防具：${armorNames.join("、")}` : "";
 }
 
 function summarizeGameIds(replacement: ModelReplacement) {
@@ -1076,7 +1087,7 @@ async function applySelectedRemap() {
   }
 
   const shouldApply = window.confirm(
-    `确认将“${plan.sourceLabel}”调整为“${plan.targetLabel}”？\n将改变 ${plan.changedFileCount} 个部署文件，并修正 ${plan.mrl3RewriteCount} 条 MRL3 贴图路径。本地 MOD 原文件不会修改。`,
+    `确认将“${plan.sourceLabel}”调整为“${plan.targetLabel}”？\n将改变 ${plan.changedFileCount} 个部署文件，修正 ${plan.mrl3RewriteCount} 条 MRL3 贴图路径和 ${plan.evamRewriteCount} 个 EVAM 飞翔爪绑定。本地 MOD 原文件不会修改。`,
   );
   if (!shouldApply) {
     return;
@@ -1516,6 +1527,9 @@ onBeforeUnmount(() => {
               <template v-if="summarizeAffectedParts(replacement)">
                 · {{ summarizeAffectedParts(replacement) }}
               </template>
+            </small>
+            <small v-if="summarizeModelAssociations(replacement)">
+              {{ summarizeModelAssociations(replacement) }}
             </small>
           </li>
         </ul>
@@ -1974,7 +1988,7 @@ onBeforeUnmount(() => {
             <span>{{ remapPlan.targetLabel }}</span>
           </div>
           <p>
-            {{ remapPlan.changedFileCount }} 个部署文件变化，{{ remapPlan.mrl3RewriteCount }} 条 MRL3 贴图路径修正
+            {{ remapPlan.changedFileCount }} 个部署文件变化，{{ remapPlan.mrl3RewriteCount }} 条 MRL3 贴图路径修正，{{ remapPlan.evamRewriteCount }} 个 EVAM 飞翔爪绑定修正
           </p>
           <ul v-if="remapPlan.warnings.length" class="compact-list remap-warnings">
             <li v-for="warning in remapPlan.warnings" :key="warning"><span>{{ warning }}</span></li>
@@ -1984,6 +1998,7 @@ onBeforeUnmount(() => {
               <span>{{ file.sourceDeployRelativePath }}</span>
               <strong>{{ file.effectiveDeployRelativePath }}</strong>
               <small v-if="file.mrl3RewriteCount">MRL3 修正 {{ file.mrl3RewriteCount }} 条</small>
+              <small v-if="file.evamRewriteCount">EVAM 飞翔爪绑定修正 {{ file.evamRewriteCount }} 个</small>
             </div>
           </div>
         </section>

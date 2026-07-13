@@ -3,6 +3,7 @@
     [string]$HairSourcePath,
     [string]$ExtendedAssetSourcePath,
     [string]$AdditionalAssetSourcePath,
+    [string]$ArmorSlingerBindingSourcePath,
     [string]$OutputPath
 )
 
@@ -29,6 +30,10 @@ if ([string]::IsNullOrWhiteSpace($ExtendedAssetSourcePath)) {
 
 if ([string]::IsNullOrWhiteSpace($AdditionalAssetSourcePath)) {
     $AdditionalAssetSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/additional-assets.json"
+}
+
+if ([string]::IsNullOrWhiteSpace($ArmorSlingerBindingSourcePath)) {
+    $ArmorSlingerBindingSourcePath = Join-Path $repositoryRoot "references/mhwi-data/curated/sources/armor-slinger-bindings.json"
 }
 
 $weaponCsvPath = Join-Path $RawPackagePath "csv/02_weapons.csv"
@@ -67,6 +72,10 @@ if (-not (Test-Path -LiteralPath $ExtendedAssetSourcePath -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath $AdditionalAssetSourcePath -PathType Leaf)) {
     throw "Curated additional asset data was not found: $AdditionalAssetSourcePath"
+}
+
+if (-not (Test-Path -LiteralPath $ArmorSlingerBindingSourcePath -PathType Leaf)) {
+    throw "Curated original EVAM binding data was not found: $ArmorSlingerBindingSourcePath"
 }
 
 function Normalize-ModelPath {
@@ -131,6 +140,22 @@ $poogieRows = Import-Csv -LiteralPath $poogieCsvPath -Encoding utf8
 $hairSource = Get-Content -LiteralPath $HairSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
 $extendedAssetSource = Get-Content -LiteralPath $ExtendedAssetSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
 $additionalAssetSource = Get-Content -LiteralPath $AdditionalAssetSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
+$armorSlingerBindingSource = Get-Content -LiteralPath $ArmorSlingerBindingSourcePath -Raw -Encoding utf8 | ConvertFrom-Json
+
+if ([string]$armorSlingerBindingSource.gameVersion -ne "15.10.00") {
+    throw "Original EVAM binding data targets an unsupported game version: $($armorSlingerBindingSource.gameVersion)"
+}
+
+$armorSlingerBindings = @($armorSlingerBindingSource.bindings |
+    ForEach-Object {
+        [pscustomobject]@{
+            armorModelId = [string]$_.armorModelId
+            gender = [string]$_.gender
+            slingerId = $_.slingerId
+            slingerModelId = $_.slingerModelId
+        }
+    } |
+    Sort-Object armorModelId, gender)
 
 $weaponModelRows = foreach ($row in $weaponRows) {
     $mainModelPath = Normalize-ModelPath $row.主模型地址
@@ -522,7 +547,7 @@ $voiceModels = @($extendedAssetSource.voiceModels |
     Sort-Object gender, { [int]$_.voiceNumber })
 
 $index = [ordered]@{
-    schemaVersion = 7
+    schemaVersion = 8
     gameVersion = "15.10.00"
     sourceFiles = @(
         "02_weapons.csv",
@@ -536,9 +561,10 @@ $index = [ordered]@{
         "18_poogie.csv",
         "curated/sources/hairstyles.json",
         "curated/sources/extended-assets.json",
-        "curated/sources/additional-assets.json"
+        "curated/sources/additional-assets.json",
+        "curated/sources/armor-slinger-bindings.json"
     )
-    sourceReferences = @($hairSource.source) + @($extendedAssetSource.sources) + @($additionalAssetSource.sources)
+    sourceReferences = @($hairSource.source) + @($extendedAssetSource.sources) + @($additionalAssetSource.sources) + @($armorSlingerBindingSource.source)
     weaponModels = $weaponModels
     weaponRemapTargets = $weaponRemapTargets
     armorModels = $armorModels
@@ -547,6 +573,7 @@ $index = [ordered]@{
     assetModels = $assetModels
     palicoArmorRemapTargets = $palicoArmorRemapTargets
     slingerRemapTargets = $slingerRemapTargets
+    armorSlingerBindings = $armorSlingerBindings
     voiceModels = $voiceModels
 }
 
@@ -557,4 +584,5 @@ $json = $index | ConvertTo-Json -Depth 8 -Compress
 
 Write-Output "Generated $($weaponModels.Count) weapon recognition and $($weaponRemapTargets.Count) weapon remap entries."
 Write-Output "Generated $($armorModels.Count) armor recognition, $($armorRemapTargets.Count) armor remap, $($palicoArmorRemapTargets.Count) Palico armor remap, $($hairModels.Count) hairstyle, $($slingerRemapTargets.Count) slinger, $($assetModels.Count) extended asset, and $($voiceModels.Count) voice entries."
+Write-Output "Included $($armorSlingerBindings.Count) original armor-to-slinger EVAM bindings."
 Write-Output "Output: $OutputPath"

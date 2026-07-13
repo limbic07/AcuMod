@@ -22,8 +22,26 @@ pub struct ModelReplacement {
     pub display_names: Vec<String>,
     #[serde(default)]
     pub affected_parts: Vec<String>,
+    #[serde(default)]
+    pub associations: Vec<ModelAssociation>,
     pub matched_files: Vec<String>,
     pub recognition_source: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAssociation {
+    pub model_kind: String,
+    pub model_id: String,
+    pub display_names: Vec<String>,
+    pub matched_files: Vec<String>,
+    pub recognition_source: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct EvamRecognitionFile {
+    pub deploy_relative_path: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +133,7 @@ pub fn recognize_model_replacements(
             variant_ids: Vec::new(),
             display_names: entry.display_names.clone(),
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -141,6 +160,7 @@ pub fn recognize_model_replacements(
             variant_ids: entry.layered_armor_ids.clone(),
             display_names: entry.display_names.clone(),
             affected_parts: vec![entry.armor_part.clone()],
+            associations: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -167,6 +187,15 @@ pub fn recognize_model_replacements(
             .then_with(|| left.model_part.cmp(&right.model_part))
     });
 
+    Ok(replacements)
+}
+
+pub fn recognize_model_replacements_with_evam(
+    deploy_relative_paths: &[String],
+    evam_files: &[EvamRecognitionFile],
+) -> Result<Vec<ModelReplacement>, String> {
+    let mut replacements = recognize_model_replacements(deploy_relative_paths)?;
+    add_evam_slinger_associations(&mut replacements, evam_files, &model_index()?.armor_models);
     Ok(replacements)
 }
 
@@ -284,6 +313,7 @@ fn add_unknown_part_armor_matches<'a>(
             variant_ids,
             display_names,
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -315,6 +345,7 @@ fn add_hair_matches(
             variant_ids: Vec::new(),
             display_names: entry.display_names.clone(),
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -345,6 +376,7 @@ fn add_hair_matches(
             variant_ids: Vec::new(),
             display_names: Vec::new(),
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "pathPattern".to_string(),
         });
@@ -372,6 +404,7 @@ fn add_asset_matches(
             variant_ids: entry.variant_ids.clone(),
             display_names: entry.display_names.clone(),
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -418,6 +451,7 @@ fn add_path_pattern_asset_matches(
             display_names: vec![format!("{sub_kind} {model_id}")],
             model_id,
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "pathPattern".to_string(),
         });
@@ -603,10 +637,133 @@ fn add_unknown_slinger_matches(
             variant_ids: Vec::new(),
             display_names: Vec::new(),
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "pathPattern".to_string(),
         });
     }
+}
+
+fn add_evam_slinger_associations(
+    replacements: &mut [ModelReplacement],
+    evam_files: &[EvamRecognitionFile],
+    armor_models: &[ArmorModelEntry],
+) {
+    for evam_file in evam_files {
+        let Some(armor_model_id) = extract_evam_armor_model_id(&evam_file.deploy_relative_path)
+        else {
+            continue;
+        };
+        let Ok(slinger_numeric_id) = read_evam_slinger_id(&evam_file.bytes) else {
+            continue;
+        };
+        let display_names = armor_set_display_names(armor_models, &armor_model_id);
+
+        for replacement in replacements.iter_mut().filter(|replacement| {
+            replacement.model_kind == "slinger"
+                && slinger_model_numeric_id(&replacement.model_id) == Some(slinger_numeric_id)
+        }) {
+            if let Some(association) = replacement
+                .associations
+                .iter_mut()
+                .find(|association| association.model_id == armor_model_id)
+            {
+                association
+                    .matched_files
+                    .push(evam_file.deploy_relative_path.clone());
+                sort_and_deduplicate(&mut association.matched_files);
+                continue;
+            }
+
+            replacement.associations.push(ModelAssociation {
+                model_kind: "armor".to_string(),
+                model_id: armor_model_id.clone(),
+                display_names: display_names.clone(),
+                matched_files: vec![evam_file.deploy_relative_path.clone()],
+                recognition_source: "evamBinding".to_string(),
+            });
+            replacement
+                .associations
+                .sort_by(|left, right| left.model_id.cmp(&right.model_id));
+        }
+    }
+}
+
+pub fn read_evam_slinger_id(bytes: &[u8]) -> Result<u32, String> {
+    if bytes.len() != 26 {
+        return Err(format!(
+            "EVAM 文件长度无效：需要 26 字节，实际为 {} 字节。",
+            bytes.len()
+        ));
+    }
+    if bytes.get(4..8) != Some(b"EVAM") {
+        return Err("EVAM 文件标记无效。".to_string());
+    }
+    let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    if version != 3 {
+        return Err(format!("暂不支持 EVAM 版本 {version}。"));
+    }
+
+    Ok(u32::from_le_bytes(bytes[16..20].try_into().unwrap()))
+}
+
+fn extract_evam_armor_model_id(path: &str) -> Option<String> {
+    let normalized = normalize_path(path);
+    let components = normalized.split('/').collect::<Vec<_>>();
+    if components.len() != 7
+        || components[0] != "nativepc"
+        || components[1] != "pl"
+        || !matches!(components[2], "f_equip" | "m_equip")
+        || components[4] != "arm"
+        || components[5] != "mod"
+        || !components[6].ends_with(".evam")
+        || !is_armor_model_id(components[3])
+    {
+        return None;
+    }
+
+    Some(components[3].to_string())
+}
+
+fn is_armor_model_id(value: &str) -> bool {
+    let Some(suffix) = value.strip_prefix("pl") else {
+        return false;
+    };
+    let Some((model, variant)) = suffix.split_once('_') else {
+        return false;
+    };
+    model.len() == 3
+        && variant.len() == 4
+        && model.chars().all(|character| character.is_ascii_digit())
+        && variant.chars().all(|character| character.is_ascii_digit())
+}
+
+fn slinger_model_numeric_id(model_id: &str) -> Option<u32> {
+    let suffix = model_id.strip_prefix("slg")?;
+    let numeric = suffix.split('_').next()?;
+    (numeric.len() == 3 && numeric.chars().all(|character| character.is_ascii_digit()))
+        .then(|| numeric.parse().ok())
+        .flatten()
+}
+
+fn armor_set_display_names(armor_models: &[ArmorModelEntry], armor_model_id: &str) -> Vec<String> {
+    let mut names = armor_models
+        .iter()
+        .filter(|entry| entry.model_path == armor_model_id)
+        .flat_map(|entry| entry.display_names.iter())
+        .filter_map(|name| armor_set_name(name))
+        .collect::<Vec<_>>();
+    sort_and_deduplicate(&mut names);
+    names.sort_by_key(|name| (!name.contains("服装"), name.clone()));
+    names
+}
+
+fn armor_set_name(display_name: &str) -> Option<String> {
+    ["·头部", "·身体", "·腕部", "·腰部", "·脚部"]
+        .into_iter()
+        .find_map(|suffix| display_name.strip_suffix(suffix))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 fn add_voice_matches(
@@ -644,6 +801,7 @@ fn add_voice_matches(
             variant_ids: Vec::new(),
             display_names: entry.display_names.clone(),
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files,
             recognition_source: "idTable".to_string(),
         });
@@ -856,7 +1014,20 @@ fn model_kind_order(model_kind: &str) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::recognize_model_replacements;
+    use super::{
+        recognize_model_replacements, recognize_model_replacements_with_evam, EvamRecognitionFile,
+    };
+
+    fn evam_bytes(slinger_id: u32) -> Vec<u8> {
+        let mut bytes = vec![0; 26];
+        bytes[..4].copy_from_slice(&[0x01, 0x10, 0x09, 0x18]);
+        bytes[4..8].copy_from_slice(b"EVAM");
+        bytes[8..12].copy_from_slice(&3_u32.to_le_bytes());
+        bytes[12..16].fill(0xff);
+        bytes[16..20].copy_from_slice(&slinger_id.to_le_bytes());
+        bytes[24..26].copy_from_slice(&[0x01, 0x01]);
+        bytes
+    }
 
     #[test]
     fn recognizes_weapon_model_from_bundled_id_table() {
@@ -1097,6 +1268,33 @@ mod tests {
         assert!(!replacements
             .iter()
             .any(|replacement| replacement.model_id == "pl126_0000"));
+    }
+
+    #[test]
+    fn associates_evam_only_when_the_matching_slinger_model_is_present() {
+        let slinger_path = "nativePC/wp/slg/slg128_0000/mod/slg128_0000.mod3".to_string();
+        let evam_path = "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.evam".to_string();
+        let files = vec![slinger_path.clone(), evam_path.clone()];
+        let evam_files = vec![EvamRecognitionFile {
+            deploy_relative_path: evam_path.clone(),
+            bytes: evam_bytes(128),
+        }];
+
+        let replacements = recognize_model_replacements_with_evam(&files, &evam_files).unwrap();
+        let slinger = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "slinger")
+            .unwrap();
+        assert_eq!(slinger.model_id, "slg128_0000");
+        assert_eq!(slinger.associations.len(), 1);
+        assert_eq!(slinger.associations[0].model_id, "pl105_0000");
+        assert_eq!(slinger.associations[0].display_names[0], "【冰狼】服装");
+        assert_eq!(slinger.associations[0].matched_files, [evam_path.clone()]);
+
+        let evam_only = recognize_model_replacements_with_evam(&[evam_path], &evam_files).unwrap();
+        assert!(!evam_only
+            .iter()
+            .any(|replacement| replacement.model_kind == "slinger"));
     }
 
     #[test]

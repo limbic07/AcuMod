@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::model_recognition::ModelReplacement;
+use super::model_recognition::{read_evam_slinger_id, ModelReplacement};
 
 const MODEL_INDEX_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -54,6 +54,13 @@ pub struct EffectiveRemapFile {
     pub file_index: usize,
     pub deploy_relative_path: String,
     pub texture_path_rewrites: BTreeMap<String, String>,
+    pub evam_slinger_rewrite: Option<EvamSlingerIdRewrite>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvamSlingerIdRewrite {
+    pub source_id: u32,
+    pub target_id: u32,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +217,7 @@ pub fn build_effective_remap_files(
 
     let texture_path_rewrites =
         build_texture_path_rewrites(deploy_relative_paths, &effective_paths)?;
+    let evam_slinger_rewrites = build_evam_slinger_rewrites(&groups, replacements)?;
     Ok(effective_paths
         .into_iter()
         .enumerate()
@@ -217,8 +225,28 @@ pub fn build_effective_remap_files(
             file_index,
             deploy_relative_path,
             texture_path_rewrites: texture_path_rewrites.clone(),
+            evam_slinger_rewrite: evam_slinger_rewrites
+                .get(&normalize_deploy_path(&deploy_relative_paths[file_index]).to_lowercase())
+                .cloned(),
         })
         .collect())
+}
+
+pub fn rewrite_evam_slinger_id(
+    source_bytes: &[u8],
+    rewrite: &EvamSlingerIdRewrite,
+) -> Result<Vec<u8>, String> {
+    let current_id = read_evam_slinger_id(source_bytes)?;
+    if current_id != rewrite.source_id {
+        return Err(format!(
+            "EVAM 当前绑定 ID 为 {current_id}，与预期源 ID {} 不一致。",
+            rewrite.source_id
+        ));
+    }
+
+    let mut output = source_bytes.to_vec();
+    output[16..20].copy_from_slice(&rewrite.target_id.to_le_bytes());
+    Ok(output)
 }
 
 pub fn rewrite_mrl3_texture_paths(
@@ -272,6 +300,49 @@ pub fn rewrite_mrl3_texture_paths(
     }
 
     Ok((output, rewritten_count))
+}
+
+fn build_evam_slinger_rewrites(
+    groups: &[ModelRemapGroup],
+    replacements: &[ModelReplacement],
+) -> Result<HashMap<String, EvamSlingerIdRewrite>, String> {
+    let mut rewrites = HashMap::new();
+
+    for group in groups.iter().filter(|group| group.model_kind == "slinger") {
+        let Some(selected_target_id) = group.selected_target_id.as_deref() else {
+            continue;
+        };
+        let source_model_id = single_source_model_id(group)?;
+        let source_id = slinger_numeric_id(source_model_id)?;
+        let target = resolve_group_target(group, selected_target_id)?;
+        let target_id = slinger_numeric_id(&target.model_id)?;
+
+        for replacement in replacements.iter().filter(|replacement| {
+            replacement.model_kind == "slinger" && replacement.model_id == source_model_id
+        }) {
+            for association in &replacement.associations {
+                if association.recognition_source != "evamBinding" {
+                    continue;
+                }
+                for matched_file in &association.matched_files {
+                    let path_key = normalize_deploy_path(matched_file).to_lowercase();
+                    let rewrite = EvamSlingerIdRewrite {
+                        source_id,
+                        target_id,
+                    };
+                    if let Some(existing) = rewrites.insert(path_key, rewrite.clone()) {
+                        if existing != rewrite {
+                            return Err(format!(
+                                "同一个 EVAM 文件被要求改写为不同的飞翔爪 ID：{matched_file}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(rewrites)
 }
 
 fn remap_index() -> Result<&'static RemapIndex, String> {
@@ -921,6 +992,17 @@ fn is_slinger_model_id(value: &str) -> bool {
     }
 }
 
+fn slinger_numeric_id(value: &str) -> Result<u32, String> {
+    if !is_slinger_model_id(value) {
+        return Err(format!("投射器模型 ID 无效：{value}"));
+    }
+    value
+        .strip_prefix("slg")
+        .and_then(|suffix| suffix.split('_').next())
+        .and_then(|numeric| numeric.parse::<u32>().ok())
+        .ok_or_else(|| format!("无法读取投射器模型编号：{value}"))
+}
+
 fn model_kind_order(model_kind: &str) -> usize {
     match model_kind {
         "weapon" => 0,
@@ -935,6 +1017,7 @@ fn model_kind_order(model_kind: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::model_recognition::ModelAssociation;
 
     fn replacement(kind: &str, sub_kind: &str, part: &str, model_id: &str) -> ModelReplacement {
         ModelReplacement {
@@ -946,9 +1029,21 @@ mod tests {
             variant_ids: Vec::new(),
             display_names: vec![model_id.to_string()],
             affected_parts: Vec::new(),
+            associations: Vec::new(),
             matched_files: Vec::new(),
             recognition_source: "idTable".to_string(),
         }
+    }
+
+    fn evam_bytes(slinger_id: u32) -> Vec<u8> {
+        let mut bytes = vec![0; 26];
+        bytes[..4].copy_from_slice(&[0x01, 0x10, 0x09, 0x18]);
+        bytes[4..8].copy_from_slice(b"EVAM");
+        bytes[8..12].copy_from_slice(&3_u32.to_le_bytes());
+        bytes[12..16].fill(0xff);
+        bytes[16..20].copy_from_slice(&slinger_id.to_le_bytes());
+        bytes[24..26].copy_from_slice(&[0x01, 0x01]);
+        bytes
     }
 
     #[test]
@@ -1048,6 +1143,39 @@ mod tests {
             .unwrap();
             assert_eq!(effective[0].deploy_relative_path, expected_path);
         }
+    }
+
+    #[test]
+    fn remaps_matching_evam_binding_with_the_slinger_model() {
+        let evam_path = "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.evam".to_string();
+        let mut slinger = replacement("slinger", "投射器", "model", "slg128_0000");
+        slinger.associations.push(ModelAssociation {
+            model_kind: "armor".to_string(),
+            model_id: "pl105_0000".to_string(),
+            display_names: vec!["【冰狼】服装".to_string()],
+            matched_files: vec![evam_path.clone()],
+            recognition_source: "evamBinding".to_string(),
+        });
+        let paths = vec![
+            "nativePC/wp/slg/slg128_0000/mod/slg128_0000.mod3".to_string(),
+            evam_path,
+        ];
+        let selections = vec![ModelRemapSelection {
+            group_key: "slinger:slg128_0000".to_string(),
+            target_id: "slinger:slg106_0000".to_string(),
+        }];
+
+        let files = build_effective_remap_files(&paths, &[slinger], &selections).unwrap();
+        assert_eq!(
+            files[0].deploy_relative_path,
+            "nativePC/wp/slg/slg106_0000/mod/slg106_0000.mod3"
+        );
+        let rewrite = files[1].evam_slinger_rewrite.as_ref().unwrap();
+        assert_eq!(rewrite.source_id, 128);
+        assert_eq!(rewrite.target_id, 106);
+
+        let output = rewrite_evam_slinger_id(&evam_bytes(128), rewrite).unwrap();
+        assert_eq!(u32::from_le_bytes(output[16..20].try_into().unwrap()), 106);
     }
 
     #[test]

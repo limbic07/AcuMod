@@ -15,15 +15,19 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::storage::config;
 
-use super::model_recognition::{recognize_model_replacements, ModelReplacement};
+use super::model_recognition::{
+    recognize_model_replacements, recognize_model_replacements_with_evam, EvamRecognitionFile,
+    ModelReplacement,
+};
 use super::model_remap::{
-    build_effective_remap_files, build_model_remap_groups, rewrite_mrl3_texture_paths,
-    EffectiveRemapFile, ModelRemapGroup, ModelRemapSelection,
+    build_effective_remap_files, build_model_remap_groups, rewrite_evam_slinger_id,
+    rewrite_mrl3_texture_paths, EffectiveRemapFile, EvamSlingerIdRewrite, ModelRemapGroup,
+    ModelRemapSelection,
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 12;
-const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 12;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 13;
+const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 13;
 const USER_MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 1;
 const USER_MOD_CATEGORY_NAME_LIMIT: usize = 40;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
@@ -153,6 +157,7 @@ pub struct ModRemapPlanFile {
     pub effective_deploy_relative_path: String,
     pub path_changed: bool,
     pub mrl3_rewrite_count: usize,
+    pub evam_rewrite_count: usize,
 }
 
 #[derive(Serialize)]
@@ -166,6 +171,7 @@ pub struct ModRemapPlan {
     pub target_label: String,
     pub changed_file_count: usize,
     pub mrl3_rewrite_count: usize,
+    pub evam_rewrite_count: usize,
     pub files: Vec<ModRemapPlanFile>,
     pub warnings: Vec<String>,
     pub message: String,
@@ -181,6 +187,7 @@ pub struct ModRemapApplyResult {
     pub selection_count: usize,
     pub changed_file_count: usize,
     pub mrl3_rewrite_count: usize,
+    pub evam_rewrite_count: usize,
     pub message: String,
 }
 
@@ -521,6 +528,7 @@ struct EffectiveInstalledModFile {
     installed_file: InstalledModFile,
     deploy_relative_path: String,
     texture_path_rewrites: BTreeMap<String, String>,
+    evam_slinger_rewrite: Option<EvamSlingerIdRewrite>,
 }
 
 pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus, String> {
@@ -802,7 +810,7 @@ pub fn update_mod_metadata(
             resolve_category_override(&category_store, &category_override)?;
     }
 
-    refresh_manifest_model_replacements(&mut context.manifest)?;
+    refresh_manifest_model_replacements(&mut context)?;
     context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
     save_manifest(&context.manifest_path, &context.manifest)?;
 
@@ -1184,11 +1192,8 @@ fn install_mod_from_folder_into_with_options(
             });
         }
 
-        let model_replacement_paths = installed_files
-            .iter()
-            .map(|file| file.deploy_relative_path.clone())
-            .collect::<Vec<_>>();
-        let model_replacements = recognize_model_replacements(&model_replacement_paths)?;
+        let model_replacements =
+            recognize_model_replacements_for_library_files(&installed_files, &content_path)?;
         let manifest_path = temp_mod_path.join("manifest.json");
         let manifest = InstalledModManifest {
             schema_version: CURRENT_MOD_MANIFEST_SCHEMA_VERSION,
@@ -1270,7 +1275,8 @@ fn find_installed_mod_by_name(
     let Some(context) = existing else {
         return Ok(None);
     };
-    let model_replacements = model_replacements_for_manifest(&context.manifest)?;
+    let model_replacements =
+        model_replacements_for_manifest(&context.manifest, &context.content_path)?;
 
     let display_name = manifest_display_name(&context.manifest);
 
@@ -1700,16 +1706,18 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
                 )
             })?;
 
-        let original_model_replacements = match model_replacements_for_manifest(&manifest) {
-            Ok(model_replacements) => model_replacements,
-            Err(error) => {
-                warnings.push(format!(
-                    "Could not recognize model replacements for {}: {error}",
-                    manifest.name
-                ));
-                Vec::new()
-            }
-        };
+        let content_path = mod_path.join("content");
+        let original_model_replacements =
+            match model_replacements_for_manifest(&manifest, &content_path) {
+                Ok(model_replacements) => model_replacements,
+                Err(error) => {
+                    warnings.push(format!(
+                        "Could not recognize model replacements for {}: {error}",
+                        manifest.name
+                    ));
+                    Vec::new()
+                }
+            };
         let model_replacements = match effective_model_replacements_for_manifest(
             &manifest,
             &original_model_replacements,
@@ -1779,17 +1787,78 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
 
 fn model_replacements_for_manifest(
     manifest: &InstalledModManifest,
+    content_path: &Path,
 ) -> Result<Vec<ModelReplacement>, String> {
     if manifest.schema_version >= CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION {
         return Ok(manifest.model_replacements.clone());
     }
 
-    let deploy_relative_paths = manifest
-        .files
+    recognize_model_replacements_for_library_files(&manifest.files, content_path)
+}
+
+fn recognize_model_replacements_for_library_files(
+    files: &[InstalledModFile],
+    content_path: &Path,
+) -> Result<Vec<ModelReplacement>, String> {
+    let deploy_relative_paths = files
         .iter()
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
-    recognize_model_replacements(&deploy_relative_paths)
+    let mut evam_files = Vec::new();
+
+    if files.iter().any(|file| {
+        Path::new(&file.deploy_relative_path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("evam"))
+    }) {
+        let resolved_content_path = content_path.canonicalize().map_err(|error| {
+            format!(
+                "无法读取 MOD 库内容目录 {}：{error}",
+                content_path.display()
+            )
+        })?;
+
+        for file in files {
+            if !Path::new(&file.deploy_relative_path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("evam"))
+            {
+                continue;
+            }
+
+            let relative_path = relative_string_to_path(&file.deploy_relative_path)?;
+            let source_path = content_path.join(relative_path);
+            let Ok(metadata) = source_path.metadata() else {
+                continue;
+            };
+            if metadata.len() != 26 {
+                continue;
+            }
+            let resolved_source_path = source_path.canonicalize().map_err(|error| {
+                format!("无法解析 EVAM 文件 {}：{error}", source_path.display())
+            })?;
+            if !resolved_source_path.starts_with(&resolved_content_path) {
+                return Err(format!(
+                    "EVAM 文件越过了 MOD 库内容目录：{}",
+                    resolved_source_path.display()
+                ));
+            }
+            let bytes = fs::read(&resolved_source_path).map_err(|error| {
+                format!(
+                    "无法读取 EVAM 文件 {}：{error}",
+                    resolved_source_path.display()
+                )
+            })?;
+            evam_files.push(EvamRecognitionFile {
+                deploy_relative_path: file.deploy_relative_path.clone(),
+                bytes,
+            });
+        }
+    }
+
+    recognize_model_replacements_with_evam(&deploy_relative_paths, &evam_files)
 }
 
 fn effective_model_replacements_for_manifest(
@@ -1801,12 +1870,74 @@ fn effective_model_replacements_for_manifest(
         .iter()
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
-    recognize_model_replacements(&paths)
+    let mut effective_replacements = recognize_model_replacements(&paths)?;
+    copy_effective_slinger_associations(
+        original_replacements,
+        &manifest.model_remaps,
+        &mut effective_replacements,
+    );
+    Ok(effective_replacements)
 }
 
-fn refresh_manifest_model_replacements(manifest: &mut InstalledModManifest) -> Result<(), String> {
-    if manifest.schema_version < CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION {
-        manifest.model_replacements = model_replacements_for_manifest(manifest)?;
+fn copy_effective_slinger_associations(
+    original_replacements: &[ModelReplacement],
+    selections: &[ModelRemapSelection],
+    effective_replacements: &mut [ModelReplacement],
+) {
+    for original in original_replacements
+        .iter()
+        .filter(|replacement| replacement.model_kind == "slinger")
+    {
+        if original.associations.is_empty() {
+            continue;
+        }
+        let group_key = format!("slinger:{}", original.model_id);
+        let effective_model_id = selections
+            .iter()
+            .find(|selection| selection.group_key == group_key)
+            .and_then(|selection| selection.target_id.strip_prefix("slinger:"))
+            .unwrap_or(&original.model_id);
+        let associations = original
+            .associations
+            .iter()
+            .map(|association| {
+                let group_key = format!("armor:{}", association.model_id);
+                let effective_armor_id = selections
+                    .iter()
+                    .find(|selection| selection.group_key == group_key)
+                    .and_then(|selection| selection.target_id.strip_prefix("armor:"))
+                    .unwrap_or(&association.model_id);
+                let mut effective_association = association.clone();
+                effective_association.model_id = effective_armor_id.to_string();
+                let armor_names = effective_replacements
+                    .iter()
+                    .filter(|replacement| {
+                        replacement.model_kind == "armor"
+                            && replacement.model_id == effective_armor_id
+                    })
+                    .flat_map(|replacement| replacement.display_names.iter().cloned())
+                    .collect::<Vec<_>>();
+                if !armor_names.is_empty() {
+                    effective_association.display_names =
+                        vec![armor_set_label(&armor_names, effective_armor_id)];
+                }
+                effective_association
+            })
+            .collect::<Vec<_>>();
+        if let Some(effective) = effective_replacements.iter_mut().find(|replacement| {
+            replacement.model_kind == "slinger" && replacement.model_id == effective_model_id
+        }) {
+            effective.associations = associations;
+        }
+    }
+}
+
+fn refresh_manifest_model_replacements(
+    context: &mut InstalledManifestContext,
+) -> Result<(), String> {
+    if context.manifest.schema_version < CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION {
+        context.manifest.model_replacements =
+            model_replacements_for_manifest(&context.manifest, &context.content_path)?;
     }
 
     Ok(())
@@ -1859,7 +1990,7 @@ fn get_mod_remap_details_from(
     mod_id: &str,
 ) -> Result<ModRemapDetails, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
-    let replacements = model_replacements_for_manifest(&context.manifest)?;
+    let replacements = model_replacements_for_manifest(&context.manifest, &context.content_path)?;
     let (groups, warnings) =
         build_model_remap_groups(&replacements, &context.manifest.model_remaps)?;
     let message = if groups.is_empty() {
@@ -1888,7 +2019,7 @@ fn preview_mod_remap_from(
 ) -> Result<ModRemapPlan, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
     ensure_manifest_can_remap(&context.manifest)?;
-    let replacements = model_replacements_for_manifest(&context.manifest)?;
+    let replacements = model_replacements_for_manifest(&context.manifest, &context.content_path)?;
     let (current_groups, _) =
         build_model_remap_groups(&replacements, &context.manifest.model_remaps)?;
     let current_group = current_groups
@@ -1912,15 +2043,17 @@ fn preview_mod_remap_from(
     let effective_files = effective_installed_files_for_manifest(&preview_manifest, &replacements)?;
     let mut files = Vec::new();
     let mut total_mrl3_rewrite_count = 0;
+    let mut total_evam_rewrite_count = 0;
 
     for effective_file in &effective_files {
         let source_path = source_path_for_installed_file(&context, &effective_file.installed_file)?;
         let mrl3_rewrite_count = preview_mrl3_rewrite_count(&source_path, effective_file)?;
+        let evam_rewrite_count = preview_evam_rewrite_count(&source_path, effective_file)?;
         let path_changed = !effective_file
             .installed_file
             .deploy_relative_path
             .eq_ignore_ascii_case(&effective_file.deploy_relative_path);
-        if path_changed || mrl3_rewrite_count > 0 {
+        if path_changed || mrl3_rewrite_count > 0 || evam_rewrite_count > 0 {
             files.push(ModRemapPlanFile {
                 source_deploy_relative_path: effective_file
                     .installed_file
@@ -1929,9 +2062,11 @@ fn preview_mod_remap_from(
                 effective_deploy_relative_path: effective_file.deploy_relative_path.clone(),
                 path_changed,
                 mrl3_rewrite_count,
+                evam_rewrite_count,
             });
         }
         total_mrl3_rewrite_count += mrl3_rewrite_count;
+        total_evam_rewrite_count += evam_rewrite_count;
     }
 
     if files.is_empty() {
@@ -1954,10 +2089,11 @@ fn preview_mod_remap_from(
         target_label,
         changed_file_count,
         mrl3_rewrite_count: total_mrl3_rewrite_count,
+        evam_rewrite_count: total_evam_rewrite_count,
         files,
         warnings,
         message: format!(
-            "本次改绑会改变 {changed_file_count} 个部署文件，并精确修正 {total_mrl3_rewrite_count} 条 MRL3 贴图路径。"
+            "本次改绑会改变 {changed_file_count} 个部署文件，精确修正 {total_mrl3_rewrite_count} 条 MRL3 贴图路径和 {total_evam_rewrite_count} 个 EVAM 飞翔爪绑定。"
         ),
     })
 }
@@ -1971,7 +2107,7 @@ fn apply_mod_remap_from(
     let plan = preview_mod_remap_from(installed_root, mod_id, group_key, target_id.clone())?;
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     ensure_manifest_can_remap(&context.manifest)?;
-    refresh_manifest_model_replacements(&mut context.manifest)?;
+    refresh_manifest_model_replacements(&mut context)?;
     let replacements = context.manifest.model_replacements.clone();
     let (groups, _) = build_model_remap_groups(&replacements, &context.manifest.model_remaps)?;
     let group = groups
@@ -1995,6 +2131,7 @@ fn apply_mod_remap_from(
         selection_count: context.manifest.model_remaps.len(),
         changed_file_count: plan.changed_file_count,
         mrl3_rewrite_count: plan.mrl3_rewrite_count,
+        evam_rewrite_count: plan.evam_rewrite_count,
         message: "模型替换目标已保存，本地 MOD 原始副本未被修改。".to_string(),
     })
 }
@@ -2092,13 +2229,13 @@ fn armor_set_label(display_names: &[String], model_id: &str) -> String {
         for suffix in ["·头部", "·身体", "·腕部", "·腰部", "·脚部"] {
             if let Some(set_name) = display_name.strip_suffix(suffix) {
                 if !set_name.is_empty() {
-                    return format!("{set_name}（套装）");
+                    return set_name.to_string();
                 }
             }
         }
     }
 
-    format!("防具套装 · {model_id}")
+    model_id.to_string()
 }
 
 fn effective_remap_files_for_manifest(
@@ -2129,6 +2266,7 @@ fn effective_installed_files_for_manifest(
                 installed_file,
                 deploy_relative_path: effective.deploy_relative_path,
                 texture_path_rewrites: effective.texture_path_rewrites,
+                evam_slinger_rewrite: effective.evam_slinger_rewrite,
             })
         })
         .collect()
@@ -2137,7 +2275,7 @@ fn effective_installed_files_for_manifest(
 fn effective_installed_files_for_context(
     context: &InstalledManifestContext,
 ) -> Result<Vec<EffectiveInstalledModFile>, String> {
-    let replacements = model_replacements_for_manifest(&context.manifest)?;
+    let replacements = model_replacements_for_manifest(&context.manifest, &context.content_path)?;
     effective_installed_files_for_manifest(&context.manifest, &replacements)
 }
 
@@ -2159,13 +2297,49 @@ fn preview_mrl3_rewrite_count(
         .map_err(|error| format!("无法预览 MRL3 文件 {}：{error}", source_path.display()))
 }
 
+fn preview_evam_rewrite_count(
+    source_path: &Path,
+    file: &EffectiveInstalledModFile,
+) -> Result<usize, String> {
+    let Some(rewrite) = file.evam_slinger_rewrite.as_ref() else {
+        return Ok(0);
+    };
+    if !path_has_extension(source_path, "evam") {
+        return Err(format!(
+            "飞翔爪绑定改写目标不是 EVAM 文件：{}",
+            source_path.display()
+        ));
+    }
+    let bytes = fs::read(source_path).map_err(|error| {
+        format!(
+            "无法读取用于改绑预览的 EVAM 文件 {}：{error}",
+            source_path.display()
+        )
+    })?;
+    rewrite_evam_slinger_id(&bytes, rewrite)
+        .map(|_| 1)
+        .map_err(|error| format!("无法预览 EVAM 文件 {}：{error}", source_path.display()))
+}
+
 fn deploy_effective_file(
     context: &InstalledManifestContext,
     file: &EffectiveInstalledModFile,
     target_path: &Path,
 ) -> Result<(), String> {
     let source_path = source_path_for_installed_file(context, &file.installed_file)?;
-    if path_has_extension(&source_path, "mrl3") && !file.texture_path_rewrites.is_empty() {
+    if let Some(rewrite) = file.evam_slinger_rewrite.as_ref() {
+        let source_bytes = fs::read(&source_path)
+            .map_err(|error| format!("无法读取 EVAM 文件 {}：{error}", source_path.display()))?;
+        let output = rewrite_evam_slinger_id(&source_bytes, rewrite)
+            .map_err(|error| format!("无法改绑 EVAM 文件 {}：{error}", source_path.display()))?;
+        fs::write(target_path, output).map_err(|error| {
+            format!(
+                "无法把改绑后的 EVAM 文件 {} 部署到 {}：{error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+    } else if path_has_extension(&source_path, "mrl3") && !file.texture_path_rewrites.is_empty() {
         let source_bytes = fs::read(&source_path)
             .map_err(|error| format!("无法读取 MRL3 文件 {}：{error}", source_path.display()))?;
         let (output, _) = rewrite_mrl3_texture_paths(&source_bytes, &file.texture_path_rewrites)
@@ -2811,7 +2985,8 @@ fn shared_model_targets_for_group(
         .iter()
         .filter(|context| participant_ids.contains(&context.manifest.id))
     {
-        let original_replacements = model_replacements_for_manifest(&context.manifest)?;
+        let original_replacements =
+            model_replacements_for_manifest(&context.manifest, &context.content_path)?;
         for replacement in
             effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?
         {
@@ -3251,6 +3426,7 @@ fn build_deployment_plan(
     for file in &effective_files {
         let source_path = source_path_for_installed_file(context, &file.installed_file)?;
         preview_mrl3_rewrite_count(&source_path, file)?;
+        preview_evam_rewrite_count(&source_path, file)?;
         let target_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
         let target_path = game_root.join(target_relative_path);
         let target_key = deployment_key(&target_path);
@@ -4151,7 +4327,7 @@ fn clear_category_override_from_manifests(
         }
 
         context.manifest.category_override = None;
-        refresh_manifest_model_replacements(&mut context.manifest)?;
+        refresh_manifest_model_replacements(&mut context)?;
         context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
         save_manifest(&context.manifest_path, &context.manifest)?;
         cleared_mod_count += 1;
@@ -4285,7 +4461,7 @@ mod tests {
 
         assert_eq!(
             armor_set_label(&display_names, "pl105_0000"),
-            "【冰狼】服装（套装）"
+            "【冰狼】服装"
         );
     }
 
@@ -5642,6 +5818,86 @@ mod tests {
     }
 
     #[test]
+    fn slinger_remap_rewrites_deployed_evam_but_keeps_library_original() {
+        let source_root = temp_root("slinger_evam_source");
+        let installed_root = temp_root("slinger_evam_installed");
+        let game_root = temp_root("slinger_evam_game");
+        write_file(&source_root.join("nativePC/wp/slg/slg128_0000/mod/slg128_0000.mod3"));
+        let evam_relative = "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.evam";
+        write_bytes(&source_root.join(evam_relative), &evam_bytes(128));
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let slinger = installed
+            .model_replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "slinger")
+            .unwrap();
+        assert_eq!(slinger.associations[0].display_names[0], "【冰狼】服装");
+
+        let mut legacy_manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&installed.manifest_path).unwrap()).unwrap();
+        legacy_manifest["schemaVersion"] = serde_json::Value::from(12);
+        legacy_manifest["modelReplacements"] = serde_json::json!([]);
+        fs::write(
+            &installed.manifest_path,
+            serde_json::to_string_pretty(&legacy_manifest).unwrap(),
+        )
+        .unwrap();
+        let listed = list_installed_mods_from(&installed_root).unwrap();
+        assert_eq!(
+            listed.mods[0]
+                .original_model_replacements
+                .iter()
+                .find(|replacement| replacement.model_kind == "slinger")
+                .unwrap()
+                .associations[0]
+                .model_id,
+            "pl105_0000"
+        );
+
+        let plan = preview_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "slinger:slg128_0000",
+            Some("slinger:slg106_0000".to_string()),
+        )
+        .unwrap();
+        assert_eq!(plan.changed_file_count, 2);
+        assert_eq!(plan.evam_rewrite_count, 1);
+
+        apply_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "slinger:slg128_0000",
+            Some("slinger:slg106_0000".to_string()),
+        )
+        .unwrap();
+        enable_mod_from(&installed_root, &game_root, &installed.mod_id, false).unwrap();
+
+        let local_evam =
+            fs::read(PathBuf::from(&installed.content_path).join(evam_relative)).unwrap();
+        let deployed_evam = fs::read(game_root.join(evam_relative)).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(local_evam[16..20].try_into().unwrap()),
+            128
+        );
+        assert_eq!(
+            u32::from_le_bytes(deployed_evam[16..20].try_into().unwrap()),
+            106
+        );
+        assert!(game_root
+            .join("nativePC/wp/slg/slg106_0000/mod/slg106_0000.mod3")
+            .is_file());
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
     fn conflict_and_disable_restore_use_effective_remap_paths() {
         let remapped_source = temp_root("remap_conflict_first_source");
         let original_source = temp_root("remap_conflict_second_source");
@@ -5715,6 +5971,22 @@ mod tests {
     fn write_file_with_contents(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
+    }
+
+    fn write_bytes(path: &Path, contents: &[u8]) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
+    fn evam_bytes(slinger_id: u32) -> Vec<u8> {
+        let mut bytes = vec![0; 26];
+        bytes[..4].copy_from_slice(&[0x01, 0x10, 0x09, 0x18]);
+        bytes[4..8].copy_from_slice(b"EVAM");
+        bytes[8..12].copy_from_slice(&3_u32.to_le_bytes());
+        bytes[12..16].fill(0xff);
+        bytes[16..20].copy_from_slice(&slinger_id.to_le_bytes());
+        bytes[24..26].copy_from_slice(&[0x01, 0x01]);
+        bytes
     }
 
     fn root_to_string(path: &Path) -> String {

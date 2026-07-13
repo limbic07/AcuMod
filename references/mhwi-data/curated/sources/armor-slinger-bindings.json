@@ -1,0 +1,3723 @@
+{
+    "schemaVersion":  1,
+    "gameVersion":  "15.10.00",
+    "source":  {
+                   "title":  "Monster Hunter: World Iceborne original armor EVAM bindings",
+                   "provenance":  "localSteamGameChunks",
+                   "steamAppId":  "582010",
+                   "steamBuildId":  "15539686",
+                   "chunkOrder":  "Available chunkG*.bin files sorted by numeric suffix; later numeric chunks override earlier files",
+                   "extractionTool":  "WorldChunkTool",
+                   "extractionToolUrl":  "https://github.com/mhvuze/WorldChunkTool",
+                   "extractionToolCommit":  "2ad4fc848c84e7df742ee38eca0f3b5f7a677ab0",
+                   "sourcePathPattern":  "pl/{f,m}_equip/plNNN_NNNN/arm/mod/{f,m}_armNNN_NNNN.evam",
+                   "licenseNote":  "Only derived IDs and virtual source paths are stored. Original EVAM files are not redistributed."
+               },
+    "statistics":  {
+                       "bindingCount":  462,
+                       "armorModelCount":  234,
+                       "femaleBindingCount":  231,
+                       "maleBindingCount":  231,
+                       "noSlingerBindingCount":  14,
+                       "nonMatchingBaseIdCount":  98,
+                       "genderMismatchArmorModelCount":  5
+                   },
+    "bindings":  [
+                     {
+                         "armorModelId":  "pl001_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl001_0000/arm/mod/f_arm001_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl001_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl001_0000/arm/mod/m_arm001_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl002_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl002_0000/arm/mod/f_arm002_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl002_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl002_0000/arm/mod/m_arm002_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl002_0010",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl002_0010/arm/mod/f_arm002_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl002_0010",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl002_0010/arm/mod/m_arm002_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl003_0000",
+                         "gender":  "female",
+                         "slingerId":  3,
+                         "slingerModelId":  "slg003_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl003_0000/arm/mod/f_arm003_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl003_0000",
+                         "gender":  "male",
+                         "slingerId":  3,
+                         "slingerModelId":  "slg003_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl003_0000/arm/mod/m_arm003_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl004_0000",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl004_0000/arm/mod/f_arm004_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl004_0000",
+                         "gender":  "male",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl004_0000/arm/mod/m_arm004_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl005_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl005_0000/arm/mod/f_arm005_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl005_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl005_0000/arm/mod/m_arm005_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl007_0000",
+                         "gender":  "female",
+                         "slingerId":  7,
+                         "slingerModelId":  "slg007_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl007_0000/arm/mod/f_arm007_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl007_0000",
+                         "gender":  "male",
+                         "slingerId":  7,
+                         "slingerModelId":  "slg007_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl007_0000/arm/mod/m_arm007_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl007_0001",
+                         "gender":  "female",
+                         "slingerId":  7,
+                         "slingerModelId":  "slg007_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl007_0001/arm/mod/f_arm007_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl007_0001",
+                         "gender":  "male",
+                         "slingerId":  7,
+                         "slingerModelId":  "slg007_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl007_0001/arm/mod/m_arm007_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl008_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl008_0000/arm/mod/f_arm008_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl008_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl008_0000/arm/mod/m_arm008_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl008_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl008_0001/arm/mod/f_arm008_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl008_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl008_0001/arm/mod/m_arm008_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl009_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl009_0000/arm/mod/f_arm009_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl009_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl009_0000/arm/mod/m_arm009_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl009_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl009_0001/arm/mod/f_arm009_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl009_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl009_0001/arm/mod/m_arm009_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl010_0000/arm/mod/f_arm010_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl010_0000/arm/mod/m_arm010_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl010_0001/arm/mod/f_arm010_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl010_0001/arm/mod/m_arm010_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0010",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl010_0010/arm/mod/f_arm010_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0010",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl010_0010/arm/mod/m_arm010_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0101",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl010_0101/arm/mod/f_arm010_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl010_0101",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl010_0101/arm/mod/m_arm010_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl011_0000",
+                         "gender":  "female",
+                         "slingerId":  11,
+                         "slingerModelId":  "slg011_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl011_0000/arm/mod/f_arm011_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl011_0000",
+                         "gender":  "male",
+                         "slingerId":  11,
+                         "slingerModelId":  "slg011_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl011_0000/arm/mod/m_arm011_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl011_0001",
+                         "gender":  "female",
+                         "slingerId":  11,
+                         "slingerModelId":  "slg011_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl011_0001/arm/mod/f_arm011_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl011_0001",
+                         "gender":  "male",
+                         "slingerId":  11,
+                         "slingerModelId":  "slg011_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl011_0001/arm/mod/m_arm011_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl012_0000",
+                         "gender":  "female",
+                         "slingerId":  12,
+                         "slingerModelId":  "slg012_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl012_0000/arm/mod/f_arm012_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl012_0000",
+                         "gender":  "male",
+                         "slingerId":  12,
+                         "slingerModelId":  "slg012_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl012_0000/arm/mod/m_arm012_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl012_0001",
+                         "gender":  "female",
+                         "slingerId":  12,
+                         "slingerModelId":  "slg012_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl012_0001/arm/mod/f_arm012_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl012_0001",
+                         "gender":  "male",
+                         "slingerId":  12,
+                         "slingerModelId":  "slg012_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl012_0001/arm/mod/m_arm012_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl013_0000",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl013_0000/arm/mod/f_arm013_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl013_0000",
+                         "gender":  "male",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl013_0000/arm/mod/m_arm013_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl013_0001",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl013_0001/arm/mod/f_arm013_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl013_0001",
+                         "gender":  "male",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl013_0001/arm/mod/m_arm013_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl013_0101",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl013_0101/arm/mod/f_arm013_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl013_0101",
+                         "gender":  "male",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl013_0101/arm/mod/m_arm013_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl014_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl014_0000/arm/mod/f_arm014_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl014_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl014_0000/arm/mod/m_arm014_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl017_0000",
+                         "gender":  "female",
+                         "slingerId":  17,
+                         "slingerModelId":  "slg017_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl017_0000/arm/mod/f_arm017_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl017_0000",
+                         "gender":  "male",
+                         "slingerId":  17,
+                         "slingerModelId":  "slg017_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl017_0000/arm/mod/m_arm017_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl017_0001",
+                         "gender":  "female",
+                         "slingerId":  17,
+                         "slingerModelId":  "slg017_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl017_0001/arm/mod/f_arm017_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl017_0001",
+                         "gender":  "male",
+                         "slingerId":  17,
+                         "slingerModelId":  "slg017_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl017_0001/arm/mod/m_arm017_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl018_0000",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl018_0000/arm/mod/f_arm018_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl018_0000",
+                         "gender":  "male",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl018_0000/arm/mod/m_arm018_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl019_0000",
+                         "gender":  "female",
+                         "slingerId":  19,
+                         "slingerModelId":  "slg019_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl019_0000/arm/mod/f_arm019_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl019_0000",
+                         "gender":  "male",
+                         "slingerId":  57,
+                         "slingerModelId":  "slg057_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl019_0000/arm/mod/m_arm019_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0000",
+                         "gender":  "female",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl020_0000/arm/mod/f_arm020_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0000",
+                         "gender":  "male",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl020_0000/arm/mod/m_arm020_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0001",
+                         "gender":  "female",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl020_0001/arm/mod/f_arm020_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0001",
+                         "gender":  "male",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl020_0001/arm/mod/m_arm020_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0010",
+                         "gender":  "female",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl020_0010/arm/mod/f_arm020_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0010",
+                         "gender":  "male",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl020_0010/arm/mod/m_arm020_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0011",
+                         "gender":  "female",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl020_0011/arm/mod/f_arm020_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0011",
+                         "gender":  "male",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl020_0011/arm/mod/m_arm020_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0101",
+                         "gender":  "female",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl020_0101/arm/mod/f_arm020_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0101",
+                         "gender":  "male",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl020_0101/arm/mod/m_arm020_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0111",
+                         "gender":  "female",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl020_0111/arm/mod/f_arm020_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl020_0111",
+                         "gender":  "male",
+                         "slingerId":  20,
+                         "slingerModelId":  "slg020_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl020_0111/arm/mod/m_arm020_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0000",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0000/arm/mod/f_arm021_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0000",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0000/arm/mod/m_arm021_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0001",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0001/arm/mod/f_arm021_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0001",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0001/arm/mod/m_arm021_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0010",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0010/arm/mod/f_arm021_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0010",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0010/arm/mod/m_arm021_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0011",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0011/arm/mod/f_arm021_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0011",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0011/arm/mod/m_arm021_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0100",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0100/arm/mod/f_arm021_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0100",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0100/arm/mod/m_arm021_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0101",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0101/arm/mod/f_arm021_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0101",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0101/arm/mod/m_arm021_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0110",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0110/arm/mod/f_arm021_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0110",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0110/arm/mod/m_arm021_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0111",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0111/arm/mod/f_arm021_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0111",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0111/arm/mod/m_arm021_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0200",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0200/arm/mod/f_arm021_0200.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0200",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0200/arm/mod/m_arm021_0200.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0210",
+                         "gender":  "female",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl021_0210/arm/mod/f_arm021_0210.evam"
+                     },
+                     {
+                         "armorModelId":  "pl021_0210",
+                         "gender":  "male",
+                         "slingerId":  21,
+                         "slingerModelId":  "slg021_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl021_0210/arm/mod/m_arm021_0210.evam"
+                     },
+                     {
+                         "armorModelId":  "pl022_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl022_0000/arm/mod/f_arm022_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl022_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl022_0000/arm/mod/m_arm022_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl022_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl022_0001/arm/mod/f_arm022_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl022_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl022_0001/arm/mod/m_arm022_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl023_0000",
+                         "gender":  "female",
+                         "slingerId":  23,
+                         "slingerModelId":  "slg023_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl023_0000/arm/mod/f_arm023_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl023_0000",
+                         "gender":  "male",
+                         "slingerId":  23,
+                         "slingerModelId":  "slg023_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl023_0000/arm/mod/m_arm023_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl023_0001",
+                         "gender":  "female",
+                         "slingerId":  23,
+                         "slingerModelId":  "slg023_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl023_0001/arm/mod/f_arm023_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl023_0001",
+                         "gender":  "male",
+                         "slingerId":  23,
+                         "slingerModelId":  "slg023_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl023_0001/arm/mod/m_arm023_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl024_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl024_0000/arm/mod/f_arm024_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl024_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl024_0000/arm/mod/m_arm024_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl024_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl024_0001/arm/mod/f_arm024_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl024_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl024_0001/arm/mod/m_arm024_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl024_0101",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl024_0101/arm/mod/f_arm024_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl024_0101",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl024_0101/arm/mod/m_arm024_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl025_0000",
+                         "gender":  "female",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl025_0000/arm/mod/f_arm025_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl025_0000",
+                         "gender":  "male",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl025_0000/arm/mod/m_arm025_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl026_0000",
+                         "gender":  "female",
+                         "slingerId":  26,
+                         "slingerModelId":  "slg026_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl026_0000/arm/mod/f_arm026_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl026_0000",
+                         "gender":  "male",
+                         "slingerId":  26,
+                         "slingerModelId":  "slg026_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl026_0000/arm/mod/m_arm026_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0000",
+                         "gender":  "female",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl027_0000/arm/mod/f_arm027_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0000",
+                         "gender":  "male",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl027_0000/arm/mod/m_arm027_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0001",
+                         "gender":  "female",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl027_0001/arm/mod/f_arm027_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0001",
+                         "gender":  "male",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl027_0001/arm/mod/m_arm027_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0010",
+                         "gender":  "female",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl027_0010/arm/mod/f_arm027_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0010",
+                         "gender":  "male",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl027_0010/arm/mod/m_arm027_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0011",
+                         "gender":  "female",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl027_0011/arm/mod/f_arm027_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0011",
+                         "gender":  "male",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl027_0011/arm/mod/m_arm027_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0500",
+                         "gender":  "female",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl027_0500/arm/mod/f_arm027_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0500",
+                         "gender":  "male",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl027_0500/arm/mod/m_arm027_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0510",
+                         "gender":  "female",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl027_0510/arm/mod/f_arm027_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl027_0510",
+                         "gender":  "male",
+                         "slingerId":  27,
+                         "slingerModelId":  "slg027_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl027_0510/arm/mod/m_arm027_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl028_0000",
+                         "gender":  "female",
+                         "slingerId":  28,
+                         "slingerModelId":  "slg028_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl028_0000/arm/mod/f_arm028_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl028_0000",
+                         "gender":  "male",
+                         "slingerId":  28,
+                         "slingerModelId":  "slg028_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl028_0000/arm/mod/m_arm028_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl028_0001",
+                         "gender":  "female",
+                         "slingerId":  28,
+                         "slingerModelId":  "slg028_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl028_0001/arm/mod/f_arm028_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl028_0001",
+                         "gender":  "male",
+                         "slingerId":  28,
+                         "slingerModelId":  "slg028_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl028_0001/arm/mod/m_arm028_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl028_0010",
+                         "gender":  "female",
+                         "slingerId":  28,
+                         "slingerModelId":  "slg028_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl028_0010/arm/mod/f_arm028_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl028_0010",
+                         "gender":  "male",
+                         "slingerId":  28,
+                         "slingerModelId":  "slg028_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl028_0010/arm/mod/m_arm028_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0000",
+                         "gender":  "female",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl029_0000/arm/mod/f_arm029_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0000",
+                         "gender":  "male",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl029_0000/arm/mod/m_arm029_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0001",
+                         "gender":  "female",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl029_0001/arm/mod/f_arm029_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0001",
+                         "gender":  "male",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl029_0001/arm/mod/m_arm029_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0010",
+                         "gender":  "female",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl029_0010/arm/mod/f_arm029_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0010",
+                         "gender":  "male",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl029_0010/arm/mod/m_arm029_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0011",
+                         "gender":  "female",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl029_0011/arm/mod/f_arm029_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0011",
+                         "gender":  "male",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl029_0011/arm/mod/m_arm029_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0101",
+                         "gender":  "female",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl029_0101/arm/mod/f_arm029_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0101",
+                         "gender":  "male",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl029_0101/arm/mod/m_arm029_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0111",
+                         "gender":  "female",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl029_0111/arm/mod/f_arm029_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl029_0111",
+                         "gender":  "male",
+                         "slingerId":  29,
+                         "slingerModelId":  "slg029_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl029_0111/arm/mod/m_arm029_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0000",
+                         "gender":  "female",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl030_0000/arm/mod/f_arm030_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0000",
+                         "gender":  "male",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl030_0000/arm/mod/m_arm030_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0010",
+                         "gender":  "female",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl030_0010/arm/mod/f_arm030_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0010",
+                         "gender":  "male",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl030_0010/arm/mod/m_arm030_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0020",
+                         "gender":  "female",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl030_0020/arm/mod/f_arm030_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0020",
+                         "gender":  "male",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl030_0020/arm/mod/m_arm030_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0500",
+                         "gender":  "female",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl030_0500/arm/mod/f_arm030_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0500",
+                         "gender":  "male",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl030_0500/arm/mod/m_arm030_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0510",
+                         "gender":  "female",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl030_0510/arm/mod/f_arm030_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl030_0510",
+                         "gender":  "male",
+                         "slingerId":  30,
+                         "slingerModelId":  "slg030_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl030_0510/arm/mod/m_arm030_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl031_0000",
+                         "gender":  "female",
+                         "slingerId":  31,
+                         "slingerModelId":  "slg031_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl031_0000/arm/mod/f_arm031_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl031_0000",
+                         "gender":  "male",
+                         "slingerId":  31,
+                         "slingerModelId":  "slg031_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl031_0000/arm/mod/m_arm031_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0000",
+                         "gender":  "female",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl032_0000/arm/mod/f_arm032_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0000",
+                         "gender":  "male",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl032_0000/arm/mod/m_arm032_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0010",
+                         "gender":  "female",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl032_0010/arm/mod/f_arm032_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0010",
+                         "gender":  "male",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl032_0010/arm/mod/m_arm032_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0020",
+                         "gender":  "female",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl032_0020/arm/mod/f_arm032_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0020",
+                         "gender":  "male",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl032_0020/arm/mod/m_arm032_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0500",
+                         "gender":  "female",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl032_0500/arm/mod/f_arm032_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0500",
+                         "gender":  "male",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl032_0500/arm/mod/m_arm032_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0510",
+                         "gender":  "female",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl032_0510/arm/mod/f_arm032_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl032_0510",
+                         "gender":  "male",
+                         "slingerId":  32,
+                         "slingerModelId":  "slg032_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl032_0510/arm/mod/m_arm032_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0000",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0000/arm/mod/f_arm033_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0000",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0000/arm/mod/m_arm033_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0001",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0001/arm/mod/f_arm033_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0001",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0001/arm/mod/m_arm033_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0010",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0010/arm/mod/f_arm033_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0010",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0010/arm/mod/m_arm033_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0011",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0011/arm/mod/f_arm033_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0011",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0011/arm/mod/m_arm033_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0100",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0100/arm/mod/f_arm033_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0100",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0100/arm/mod/m_arm033_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0101",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0101/arm/mod/f_arm033_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0101",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0101/arm/mod/m_arm033_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0110",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0110/arm/mod/f_arm033_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0110",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0110/arm/mod/m_arm033_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0111",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0111/arm/mod/f_arm033_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0111",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0111/arm/mod/m_arm033_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0200",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0200/arm/mod/f_arm033_0200.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0200",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0200/arm/mod/m_arm033_0200.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0210",
+                         "gender":  "female",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl033_0210/arm/mod/f_arm033_0210.evam"
+                     },
+                     {
+                         "armorModelId":  "pl033_0210",
+                         "gender":  "male",
+                         "slingerId":  33,
+                         "slingerModelId":  "slg033_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl033_0210/arm/mod/m_arm033_0210.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0000",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0000/arm/mod/f_arm034_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0000",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0000/arm/mod/m_arm034_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0001",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0001/arm/mod/f_arm034_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0001",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0001/arm/mod/m_arm034_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0010",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0010/arm/mod/f_arm034_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0010",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0010/arm/mod/m_arm034_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0011",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0011/arm/mod/f_arm034_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0011",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0011/arm/mod/m_arm034_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0100",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0100/arm/mod/f_arm034_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0100",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0100/arm/mod/m_arm034_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0101",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0101/arm/mod/f_arm034_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0101",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0101/arm/mod/m_arm034_0101.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0110",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0110/arm/mod/f_arm034_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0110",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0110/arm/mod/m_arm034_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0111",
+                         "gender":  "female",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl034_0111/arm/mod/f_arm034_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl034_0111",
+                         "gender":  "male",
+                         "slingerId":  34,
+                         "slingerModelId":  "slg034_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl034_0111/arm/mod/m_arm034_0111.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl035_0000/arm/mod/f_arm035_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl035_0000/arm/mod/m_arm035_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl035_0001/arm/mod/f_arm035_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl035_0001/arm/mod/m_arm035_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0010",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl035_0010/arm/mod/f_arm035_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0010",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl035_0010/arm/mod/m_arm035_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0011",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl035_0011/arm/mod/f_arm035_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0011",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl035_0011/arm/mod/m_arm035_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0020",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl035_0020/arm/mod/f_arm035_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl035_0020",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl035_0020/arm/mod/m_arm035_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl036_0000",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl036_0000/arm/mod/f_arm036_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl036_0000",
+                         "gender":  "male",
+                         "slingerId":  36,
+                         "slingerModelId":  "slg036_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl036_0000/arm/mod/m_arm036_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl038_0000",
+                         "gender":  "female",
+                         "slingerId":  38,
+                         "slingerModelId":  "slg038_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl038_0000/arm/mod/f_arm038_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl038_0000",
+                         "gender":  "male",
+                         "slingerId":  38,
+                         "slingerModelId":  "slg038_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl038_0000/arm/mod/m_arm038_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl038_0010",
+                         "gender":  "female",
+                         "slingerId":  38,
+                         "slingerModelId":  "slg038_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl038_0010/arm/mod/f_arm038_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl038_0010",
+                         "gender":  "male",
+                         "slingerId":  38,
+                         "slingerModelId":  "slg038_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl038_0010/arm/mod/m_arm038_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl038_0020",
+                         "gender":  "female",
+                         "slingerId":  38,
+                         "slingerModelId":  "slg038_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl038_0020/arm/mod/f_arm038_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl038_0020",
+                         "gender":  "male",
+                         "slingerId":  38,
+                         "slingerModelId":  "slg038_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl038_0020/arm/mod/m_arm038_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl039_0000",
+                         "gender":  "female",
+                         "slingerId":  39,
+                         "slingerModelId":  "slg039_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl039_0000/arm/mod/f_arm039_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl039_0000",
+                         "gender":  "male",
+                         "slingerId":  39,
+                         "slingerModelId":  "slg039_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl039_0000/arm/mod/m_arm039_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl039_0001",
+                         "gender":  "female",
+                         "slingerId":  39,
+                         "slingerModelId":  "slg039_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl039_0001/arm/mod/f_arm039_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl039_0001",
+                         "gender":  "male",
+                         "slingerId":  39,
+                         "slingerModelId":  "slg039_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl039_0001/arm/mod/m_arm039_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl040_0000",
+                         "gender":  "female",
+                         "slingerId":  40,
+                         "slingerModelId":  "slg040_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl040_0000/arm/mod/f_arm040_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl040_0000",
+                         "gender":  "male",
+                         "slingerId":  40,
+                         "slingerModelId":  "slg040_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl040_0000/arm/mod/m_arm040_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl040_0001",
+                         "gender":  "female",
+                         "slingerId":  40,
+                         "slingerModelId":  "slg040_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl040_0001/arm/mod/f_arm040_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl040_0001",
+                         "gender":  "male",
+                         "slingerId":  40,
+                         "slingerModelId":  "slg040_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl040_0001/arm/mod/m_arm040_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl040_0010",
+                         "gender":  "female",
+                         "slingerId":  40,
+                         "slingerModelId":  "slg040_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl040_0010/arm/mod/f_arm040_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl040_0010",
+                         "gender":  "male",
+                         "slingerId":  40,
+                         "slingerModelId":  "slg040_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl040_0010/arm/mod/m_arm040_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl041_0000",
+                         "gender":  "female",
+                         "slingerId":  41,
+                         "slingerModelId":  "slg041_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl041_0000/arm/mod/f_arm041_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl041_0000",
+                         "gender":  "male",
+                         "slingerId":  41,
+                         "slingerModelId":  "slg041_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl041_0000/arm/mod/m_arm041_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl041_0001",
+                         "gender":  "female",
+                         "slingerId":  41,
+                         "slingerModelId":  "slg041_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl041_0001/arm/mod/f_arm041_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl041_0001",
+                         "gender":  "male",
+                         "slingerId":  41,
+                         "slingerModelId":  "slg041_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl041_0001/arm/mod/m_arm041_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl041_0010",
+                         "gender":  "female",
+                         "slingerId":  41,
+                         "slingerModelId":  "slg041_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl041_0010/arm/mod/f_arm041_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl041_0010",
+                         "gender":  "male",
+                         "slingerId":  41,
+                         "slingerModelId":  "slg041_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl041_0010/arm/mod/m_arm041_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0000",
+                         "gender":  "female",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl042_0000/arm/mod/f_arm042_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0000",
+                         "gender":  "male",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl042_0000/arm/mod/m_arm042_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0010",
+                         "gender":  "female",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl042_0010/arm/mod/f_arm042_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0010",
+                         "gender":  "male",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl042_0010/arm/mod/m_arm042_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0500",
+                         "gender":  "female",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl042_0500/arm/mod/f_arm042_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0500",
+                         "gender":  "male",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl042_0500/arm/mod/m_arm042_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0510",
+                         "gender":  "female",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl042_0510/arm/mod/f_arm042_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl042_0510",
+                         "gender":  "male",
+                         "slingerId":  2,
+                         "slingerModelId":  "slg002_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl042_0510/arm/mod/m_arm042_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl043_0000",
+                         "gender":  "female",
+                         "slingerId":  43,
+                         "slingerModelId":  "slg043_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl043_0000/arm/mod/f_arm043_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl043_0000",
+                         "gender":  "male",
+                         "slingerId":  43,
+                         "slingerModelId":  "slg043_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl043_0000/arm/mod/m_arm043_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl043_0010",
+                         "gender":  "female",
+                         "slingerId":  43,
+                         "slingerModelId":  "slg043_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl043_0010/arm/mod/f_arm043_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl043_0010",
+                         "gender":  "male",
+                         "slingerId":  43,
+                         "slingerModelId":  "slg043_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl043_0010/arm/mod/m_arm043_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl044_0000",
+                         "gender":  "female",
+                         "slingerId":  44,
+                         "slingerModelId":  "slg044_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl044_0000/arm/mod/f_arm044_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl044_0000",
+                         "gender":  "male",
+                         "slingerId":  44,
+                         "slingerModelId":  "slg044_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl044_0000/arm/mod/m_arm044_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl045_0000",
+                         "gender":  "female",
+                         "slingerId":  45,
+                         "slingerModelId":  "slg045_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl045_0000/arm/mod/f_arm045_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl045_0000",
+                         "gender":  "male",
+                         "slingerId":  45,
+                         "slingerModelId":  "slg045_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl045_0000/arm/mod/m_arm045_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl045_0010",
+                         "gender":  "female",
+                         "slingerId":  45,
+                         "slingerModelId":  "slg045_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl045_0010/arm/mod/f_arm045_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl045_0010",
+                         "gender":  "male",
+                         "slingerId":  45,
+                         "slingerModelId":  "slg045_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl045_0010/arm/mod/m_arm045_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl045_0020",
+                         "gender":  "female",
+                         "slingerId":  45,
+                         "slingerModelId":  "slg045_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl045_0020/arm/mod/f_arm045_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl045_0020",
+                         "gender":  "male",
+                         "slingerId":  45,
+                         "slingerModelId":  "slg045_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl045_0020/arm/mod/m_arm045_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0000",
+                         "gender":  "female",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl046_0000/arm/mod/f_arm046_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0000",
+                         "gender":  "male",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl046_0000/arm/mod/m_arm046_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0001",
+                         "gender":  "female",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl046_0001/arm/mod/f_arm046_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0001",
+                         "gender":  "male",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl046_0001/arm/mod/m_arm046_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0010",
+                         "gender":  "female",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl046_0010/arm/mod/f_arm046_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0010",
+                         "gender":  "male",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl046_0010/arm/mod/m_arm046_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0011",
+                         "gender":  "female",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl046_0011/arm/mod/f_arm046_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0011",
+                         "gender":  "male",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl046_0011/arm/mod/m_arm046_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0020",
+                         "gender":  "female",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl046_0020/arm/mod/f_arm046_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl046_0020",
+                         "gender":  "male",
+                         "slingerId":  46,
+                         "slingerModelId":  "slg046_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl046_0020/arm/mod/m_arm046_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0000",
+                         "gender":  "female",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl047_0000/arm/mod/f_arm047_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0000",
+                         "gender":  "male",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl047_0000/arm/mod/m_arm047_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0001",
+                         "gender":  "female",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl047_0001/arm/mod/f_arm047_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0001",
+                         "gender":  "male",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl047_0001/arm/mod/m_arm047_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0010",
+                         "gender":  "female",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl047_0010/arm/mod/f_arm047_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0010",
+                         "gender":  "male",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl047_0010/arm/mod/m_arm047_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0011",
+                         "gender":  "female",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl047_0011/arm/mod/f_arm047_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0011",
+                         "gender":  "male",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl047_0011/arm/mod/m_arm047_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0020",
+                         "gender":  "female",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl047_0020/arm/mod/f_arm047_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl047_0020",
+                         "gender":  "male",
+                         "slingerId":  47,
+                         "slingerModelId":  "slg047_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl047_0020/arm/mod/m_arm047_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl048_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl048_0000/arm/mod/f_arm048_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl048_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl048_0000/arm/mod/m_arm048_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0000",
+                         "gender":  "female",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl049_0000/arm/mod/f_arm049_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0000",
+                         "gender":  "male",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl049_0000/arm/mod/m_arm049_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0001",
+                         "gender":  "female",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl049_0001/arm/mod/f_arm049_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0001",
+                         "gender":  "male",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl049_0001/arm/mod/m_arm049_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0010",
+                         "gender":  "female",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl049_0010/arm/mod/f_arm049_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0010",
+                         "gender":  "male",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl049_0010/arm/mod/m_arm049_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0011",
+                         "gender":  "female",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl049_0011/arm/mod/f_arm049_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0011",
+                         "gender":  "male",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl049_0011/arm/mod/m_arm049_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0020",
+                         "gender":  "female",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl049_0020/arm/mod/f_arm049_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl049_0020",
+                         "gender":  "male",
+                         "slingerId":  49,
+                         "slingerModelId":  "slg049_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl049_0020/arm/mod/m_arm049_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0000",
+                         "gender":  "female",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl050_0000/arm/mod/f_arm050_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0000",
+                         "gender":  "male",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl050_0000/arm/mod/m_arm050_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0010",
+                         "gender":  "female",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl050_0010/arm/mod/f_arm050_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0010",
+                         "gender":  "male",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl050_0010/arm/mod/m_arm050_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0500",
+                         "gender":  "female",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl050_0500/arm/mod/f_arm050_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0500",
+                         "gender":  "male",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl050_0500/arm/mod/m_arm050_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0510",
+                         "gender":  "female",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl050_0510/arm/mod/f_arm050_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl050_0510",
+                         "gender":  "male",
+                         "slingerId":  50,
+                         "slingerModelId":  "slg050_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl050_0510/arm/mod/m_arm050_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0000",
+                         "gender":  "female",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl051_0000/arm/mod/f_arm051_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0000",
+                         "gender":  "male",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl051_0000/arm/mod/m_arm051_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0001",
+                         "gender":  "female",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl051_0001/arm/mod/f_arm051_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0001",
+                         "gender":  "male",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl051_0001/arm/mod/m_arm051_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0010",
+                         "gender":  "female",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl051_0010/arm/mod/f_arm051_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0010",
+                         "gender":  "male",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl051_0010/arm/mod/m_arm051_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0011",
+                         "gender":  "female",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl051_0011/arm/mod/f_arm051_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0011",
+                         "gender":  "male",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl051_0011/arm/mod/m_arm051_0011.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0020",
+                         "gender":  "female",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl051_0020/arm/mod/f_arm051_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl051_0020",
+                         "gender":  "male",
+                         "slingerId":  51,
+                         "slingerModelId":  "slg051_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl051_0020/arm/mod/m_arm051_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl052_0000",
+                         "gender":  "female",
+                         "slingerId":  52,
+                         "slingerModelId":  "slg052_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl052_0000/arm/mod/f_arm052_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl052_0000",
+                         "gender":  "male",
+                         "slingerId":  52,
+                         "slingerModelId":  "slg052_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl052_0000/arm/mod/m_arm052_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl052_0010",
+                         "gender":  "female",
+                         "slingerId":  52,
+                         "slingerModelId":  "slg052_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl052_0010/arm/mod/f_arm052_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl052_0010",
+                         "gender":  "male",
+                         "slingerId":  52,
+                         "slingerModelId":  "slg052_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl052_0010/arm/mod/m_arm052_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl053_0000",
+                         "gender":  "female",
+                         "slingerId":  53,
+                         "slingerModelId":  "slg053_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl053_0000/arm/mod/f_arm053_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl053_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl053_0000/arm/mod/m_arm053_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl057_0000",
+                         "gender":  "female",
+                         "slingerId":  57,
+                         "slingerModelId":  "slg057_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl057_0000/arm/mod/f_arm057_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl057_0000",
+                         "gender":  "male",
+                         "slingerId":  19,
+                         "slingerModelId":  "slg019_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl057_0000/arm/mod/m_arm057_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl057_0010",
+                         "gender":  "male",
+                         "slingerId":  19,
+                         "slingerModelId":  "slg019_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl057_0010/arm/mod/m_arm057_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl066_0000",
+                         "gender":  "female",
+                         "slingerId":  66,
+                         "slingerModelId":  "slg066_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl066_0000/arm/mod/f_arm066_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl066_0000",
+                         "gender":  "male",
+                         "slingerId":  66,
+                         "slingerModelId":  "slg066_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl066_0000/arm/mod/m_arm066_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl066_0010",
+                         "gender":  "female",
+                         "slingerId":  66,
+                         "slingerModelId":  "slg066_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl066_0010/arm/mod/f_arm066_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl066_0010",
+                         "gender":  "male",
+                         "slingerId":  66,
+                         "slingerModelId":  "slg066_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl066_0010/arm/mod/m_arm066_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl067_0000",
+                         "gender":  "female",
+                         "slingerId":  67,
+                         "slingerModelId":  "slg067_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl067_0000/arm/mod/f_arm067_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl067_0000",
+                         "gender":  "male",
+                         "slingerId":  67,
+                         "slingerModelId":  "slg067_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl067_0000/arm/mod/m_arm067_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl072_0000",
+                         "gender":  "female",
+                         "slingerId":  72,
+                         "slingerModelId":  "slg072_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl072_0000/arm/mod/f_arm072_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl072_0000",
+                         "gender":  "male",
+                         "slingerId":  72,
+                         "slingerModelId":  "slg072_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl072_0000/arm/mod/m_arm072_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl072_0001",
+                         "gender":  "female",
+                         "slingerId":  72,
+                         "slingerModelId":  "slg072_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl072_0001/arm/mod/f_arm072_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl072_0001",
+                         "gender":  "male",
+                         "slingerId":  72,
+                         "slingerModelId":  "slg072_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl072_0001/arm/mod/m_arm072_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl073_0000",
+                         "gender":  "female",
+                         "slingerId":  73,
+                         "slingerModelId":  "slg073_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl073_0000/arm/mod/f_arm073_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl073_0000",
+                         "gender":  "male",
+                         "slingerId":  73,
+                         "slingerModelId":  "slg073_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl073_0000/arm/mod/m_arm073_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl074_0000",
+                         "gender":  "female",
+                         "slingerId":  74,
+                         "slingerModelId":  "slg074_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl074_0000/arm/mod/f_arm074_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl074_0000",
+                         "gender":  "male",
+                         "slingerId":  74,
+                         "slingerModelId":  "slg074_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl074_0000/arm/mod/m_arm074_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl075_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl075_0000/arm/mod/f_arm075_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl075_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl075_0000/arm/mod/m_arm075_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl076_0000",
+                         "gender":  "female",
+                         "slingerId":  76,
+                         "slingerModelId":  "slg076_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl076_0000/arm/mod/f_arm076_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl076_0000",
+                         "gender":  "male",
+                         "slingerId":  76,
+                         "slingerModelId":  "slg076_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl076_0000/arm/mod/m_arm076_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl077_0000",
+                         "gender":  "female",
+                         "slingerId":  77,
+                         "slingerModelId":  "slg077_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl077_0000/arm/mod/f_arm077_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl077_0000",
+                         "gender":  "male",
+                         "slingerId":  77,
+                         "slingerModelId":  "slg077_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl077_0000/arm/mod/m_arm077_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl078_0000",
+                         "gender":  "female",
+                         "slingerId":  78,
+                         "slingerModelId":  "slg078_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl078_0000/arm/mod/f_arm078_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl078_0000",
+                         "gender":  "male",
+                         "slingerId":  78,
+                         "slingerModelId":  "slg078_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl078_0000/arm/mod/m_arm078_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl080_0000",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl080_0000/arm/mod/f_arm080_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl080_0000",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl080_0000/arm/mod/m_arm080_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl080_0010",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl080_0010/arm/mod/f_arm080_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl080_0010",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl080_0010/arm/mod/m_arm080_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0000",
+                         "gender":  "female",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl081_0000/arm/mod/f_arm081_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0000",
+                         "gender":  "male",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl081_0000/arm/mod/m_arm081_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0010",
+                         "gender":  "female",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl081_0010/arm/mod/f_arm081_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0010",
+                         "gender":  "male",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl081_0010/arm/mod/m_arm081_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0100",
+                         "gender":  "female",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl081_0100/arm/mod/f_arm081_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0100",
+                         "gender":  "male",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl081_0100/arm/mod/m_arm081_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0110",
+                         "gender":  "female",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl081_0110/arm/mod/f_arm081_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl081_0110",
+                         "gender":  "male",
+                         "slingerId":  81,
+                         "slingerModelId":  "slg081_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl081_0110/arm/mod/m_arm081_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0000",
+                         "gender":  "female",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl082_0000/arm/mod/f_arm082_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0000",
+                         "gender":  "male",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl082_0000/arm/mod/m_arm082_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0010",
+                         "gender":  "female",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl082_0010/arm/mod/f_arm082_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0010",
+                         "gender":  "male",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl082_0010/arm/mod/m_arm082_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0500",
+                         "gender":  "female",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl082_0500/arm/mod/f_arm082_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0500",
+                         "gender":  "male",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl082_0500/arm/mod/m_arm082_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0510",
+                         "gender":  "female",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl082_0510/arm/mod/f_arm082_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl082_0510",
+                         "gender":  "male",
+                         "slingerId":  82,
+                         "slingerModelId":  "slg082_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl082_0510/arm/mod/m_arm082_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0000",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl083_0000/arm/mod/f_arm083_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0000",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl083_0000/arm/mod/m_arm083_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0010",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl083_0010/arm/mod/f_arm083_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0010",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl083_0010/arm/mod/m_arm083_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0100",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl083_0100/arm/mod/f_arm083_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0100",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl083_0100/arm/mod/m_arm083_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0110",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl083_0110/arm/mod/f_arm083_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl083_0110",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl083_0110/arm/mod/m_arm083_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl084_0000",
+                         "gender":  "female",
+                         "slingerId":  84,
+                         "slingerModelId":  "slg084_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl084_0000/arm/mod/f_arm084_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl084_0000",
+                         "gender":  "male",
+                         "slingerId":  84,
+                         "slingerModelId":  "slg084_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl084_0000/arm/mod/m_arm084_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl084_0010",
+                         "gender":  "female",
+                         "slingerId":  84,
+                         "slingerModelId":  "slg084_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl084_0010/arm/mod/f_arm084_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl084_0010",
+                         "gender":  "male",
+                         "slingerId":  84,
+                         "slingerModelId":  "slg084_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl084_0010/arm/mod/m_arm084_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl085_0000",
+                         "gender":  "female",
+                         "slingerId":  85,
+                         "slingerModelId":  "slg085_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl085_0000/arm/mod/f_arm085_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl085_0000",
+                         "gender":  "male",
+                         "slingerId":  85,
+                         "slingerModelId":  "slg085_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl085_0000/arm/mod/m_arm085_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl085_0010",
+                         "gender":  "female",
+                         "slingerId":  85,
+                         "slingerModelId":  "slg085_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl085_0010/arm/mod/f_arm085_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl085_0010",
+                         "gender":  "male",
+                         "slingerId":  85,
+                         "slingerModelId":  "slg085_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl085_0010/arm/mod/m_arm085_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl085_0020",
+                         "gender":  "female",
+                         "slingerId":  85,
+                         "slingerModelId":  "slg085_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl085_0020/arm/mod/f_arm085_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl085_0020",
+                         "gender":  "male",
+                         "slingerId":  85,
+                         "slingerModelId":  "slg085_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl085_0020/arm/mod/m_arm085_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl086_0000",
+                         "gender":  "female",
+                         "slingerId":  86,
+                         "slingerModelId":  "slg086_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl086_0000/arm/mod/f_arm086_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl086_0000",
+                         "gender":  "male",
+                         "slingerId":  86,
+                         "slingerModelId":  "slg086_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl086_0000/arm/mod/m_arm086_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl086_0010",
+                         "gender":  "female",
+                         "slingerId":  86,
+                         "slingerModelId":  "slg086_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl086_0010/arm/mod/f_arm086_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl086_0010",
+                         "gender":  "male",
+                         "slingerId":  86,
+                         "slingerModelId":  "slg086_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl086_0010/arm/mod/m_arm086_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl086_0020",
+                         "gender":  "female",
+                         "slingerId":  86,
+                         "slingerModelId":  "slg086_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl086_0020/arm/mod/f_arm086_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl086_0020",
+                         "gender":  "male",
+                         "slingerId":  86,
+                         "slingerModelId":  "slg086_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl086_0020/arm/mod/m_arm086_0020.evam"
+                     },
+                     {
+                         "armorModelId":  "pl087_0000",
+                         "gender":  "female",
+                         "slingerId":  87,
+                         "slingerModelId":  "slg087_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl087_0000/arm/mod/f_arm087_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl087_0000",
+                         "gender":  "male",
+                         "slingerId":  87,
+                         "slingerModelId":  "slg087_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl087_0000/arm/mod/m_arm087_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl087_0010",
+                         "gender":  "female",
+                         "slingerId":  87,
+                         "slingerModelId":  "slg087_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl087_0010/arm/mod/f_arm087_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl087_0010",
+                         "gender":  "male",
+                         "slingerId":  87,
+                         "slingerModelId":  "slg087_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl087_0010/arm/mod/m_arm087_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl088_0000",
+                         "gender":  "female",
+                         "slingerId":  88,
+                         "slingerModelId":  "slg088_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl088_0000/arm/mod/f_arm088_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl088_0000",
+                         "gender":  "male",
+                         "slingerId":  88,
+                         "slingerModelId":  "slg088_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl088_0000/arm/mod/m_arm088_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl088_0010",
+                         "gender":  "female",
+                         "slingerId":  88,
+                         "slingerModelId":  "slg088_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl088_0010/arm/mod/f_arm088_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl088_0010",
+                         "gender":  "male",
+                         "slingerId":  88,
+                         "slingerModelId":  "slg088_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl088_0010/arm/mod/m_arm088_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0000",
+                         "gender":  "female",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl089_0000/arm/mod/f_arm089_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0000",
+                         "gender":  "male",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl089_0000/arm/mod/m_arm089_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0010",
+                         "gender":  "female",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl089_0010/arm/mod/f_arm089_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0010",
+                         "gender":  "male",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl089_0010/arm/mod/m_arm089_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0500",
+                         "gender":  "female",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl089_0500/arm/mod/f_arm089_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0500",
+                         "gender":  "male",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl089_0500/arm/mod/m_arm089_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0510",
+                         "gender":  "female",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl089_0510/arm/mod/f_arm089_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl089_0510",
+                         "gender":  "male",
+                         "slingerId":  89,
+                         "slingerModelId":  "slg089_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl089_0510/arm/mod/m_arm089_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl091_0000",
+                         "gender":  "female",
+                         "slingerId":  91,
+                         "slingerModelId":  "slg091_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl091_0000/arm/mod/f_arm091_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl091_0000",
+                         "gender":  "male",
+                         "slingerId":  91,
+                         "slingerModelId":  "slg091_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl091_0000/arm/mod/m_arm091_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl092_0000",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl092_0000/arm/mod/f_arm092_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl093_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl093_0000/arm/mod/f_arm093_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl093_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl093_0000/arm/mod/m_arm093_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl094_0000",
+                         "gender":  "female",
+                         "slingerId":  94,
+                         "slingerModelId":  "slg094_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl094_0000/arm/mod/f_arm094_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl094_0000",
+                         "gender":  "male",
+                         "slingerId":  94,
+                         "slingerModelId":  "slg094_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl094_0000/arm/mod/m_arm094_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl104_0000",
+                         "gender":  "female",
+                         "slingerId":  104,
+                         "slingerModelId":  "slg104_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl104_0000/arm/mod/f_arm104_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl104_0000",
+                         "gender":  "male",
+                         "slingerId":  104,
+                         "slingerModelId":  "slg104_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl104_0000/arm/mod/m_arm104_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl105_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl105_0000/arm/mod/f_arm105_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl105_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl105_0000/arm/mod/m_arm105_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl106_0000",
+                         "gender":  "female",
+                         "slingerId":  106,
+                         "slingerModelId":  "slg106_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl106_0000/arm/mod/f_arm106_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl106_0000",
+                         "gender":  "male",
+                         "slingerId":  106,
+                         "slingerModelId":  "slg106_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl106_0000/arm/mod/m_arm106_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0000",
+                         "gender":  "female",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl107_0000/arm/mod/f_arm107_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0000",
+                         "gender":  "male",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl107_0000/arm/mod/m_arm107_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0010",
+                         "gender":  "female",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl107_0010/arm/mod/f_arm107_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0010",
+                         "gender":  "male",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl107_0010/arm/mod/m_arm107_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0100",
+                         "gender":  "female",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl107_0100/arm/mod/f_arm107_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0100",
+                         "gender":  "male",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl107_0100/arm/mod/m_arm107_0100.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0110",
+                         "gender":  "female",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl107_0110/arm/mod/f_arm107_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl107_0110",
+                         "gender":  "male",
+                         "slingerId":  107,
+                         "slingerModelId":  "slg107_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl107_0110/arm/mod/m_arm107_0110.evam"
+                     },
+                     {
+                         "armorModelId":  "pl108_0000",
+                         "gender":  "female",
+                         "slingerId":  108,
+                         "slingerModelId":  "slg108_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl108_0000/arm/mod/f_arm108_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl108_0000",
+                         "gender":  "male",
+                         "slingerId":  108,
+                         "slingerModelId":  "slg108_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl108_0000/arm/mod/m_arm108_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl108_0010",
+                         "gender":  "female",
+                         "slingerId":  108,
+                         "slingerModelId":  "slg108_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl108_0010/arm/mod/f_arm108_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl108_0010",
+                         "gender":  "male",
+                         "slingerId":  108,
+                         "slingerModelId":  "slg108_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl108_0010/arm/mod/m_arm108_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0000",
+                         "gender":  "female",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl109_0000/arm/mod/f_arm109_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0000",
+                         "gender":  "male",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl109_0000/arm/mod/m_arm109_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0010",
+                         "gender":  "female",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl109_0010/arm/mod/f_arm109_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0010",
+                         "gender":  "male",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl109_0010/arm/mod/m_arm109_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0500",
+                         "gender":  "female",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl109_0500/arm/mod/f_arm109_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0500",
+                         "gender":  "male",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl109_0500/arm/mod/m_arm109_0500.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0510",
+                         "gender":  "female",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl109_0510/arm/mod/f_arm109_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl109_0510",
+                         "gender":  "male",
+                         "slingerId":  109,
+                         "slingerModelId":  "slg109_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl109_0510/arm/mod/m_arm109_0510.evam"
+                     },
+                     {
+                         "armorModelId":  "pl110_0000",
+                         "gender":  "female",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl110_0000/arm/mod/f_arm110_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl110_0000",
+                         "gender":  "male",
+                         "slingerId":  null,
+                         "slingerModelId":  null,
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl110_0000/arm/mod/m_arm110_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl115_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl115_0000/arm/mod/f_arm115_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl115_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl115_0000/arm/mod/m_arm115_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl115_0001",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl115_0001/arm/mod/f_arm115_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl115_0001",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl115_0001/arm/mod/m_arm115_0001.evam"
+                     },
+                     {
+                         "armorModelId":  "pl116_0000",
+                         "gender":  "female",
+                         "slingerId":  57,
+                         "slingerModelId":  "slg057_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl116_0000/arm/mod/f_arm116_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl116_0000",
+                         "gender":  "male",
+                         "slingerId":  57,
+                         "slingerModelId":  "slg057_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl116_0000/arm/mod/m_arm116_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl117_0000",
+                         "gender":  "female",
+                         "slingerId":  19,
+                         "slingerModelId":  "slg019_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl117_0000/arm/mod/f_arm117_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl117_0000",
+                         "gender":  "male",
+                         "slingerId":  19,
+                         "slingerModelId":  "slg019_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl117_0000/arm/mod/m_arm117_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl120_0000",
+                         "gender":  "male",
+                         "slingerId":  120,
+                         "slingerModelId":  "slg120_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl120_0000/arm/mod/m_arm120_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl121_0000",
+                         "gender":  "female",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl121_0000/arm/mod/f_arm121_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl121_0000",
+                         "gender":  "male",
+                         "slingerId":  1,
+                         "slingerModelId":  "slg001_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl121_0000/arm/mod/m_arm121_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl122_0000",
+                         "gender":  "female",
+                         "slingerId":  67,
+                         "slingerModelId":  "slg067_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl122_0000/arm/mod/f_arm122_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl122_0000",
+                         "gender":  "male",
+                         "slingerId":  67,
+                         "slingerModelId":  "slg067_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl122_0000/arm/mod/m_arm122_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl123_0000",
+                         "gender":  "female",
+                         "slingerId":  123,
+                         "slingerModelId":  "slg123_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl123_0000/arm/mod/f_arm123_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl123_0000",
+                         "gender":  "male",
+                         "slingerId":  123,
+                         "slingerModelId":  "slg123_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl123_0000/arm/mod/m_arm123_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl124_0000",
+                         "gender":  "female",
+                         "slingerId":  124,
+                         "slingerModelId":  "slg124_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl124_0000/arm/mod/f_arm124_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl124_0000",
+                         "gender":  "male",
+                         "slingerId":  124,
+                         "slingerModelId":  "slg124_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl124_0000/arm/mod/m_arm124_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl125_0000",
+                         "gender":  "female",
+                         "slingerId":  125,
+                         "slingerModelId":  "slg125_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl125_0000/arm/mod/f_arm125_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl125_0000",
+                         "gender":  "male",
+                         "slingerId":  125,
+                         "slingerModelId":  "slg125_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl125_0000/arm/mod/m_arm125_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl126_0000",
+                         "gender":  "female",
+                         "slingerId":  126,
+                         "slingerModelId":  "slg126_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl126_0000/arm/mod/f_arm126_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl126_0000",
+                         "gender":  "male",
+                         "slingerId":  126,
+                         "slingerModelId":  "slg126_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl126_0000/arm/mod/m_arm126_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl127_0000",
+                         "gender":  "female",
+                         "slingerId":  127,
+                         "slingerModelId":  "slg127_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl127_0000/arm/mod/f_arm127_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl127_0000",
+                         "gender":  "male",
+                         "slingerId":  123,
+                         "slingerModelId":  "slg123_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl127_0000/arm/mod/m_arm127_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl128_0000",
+                         "gender":  "female",
+                         "slingerId":  128,
+                         "slingerModelId":  "slg128_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl128_0000/arm/mod/f_arm128_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl128_0000",
+                         "gender":  "male",
+                         "slingerId":  128,
+                         "slingerModelId":  "slg128_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl128_0000/arm/mod/m_arm128_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl129_0000",
+                         "gender":  "female",
+                         "slingerId":  129,
+                         "slingerModelId":  "slg129_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl129_0000/arm/mod/f_arm129_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl129_0000",
+                         "gender":  "male",
+                         "slingerId":  129,
+                         "slingerModelId":  "slg129_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl129_0000/arm/mod/m_arm129_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl129_0010",
+                         "gender":  "female",
+                         "slingerId":  129,
+                         "slingerModelId":  "slg129_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl129_0010/arm/mod/f_arm129_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl129_0010",
+                         "gender":  "male",
+                         "slingerId":  129,
+                         "slingerModelId":  "slg129_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl129_0010/arm/mod/m_arm129_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl130_0000",
+                         "gender":  "male",
+                         "slingerId":  130,
+                         "slingerModelId":  "slg130_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl130_0000/arm/mod/m_arm130_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl131_0000",
+                         "gender":  "female",
+                         "slingerId":  130,
+                         "slingerModelId":  "slg130_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl131_0000/arm/mod/f_arm131_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl132_0010",
+                         "gender":  "female",
+                         "slingerId":  132,
+                         "slingerModelId":  "slg132_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl132_0010/arm/mod/f_arm132_0010.evam"
+                     },
+                     {
+                         "armorModelId":  "pl133_0000",
+                         "gender":  "female",
+                         "slingerId":  133,
+                         "slingerModelId":  "slg133_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl133_0000/arm/mod/f_arm133_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl133_0000",
+                         "gender":  "male",
+                         "slingerId":  133,
+                         "slingerModelId":  "slg133_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl133_0000/arm/mod/m_arm133_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl500_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl500_0000/arm/mod/f_arm500_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl500_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl500_0000/arm/mod/m_arm500_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl501_0000",
+                         "gender":  "female",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/f_equip/pl501_0000/arm/mod/f_arm501_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl501_0000",
+                         "gender":  "male",
+                         "slingerId":  0,
+                         "slingerModelId":  "slg000_0000",
+                         "matchesArmorBaseId":  false,
+                         "sourcePath":  "pl/m_equip/pl501_0000/arm/mod/m_arm501_0000.evam"
+                     }
+                 ]
+}

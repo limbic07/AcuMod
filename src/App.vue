@@ -17,9 +17,7 @@ import {
 import {
   applyConflictOrder,
   createUserModCategory,
-  createModProfile,
   deleteUserModCategory,
-  deleteModProfile,
   disableMod,
   enableMod,
   getModConflictReport,
@@ -28,7 +26,6 @@ import {
   installModFromCandidate,
   installModFromFolder,
   listInstalledMods,
-  listModProfiles,
   listUserModCategories,
   moveConflictParticipant,
   openInstalledModFolder,
@@ -37,12 +34,9 @@ import {
   previewEnableMod,
   previewModImport,
   previewRestoreAllMods,
-  previewSwitchModProfile,
   previewUninstallMod,
-  renameModProfile,
   renameUserModCategory,
   restoreAllMods,
-  switchModProfile,
   uninstallMod,
   updateModMetadata,
   type InstalledModList,
@@ -60,9 +54,6 @@ import {
   type ModelReplacement,
   type ModUninstallPlan,
   type ModUninstallResult,
-  type ModProfileList,
-  type ProfileSwitchPlan,
-  type ProfileSwitchResult,
   type RestoreAllPlan,
   type RestoreAllResult,
   type UserModCategory,
@@ -82,10 +73,7 @@ const uninstallResult = ref<ModUninstallResult | null>(null);
 const restorePlan = ref<RestoreAllPlan | null>(null);
 const restoreResult = ref<RestoreAllResult | null>(null);
 const conflictReport = ref<ModConflictReport | null>(null);
-const modProfileList = ref<ModProfileList | null>(null);
 const userModCategories = ref<UserModCategory[]>([]);
-const profileSwitchPlan = ref<ProfileSwitchPlan | null>(null);
-const profileSwitchResult = ref<ProfileSwitchResult | null>(null);
 const conflictOrderPlan = ref<ApplyConflictOrderPlan | null>(null);
 const conflictOrderResult = ref<ApplyConflictOrderResult | null>(null);
 const manualPath = ref("");
@@ -121,13 +109,10 @@ const isHandlingDrop = ref(false);
 const pendingDropPath = ref("");
 const dragError = ref("");
 const conflictActionError = ref("");
-const profileError = ref("");
-const isProfileAction = ref(false);
 const isCategoryAction = ref(false);
 const isCategoryManagerOpen = ref(false);
 const pendingCategoryModId = ref("");
 const categoryError = ref("");
-const selectedProfileId = ref("");
 const modSearchQuery = ref("");
 const modCategoryFilter = ref("all");
 const modStatusFilter = ref("all");
@@ -293,10 +278,6 @@ const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.s
 const restorePlanMods = computed(() => restorePlan.value?.mods.slice(0, 12) ?? []);
 const restoreResultMods = computed(() => restoreResult.value?.mods.slice(0, 12) ?? []);
 const conflictGroups = computed(() => conflictReport.value?.groups ?? []);
-const modProfiles = computed(() => modProfileList.value?.profiles ?? []);
-const activeModProfile = computed(() =>
-  modProfiles.value.find((profile) => profile.isActive) ?? null,
-);
 const conflictingModIds = computed(
   () =>
     new Set(
@@ -506,26 +487,8 @@ async function loadConflictReport() {
   }
 }
 
-async function loadModProfiles() {
-  try {
-    const profiles = await listModProfiles();
-    modProfileList.value = profiles;
-    if (!profiles.profiles.some((profile) => profile.id === selectedProfileId.value)) {
-      selectedProfileId.value = profiles.activeProfileId;
-    }
-    profileError.value = "";
-  } catch (error) {
-    profileError.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
 async function refreshModViews() {
-  await Promise.all([
-    loadInstalledMods(),
-    loadConflictReport(),
-    loadModProfiles(),
-    loadUserModCategories(),
-  ]);
+  await Promise.all([loadInstalledMods(), loadConflictReport(), loadUserModCategories()]);
 }
 
 async function refreshCurrentWorkspace() {
@@ -657,110 +620,6 @@ async function deleteUserCategory(category: UserModCategory) {
     categoryError.value = error instanceof Error ? error.message : String(error);
   } finally {
     isCategoryAction.value = false;
-  }
-}
-
-async function createProfile() {
-  const name = window.prompt("新 Profile 会从当前启用状态和冲突顺序复制。请输入名称：", "");
-  if (name === null) {
-    return;
-  }
-
-  isProfileAction.value = true;
-  try {
-    const profile = await createModProfile(name);
-    selectedProfileId.value = profile.id;
-    profileError.value = "";
-    await loadModProfiles();
-  } catch (error) {
-    profileError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    isProfileAction.value = false;
-  }
-}
-
-async function renameSelectedProfile() {
-  const profile = modProfiles.value.find((item) => item.id === selectedProfileId.value);
-  if (!profile) {
-    return;
-  }
-
-  const name = window.prompt("请输入新的 Profile 名称：", profile.name);
-  if (name === null) {
-    return;
-  }
-
-  isProfileAction.value = true;
-  try {
-    await renameModProfile(profile.id, name);
-    profileError.value = "";
-    await loadModProfiles();
-  } catch (error) {
-    profileError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    isProfileAction.value = false;
-  }
-}
-
-async function deleteSelectedProfile() {
-  const profile = modProfiles.value.find((item) => item.id === selectedProfileId.value);
-  if (!profile || profile.isActive) {
-    return;
-  }
-
-  if (!window.confirm(`删除 Profile ${profile.name} 不会删除 MOD 文件。是否继续？`)) {
-    return;
-  }
-
-  isProfileAction.value = true;
-  try {
-    await deleteModProfile(profile.id);
-    selectedProfileId.value = modProfileList.value?.activeProfileId ?? "";
-    profileError.value = "";
-    await loadModProfiles();
-  } catch (error) {
-    profileError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    isProfileAction.value = false;
-  }
-}
-
-async function switchSelectedProfile(profileId = selectedProfileId.value) {
-  const activeProfile = activeModProfile.value;
-
-  selectedProfileId.value = profileId;
-
-  if (!profileId || !activeProfile || profileId === activeProfile.id) {
-    return;
-  }
-
-  isProfileAction.value = true;
-  try {
-    const plan = await previewSwitchModProfile(profileId);
-    profileSwitchPlan.value = plan;
-    profileSwitchResult.value = null;
-    profileError.value = "";
-    const confirmed = window.confirm(
-      `${plan.message}\n\n将启用：${plan.enableMods.length} 个 MOD\n将禁用：${plan.disableMods.length} 个 MOD` +
-        (plan.requiresOverwriteConfirmation ? "\n将覆盖已有文件。" : "") +
-        "\n\n是否切换？",
-    );
-
-    if (!confirmed) {
-      selectedProfileId.value = activeProfile.id;
-      return;
-    }
-
-    profileSwitchResult.value = await switchModProfile(
-      profileId,
-      plan.requiresOverwriteConfirmation,
-    );
-    await refreshModViews();
-  } catch (error) {
-    profileError.value = error instanceof Error ? error.message : String(error);
-    selectedProfileId.value = activeProfile.id;
-  } finally {
-    isProfileAction.value = false;
   }
 }
 
@@ -1555,10 +1414,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <ModLibraryToolbar
-          :profiles="modProfiles"
-          :active-profile="activeModProfile"
-          :selected-profile-id="selectedProfileId"
-          :is-profile-action="isProfileAction"
           :is-category-action="isCategoryAction"
           :search-query="modSearchQuery"
           :category-filter="modCategoryFilter"
@@ -1566,10 +1421,6 @@ onBeforeUnmount(() => {
           :conflict-filter="modConflictFilter"
           :sort="modSort"
           :categories="availableModCategories"
-          @select-profile="switchSelectedProfile"
-          @create-profile="createProfile"
-          @rename-profile="renameSelectedProfile"
-          @delete-profile="deleteSelectedProfile"
           @manage-categories="openCategoryManager()"
           @update-search-query="modSearchQuery = $event"
           @update-category-filter="modCategoryFilter = $event"
@@ -1577,7 +1428,6 @@ onBeforeUnmount(() => {
           @update-conflict-filter="modConflictFilter = $event"
           @update-sort="modSort = $event"
         />
-        <p v-if="profileError" class="error">{{ profileError }}</p>
         <p v-if="categoryError && !isCategoryManagerOpen" class="error">{{ categoryError }}</p>
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
         <p v-if="installedMods.length" class="hint">
@@ -1601,39 +1451,6 @@ onBeforeUnmount(() => {
           @disable="disableInstalledMod"
           @uninstall="uninstallInstalledMod"
         />
-      </div>
-
-      <div v-if="profileSwitchPlan" class="preview-block">
-        <h3>Profile 切换预览</h3>
-        <p class="hint">{{ profileSwitchPlan.message }}</p>
-        <ul v-if="profileSwitchPlan.enableMods.length || profileSwitchPlan.disableMods.length" class="compact-list">
-          <li v-for="mod in profileSwitchPlan.enableMods" :key="`enable-${mod.modId}`">
-            <span>启用：{{ mod.name }}</span>
-            <strong>{{ mod.fileCount }} 个文件</strong>
-          </li>
-          <li v-for="mod in profileSwitchPlan.disableMods" :key="`disable-${mod.modId}`">
-            <span>禁用：{{ mod.name }}</span>
-            <strong>{{ mod.fileCount }} 个文件</strong>
-          </li>
-        </ul>
-        <ul v-if="profileSwitchPlan.warnings.length" class="compact-list">
-          <li v-for="warning in profileSwitchPlan.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="profileSwitchResult" class="preview-block">
-        <h3>Profile 切换结果</h3>
-        <p class="hint">{{ profileSwitchResult.message }}</p>
-        <p class="hint">
-          已启用 {{ profileSwitchResult.enabledModCount }} 个，已禁用 {{ profileSwitchResult.disabledModCount }} 个，已应用 {{ profileSwitchResult.appliedConflictGroupCount }} 组冲突顺序。
-        </p>
-        <ul v-if="profileSwitchResult.warnings.length" class="compact-list">
-          <li v-for="warning in profileSwitchResult.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
       </div>
 
       <p v-if="deploymentError" class="error">{{ deploymentError }}</p>
@@ -2158,40 +1975,10 @@ dd {
   justify-content: flex-end;
 }
 
-.profile-toolbar {
-  display: flex;
-  align-items: end;
-  gap: 10px;
-  margin-top: 18px;
-  padding: 12px;
-  border: 1px solid #dfe7e3;
-  border-radius: 6px;
-  background: #f7faf8;
-}
-
-.profile-selector {
-  display: grid;
-  min-width: min(280px, 100%);
-  gap: 5px;
-}
-
-.profile-selector span,
 .mod-browser-controls label > span {
   color: #61756f;
   font-size: 0.74rem;
   font-weight: 700;
-}
-
-.profile-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.profile-summary {
-  min-width: 0;
-  color: #52645f;
-  font-size: 0.82rem;
-  overflow-wrap: anywhere;
 }
 
 .mod-browser-controls {
@@ -2208,8 +1995,7 @@ dd {
 }
 
 .mod-browser-controls input,
-.mod-browser-controls select,
-.profile-selector select {
+.mod-browser-controls select {
   min-width: 0;
 }
 
@@ -2829,14 +2615,8 @@ dd {
     display: grid;
   }
 
-  .profile-toolbar,
   .mod-browser-controls {
     grid-template-columns: 1fr;
-  }
-
-  .profile-toolbar {
-    display: grid;
-    align-items: stretch;
   }
 
   .section-actions {

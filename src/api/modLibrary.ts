@@ -287,51 +287,6 @@ export interface UserModCategoryDeleteResult {
   message: string;
 }
 
-export interface ModProfileSummary {
-  id: string;
-  name: string;
-  createdAtUnixSeconds: number;
-  enabledModCount: number;
-  conflictOrderCount: number;
-  isActive: boolean;
-}
-
-export interface ModProfileList {
-  activeProfileId: string;
-  profiles: ModProfileSummary[];
-  message: string;
-}
-
-export interface ProfileSwitchModItem {
-  modId: string;
-  name: string;
-  fileCount: number;
-}
-
-export interface ProfileSwitchPlan {
-  profileId: string;
-  profileName: string;
-  currentProfileId: string;
-  currentProfileName: string;
-  enableMods: ProfileSwitchModItem[];
-  disableMods: ProfileSwitchModItem[];
-  missingModIds: string[];
-  conflictGroupCount: number;
-  requiresOverwriteConfirmation: boolean;
-  warnings: string[];
-  message: string;
-}
-
-export interface ProfileSwitchResult {
-  profileId: string;
-  profileName: string;
-  enabledModCount: number;
-  disabledModCount: number;
-  appliedConflictGroupCount: number;
-  warnings: string[];
-  message: string;
-}
-
 export function getModLibraryStatus(): Promise<ModLibraryStatus> {
   return invoke<ModLibraryStatus>("get_mod_library_status");
 }
@@ -373,39 +328,6 @@ export function deleteUserModCategory(
 ): Promise<UserModCategoryDeleteResult> {
   return invoke<UserModCategoryDeleteResult>("delete_user_mod_category", {
     categoryId,
-  });
-}
-
-export function listModProfiles(): Promise<ModProfileList> {
-  return invoke<ModProfileList>("list_mod_profiles");
-}
-
-export function createModProfile(name: string): Promise<ModProfileSummary> {
-  return invoke<ModProfileSummary>("create_mod_profile", { name });
-}
-
-export function renameModProfile(
-  profileId: string,
-  name: string,
-): Promise<ModProfileSummary> {
-  return invoke<ModProfileSummary>("rename_mod_profile", { profileId, name });
-}
-
-export function deleteModProfile(profileId: string): Promise<void> {
-  return invoke<void>("delete_mod_profile", { profileId });
-}
-
-export function previewSwitchModProfile(profileId: string): Promise<ProfileSwitchPlan> {
-  return invoke<ProfileSwitchPlan>("preview_switch_mod_profile", { profileId });
-}
-
-export function switchModProfile(
-  profileId: string,
-  confirmOverwrite: boolean,
-): Promise<ProfileSwitchResult> {
-  return invoke<ProfileSwitchResult>("switch_mod_profile", {
-    profileId,
-    confirmOverwrite,
   });
 }
 

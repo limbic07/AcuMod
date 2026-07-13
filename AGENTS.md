@@ -21,7 +21,7 @@
 1. `docs/README.md`：文档入口、当前阶段、下一步计划。
 2. `docs/architecture.md`：前端、Tauri 命令、Rust 分层、AI 接入边界。
 3. `docs/ui-design.md`：工作区信息架构、组件边界、悬浮 AI 窗口。
-4. `docs/features.md`：传统 MOD 管理、Profile、下载、AI Agent 的功能拆分。
+4. `docs/features.md`：传统 MOD 管理、下载、AI Agent 的功能拆分。
 5. `docs/development.md`：开发命令、目录约定、Tauri invoke 检查清单。
 6. `docs/security.md`：文件操作安全、用户确认机制、AI 执行边界。
 

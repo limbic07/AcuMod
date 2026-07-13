@@ -2,9 +2,9 @@ use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
     ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
-    ModMetadataPatch, ModMetadataUpdateResult, ModProfileList, ModProfileSummary, ModUninstallPlan,
-    ModUninstallResult, ProfileSwitchPlan, ProfileSwitchResult, RestoreAllPlan, RestoreAllResult,
-    UserModCategory, UserModCategoryDeleteResult, UserModCategoryList,
+    ModMetadataPatch, ModMetadataUpdateResult, ModUninstallPlan, ModUninstallResult,
+    RestoreAllPlan, RestoreAllResult, UserModCategory, UserModCategoryDeleteResult,
+    UserModCategoryList,
 };
 
 #[tauri::command]
@@ -92,50 +92,6 @@ pub fn delete_user_mod_category(
     category_id: String,
 ) -> Result<UserModCategoryDeleteResult, String> {
     mod_library::delete_user_mod_category(&app, category_id)
-}
-
-#[tauri::command]
-pub fn list_mod_profiles(app: tauri::AppHandle) -> Result<ModProfileList, String> {
-    mod_library::list_mod_profiles(&app)
-}
-
-#[tauri::command]
-pub fn create_mod_profile(
-    app: tauri::AppHandle,
-    name: String,
-) -> Result<ModProfileSummary, String> {
-    mod_library::create_mod_profile(&app, name)
-}
-
-#[tauri::command]
-pub fn rename_mod_profile(
-    app: tauri::AppHandle,
-    profile_id: String,
-    name: String,
-) -> Result<ModProfileSummary, String> {
-    mod_library::rename_mod_profile(&app, profile_id, name)
-}
-
-#[tauri::command]
-pub fn delete_mod_profile(app: tauri::AppHandle, profile_id: String) -> Result<(), String> {
-    mod_library::delete_mod_profile(&app, profile_id)
-}
-
-#[tauri::command]
-pub fn preview_switch_mod_profile(
-    app: tauri::AppHandle,
-    profile_id: String,
-) -> Result<ProfileSwitchPlan, String> {
-    mod_library::preview_switch_mod_profile(&app, profile_id)
-}
-
-#[tauri::command]
-pub fn switch_mod_profile(
-    app: tauri::AppHandle,
-    profile_id: String,
-    confirm_overwrite: bool,
-) -> Result<ProfileSwitchResult, String> {
-    mod_library::switch_mod_profile(&app, profile_id, confirm_overwrite)
 }
 
 #[tauri::command]

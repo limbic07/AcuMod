@@ -232,24 +232,20 @@ src-tauri/src/services/model_recognition.rs
 
 ```text
 src/api/modLibrary.ts
-  updateModMetadata(modId, displayName, note)
+  updateModMetadata(modId, patch)
   -> update_mod_metadata
 
-  listModProfiles()
-  createModProfile(name)
-  renameModProfile(profileId, name)
-  deleteModProfile(profileId)
-  -> 对应 list/create/rename/delete_mod_profile
-
-  previewSwitchModProfile(profileId)
-  switchModProfile(profileId, confirmOverwrite)
-  -> preview_switch_mod_profile / switch_mod_profile
+  listUserModCategories()
+  createUserModCategory(name)
+  renameUserModCategory(categoryId, name)
+  deleteUserModCategory(categoryId)
+  -> 对应 list/create/rename/delete_user_mod_category
 
 src-tauri/src/commands/mod_library.rs
   只转发参数与 DTO，不在 command 中写文件逻辑
 
 src-tauri/src/services/mod_library.rs
-  写 manifest 元数据、管理 profiles.json、生成 Profile 切换计划并复用既有部署函数
+  写 manifest 元数据与用户分类；manifest 的 enabled/deployedFiles 和 conflict-orders.json 共同维护当前唯一的部署状态
 ```
 
 ## 薄端到端切片

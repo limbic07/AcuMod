@@ -142,7 +142,7 @@ Rust AppInfo
   -> 如该 MOD 仍处于启用状态，也应先清理它部署到游戏目录的文件
 ```
 
-这个模型的好处是语义直观：安装表示“纳入管理”，启用才表示“写入游戏目录”。MVP 初始阶段只保留单 Profile；当前已扩展为多个 Profile，但同一时刻仍只维护一套实际部署到游戏目录的启用状态和排序。
+这个模型的好处是语义直观：安装表示“纳入管理”，启用才表示“写入游戏目录”。Acumod 始终只维护一套实际部署到游戏目录的启用状态和冲突排序，不提供多套配置或配置切换。
 
 实现时需要记录至少两类路径：
 
@@ -169,7 +169,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 `staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
-`AcumodData/mods/categories.json` 保存用户创建的全局分类定义。每个 `installed/<mod_id>/manifest.json` 只保存可选的分类 ID 覆盖；分类定义不放进 Profile，也不修改 MOD 内容。删除分类时，服务层必须先清除全部 manifest 对该分类 ID 的引用，使对应 MOD 自动回退到 ID 表推导的分类。
+`AcumodData/mods/categories.json` 保存用户创建的全局分类定义。每个 `installed/<mod_id>/manifest.json` 只保存可选的分类 ID 覆盖；分类定义不修改 MOD 内容。删除分类时，服务层必须先清除全部 manifest 对该分类 ID 的引用，使对应 MOD 自动回退到 ID 表推导的分类。
 
 ## MOD 导入目录识别
 
@@ -258,23 +258,11 @@ MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和
 - 文件结构更适合学习和调试。
 - 暂时不需要引入数据库依赖。
 
-当前传统管理器增强阶段仍使用 JSON：Profile 保存到 `AcumodData/mods/profiles.json`，每个 Profile 保存启用 MOD ID 集合和冲突顺序快照。manifest 中的 `enabled` 和 `deployedFiles` 始终表示当前真正部署到游戏目录的状态，因此同一时刻只有一个激活 Profile。首次读取 Profile 存储时，会把现有 manifest 与 `conflict-orders.json` 迁移为“默认配置”。
+当前传统管理器增强阶段仍使用 JSON：每个 `installed/<mod_id>/manifest.json` 的 `enabled` 与 `deployedFiles` 表示当前真正部署到游戏目录的状态，`installed/conflict-orders.json` 保存各冲突组的覆盖顺序。它们共同构成唯一的运行状态。
 
-Profile 切换链路如下：
+多配置、状态快照和配置切换均不属于产品范围。旧版本遗留的 `AcumodData/mods/profiles.json` 不再读取、写入或自动删除，避免程序擅自处理用户已有数据。
 
-```text
-选择目标 Profile
-  -> Rust 对比当前 manifest 与目标启用集合
-  -> 返回启用、禁用、缺失 MOD 和覆盖风险预览
-  -> 用户确认
-  -> 保存当前 Profile 快照并激活目标 Profile
-  -> 复用启用、禁用、冲突顺序应用
-  -> 将实际部署结果同步回目标 Profile
-```
-
-Profile 不是第二套 MOD 文件副本，也不修改 `content/` 中的原始 MOD。它只是对同一个本地 MOD 库保存不同的部署状态快照。
-
-如果后续出现大量 MOD、复杂搜索、历史记录或需要跨 Profile 的高频查询，再评估 SQLite。
+如果后续出现大量 MOD、复杂搜索、历史记录或高频查询，再评估 SQLite。
 
 ## AI Agent 接入边界
 

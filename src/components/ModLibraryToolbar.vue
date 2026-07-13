@@ -1,11 +1,5 @@
 <script setup lang="ts">
-import type { ModProfileSummary } from "../api/modLibrary";
-
 const props = defineProps<{
-  profiles: ModProfileSummary[];
-  activeProfile: ModProfileSummary | null;
-  selectedProfileId: string;
-  isProfileAction: boolean;
   isCategoryAction: boolean;
   searchQuery: string;
   categoryFilter: string;
@@ -16,10 +10,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  selectProfile: [profileId: string];
-  createProfile: [];
-  renameProfile: [];
-  deleteProfile: [];
   manageCategories: [];
   updateSearchQuery: [value: string];
   updateCategoryFilter: [value: string];
@@ -27,10 +17,6 @@ const emit = defineEmits<{
   updateConflictFilter: [value: string];
   updateSort: [value: "installation" | "name" | "category" | "replacement"];
 }>();
-
-function selectProfile(event: Event) {
-  emit("selectProfile", (event.target as HTMLSelectElement).value);
-}
 
 function updateSearchQuery(event: Event) {
   emit("updateSearchQuery", (event.target as HTMLInputElement).value);
@@ -57,61 +43,6 @@ function updateSort(event: Event) {
 </script>
 
 <template>
-  <div class="profile-toolbar">
-    <label class="profile-selector" for="active-mod-profile">
-      <span>当前 Profile</span>
-      <select
-        id="active-mod-profile"
-        :value="props.selectedProfileId"
-        :disabled="props.isProfileAction || !props.profiles.length"
-        @change="selectProfile"
-      >
-        <option v-for="profile in props.profiles" :key="profile.id" :value="profile.id">
-          {{ profile.name }}{{ profile.isActive ? "（当前）" : "" }}
-        </option>
-      </select>
-    </label>
-    <div class="profile-actions">
-      <button
-        type="button"
-        class="icon-button"
-        :disabled="props.isProfileAction"
-        aria-label="从当前配置创建 Profile"
-        data-tooltip="新建 Profile"
-        @click="$emit('createProfile')"
-      >
-        <span aria-hidden="true">+</span>
-      </button>
-      <button
-        type="button"
-        class="icon-button"
-        :disabled="props.isProfileAction || !props.selectedProfileId"
-        aria-label="重命名当前选择的 Profile"
-        data-tooltip="重命名 Profile"
-        @click="$emit('renameProfile')"
-      >
-        <span aria-hidden="true">&#9998;</span>
-      </button>
-      <button
-        type="button"
-        class="icon-button danger-icon"
-        :disabled="
-          props.isProfileAction ||
-          !props.selectedProfileId ||
-          props.activeProfile?.id === props.selectedProfileId
-        "
-        aria-label="删除当前选择的 Profile"
-        data-tooltip="删除 Profile"
-        @click="$emit('deleteProfile')"
-      >
-        <span aria-hidden="true">&#128465;</span>
-      </button>
-    </div>
-    <span v-if="props.activeProfile" class="profile-summary">
-      {{ props.activeProfile.enabledModCount }} 个已启用 MOD / {{ props.activeProfile.conflictOrderCount }} 组排序记录
-    </span>
-  </div>
-
   <div class="mod-browser-controls">
     <label class="mod-search-control">
       <span>搜索</span>
@@ -172,52 +103,23 @@ function updateSort(event: Event) {
 </template>
 
 <style scoped>
-.profile-toolbar {
-  display: flex;
-  align-items: end;
+.mod-browser-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.55fr));
   gap: 10px;
   margin-top: 18px;
-  padding: 12px;
-  border: 1px solid #dfe7e3;
-  border-radius: 6px;
-  background: #f7faf8;
 }
 
-.profile-selector,
 .mod-browser-controls label {
   display: grid;
   min-width: 0;
   gap: 5px;
 }
 
-.profile-selector {
-  min-width: min(280px, 100%);
-}
-
-.profile-selector span,
 .mod-browser-controls label > span {
   color: #61756f;
   font-size: 0.74rem;
   font-weight: 700;
-}
-
-.profile-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.profile-summary {
-  min-width: 0;
-  color: #52645f;
-  font-size: 0.82rem;
-  overflow-wrap: anywhere;
-}
-
-.mod-browser-controls {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.55fr));
-  gap: 10px;
-  margin-top: 18px;
 }
 
 .category-filter-row {
@@ -264,11 +166,6 @@ select {
   cursor: not-allowed;
 }
 
-.icon-button.danger-icon {
-  color: #b42318;
-  font-size: 1rem;
-}
-
 .icon-button[data-tooltip]::after {
   position: absolute;
   z-index: 4;
@@ -293,14 +190,8 @@ select {
 }
 
 @media (max-width: 760px) {
-  .profile-toolbar,
   .mod-browser-controls {
     grid-template-columns: 1fr;
-  }
-
-  .profile-toolbar {
-    display: grid;
-    align-items: stretch;
   }
 }
 </style>

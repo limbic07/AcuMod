@@ -6,6 +6,7 @@ const props = defineProps<{
   activeProfile: ModProfileSummary | null;
   selectedProfileId: string;
   isProfileAction: boolean;
+  isCategoryAction: boolean;
   searchQuery: string;
   categoryFilter: string;
   statusFilter: string;
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   createProfile: [];
   renameProfile: [];
   deleteProfile: [];
+  manageCategories: [];
   updateSearchQuery: [value: string];
   updateCategoryFilter: [value: string];
   updateStatusFilter: [value: string];
@@ -120,14 +122,26 @@ function updateSort(event: Event) {
         @input="updateSearchQuery"
       />
     </label>
-    <label>
-      <span>类别</span>
-      <select :value="props.categoryFilter" @change="updateCategoryFilter">
-        <option value="all">全部类别</option>
-        <option v-for="category in props.categories" :key="category" :value="category">
-          {{ category }}
-        </option>
-      </select>
+    <label class="category-filter-control">
+      <span>分类</span>
+      <div class="category-filter-row">
+        <select :value="props.categoryFilter" @change="updateCategoryFilter">
+          <option value="all">全部分类</option>
+          <option v-for="category in props.categories" :key="category" :value="category">
+            {{ category }}
+          </option>
+        </select>
+        <button
+          type="button"
+          class="icon-button"
+          :disabled="props.isCategoryAction"
+          aria-label="管理用户分类"
+          data-tooltip="分类管理"
+          @click="$emit('manageCategories')"
+        >
+          <span aria-hidden="true">&#9881;</span>
+        </button>
+      </div>
     </label>
     <label>
       <span>状态</span>
@@ -150,7 +164,7 @@ function updateSort(event: Event) {
       <select :value="props.sort" @change="updateSort">
         <option value="installation">导入顺序</option>
         <option value="name">名称</option>
-        <option value="category">类别</option>
+        <option value="category">分类</option>
         <option value="replacement">替换目标</option>
       </select>
     </label>
@@ -204,6 +218,16 @@ function updateSort(event: Event) {
   grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.55fr));
   gap: 10px;
   margin-top: 18px;
+}
+
+.category-filter-row {
+  display: flex;
+  gap: 6px;
+}
+
+.category-filter-row select {
+  min-width: 0;
+  flex: 1;
 }
 
 input,

@@ -2,8 +2,9 @@ use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
     ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
-    ModMetadataUpdateResult, ModProfileList, ModProfileSummary, ModUninstallPlan,
+    ModMetadataPatch, ModMetadataUpdateResult, ModProfileList, ModProfileSummary, ModUninstallPlan,
     ModUninstallResult, ProfileSwitchPlan, ProfileSwitchResult, RestoreAllPlan, RestoreAllResult,
+    UserModCategory, UserModCategoryDeleteResult, UserModCategoryList,
 };
 
 #[tauri::command]
@@ -58,10 +59,39 @@ pub fn list_installed_mods(app: tauri::AppHandle) -> Result<InstalledModList, St
 pub fn update_mod_metadata(
     app: tauri::AppHandle,
     mod_id: String,
-    display_name: String,
-    note: String,
+    patch: ModMetadataPatch,
 ) -> Result<ModMetadataUpdateResult, String> {
-    mod_library::update_mod_metadata(&app, mod_id, display_name, note)
+    mod_library::update_mod_metadata(&app, mod_id, patch)
+}
+
+#[tauri::command]
+pub fn list_user_mod_categories(app: tauri::AppHandle) -> Result<UserModCategoryList, String> {
+    mod_library::list_user_mod_categories(&app)
+}
+
+#[tauri::command]
+pub fn create_user_mod_category(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<UserModCategory, String> {
+    mod_library::create_user_mod_category(&app, name)
+}
+
+#[tauri::command]
+pub fn rename_user_mod_category(
+    app: tauri::AppHandle,
+    category_id: String,
+    name: String,
+) -> Result<UserModCategory, String> {
+    mod_library::rename_user_mod_category(&app, category_id, name)
+}
+
+#[tauri::command]
+pub fn delete_user_mod_category(
+    app: tauri::AppHandle,
+    category_id: String,
+) -> Result<UserModCategoryDeleteResult, String> {
+    mod_library::delete_user_mod_category(&app, category_id)
 }
 
 #[tauri::command]

@@ -85,6 +85,8 @@ export interface InstalledModSummary {
   originalName: string;
   note: string;
   categories: string[];
+  categoryOverride: string | null;
+  userCategory: UserModCategory | null;
   modPath: string;
   contentPath: string;
   manifestPath: string;
@@ -256,6 +258,32 @@ export interface ModMetadataUpdateResult {
   name: string;
   originalName: string;
   note: string;
+  categoryOverride: string | null;
+  userCategory: UserModCategory | null;
+  message: string;
+}
+
+export interface ModMetadataPatch {
+  displayName?: string;
+  note?: string;
+  // An empty string explicitly returns the MOD to automatic classification.
+  categoryOverride?: string;
+}
+
+export interface UserModCategory {
+  id: string;
+  name: string;
+  createdAtUnixSeconds: number;
+}
+
+export interface UserModCategoryList {
+  categories: UserModCategory[];
+  message: string;
+}
+
+export interface UserModCategoryDeleteResult {
+  categoryId: string;
+  clearedModCount: number;
   message: string;
 }
 
@@ -314,13 +342,37 @@ export function listInstalledMods(): Promise<InstalledModList> {
 
 export function updateModMetadata(
   modId: string,
-  displayName: string,
-  note: string,
+  patch: ModMetadataPatch,
 ): Promise<ModMetadataUpdateResult> {
   return invoke<ModMetadataUpdateResult>("update_mod_metadata", {
     modId,
-    displayName,
-    note,
+    patch,
+  });
+}
+
+export function listUserModCategories(): Promise<UserModCategoryList> {
+  return invoke<UserModCategoryList>("list_user_mod_categories");
+}
+
+export function createUserModCategory(name: string): Promise<UserModCategory> {
+  return invoke<UserModCategory>("create_user_mod_category", { name });
+}
+
+export function renameUserModCategory(
+  categoryId: string,
+  name: string,
+): Promise<UserModCategory> {
+  return invoke<UserModCategory>("rename_user_mod_category", {
+    categoryId,
+    name,
+  });
+}
+
+export function deleteUserModCategory(
+  categoryId: string,
+): Promise<UserModCategoryDeleteResult> {
+  return invoke<UserModCategoryDeleteResult>("delete_user_mod_category", {
+    categoryId,
   });
 }
 

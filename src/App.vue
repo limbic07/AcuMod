@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
 import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
+import ModCategoryManager from "./components/ModCategoryManager.vue";
 import ModLibraryTable from "./components/ModLibraryTable.vue";
 import ModLibraryToolbar from "./components/ModLibraryToolbar.vue";
 import { getAppInfo, type AppInfo } from "./api/app";
@@ -15,7 +16,9 @@ import {
 } from "./api/game";
 import {
   applyConflictOrder,
+  createUserModCategory,
   createModProfile,
+  deleteUserModCategory,
   deleteModProfile,
   disableMod,
   enableMod,
@@ -26,6 +29,7 @@ import {
   installModFromFolder,
   listInstalledMods,
   listModProfiles,
+  listUserModCategories,
   moveConflictParticipant,
   openInstalledModFolder,
   previewApplyConflictOrder,
@@ -36,6 +40,7 @@ import {
   previewSwitchModProfile,
   previewUninstallMod,
   renameModProfile,
+  renameUserModCategory,
   restoreAllMods,
   switchModProfile,
   uninstallMod,
@@ -51,6 +56,7 @@ import {
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
+  type ModMetadataPatch,
   type ModelReplacement,
   type ModUninstallPlan,
   type ModUninstallResult,
@@ -59,6 +65,7 @@ import {
   type ProfileSwitchResult,
   type RestoreAllPlan,
   type RestoreAllResult,
+  type UserModCategory,
 } from "./api/modLibrary";
 
 const appInfo = ref<AppInfo | null>(null);
@@ -76,6 +83,7 @@ const restorePlan = ref<RestoreAllPlan | null>(null);
 const restoreResult = ref<RestoreAllResult | null>(null);
 const conflictReport = ref<ModConflictReport | null>(null);
 const modProfileList = ref<ModProfileList | null>(null);
+const userModCategories = ref<UserModCategory[]>([]);
 const profileSwitchPlan = ref<ProfileSwitchPlan | null>(null);
 const profileSwitchResult = ref<ProfileSwitchResult | null>(null);
 const conflictOrderPlan = ref<ApplyConflictOrderPlan | null>(null);
@@ -100,6 +108,9 @@ const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
 const activeModAction = ref("");
 const openingModFolderId = ref("");
+const metadataSavingModId = ref("");
+const metadataErrorModId = ref("");
+const metadataError = ref("");
 const isRestoringAll = ref(false);
 const isApplyingConflict = ref(false);
 const activeView = ref<WorkspaceView>("library");
@@ -112,6 +123,10 @@ const dragError = ref("");
 const conflictActionError = ref("");
 const profileError = ref("");
 const isProfileAction = ref(false);
+const isCategoryAction = ref(false);
+const isCategoryManagerOpen = ref(false);
+const pendingCategoryModId = ref("");
+const categoryError = ref("");
 const selectedProfileId = ref("");
 const modSearchQuery = ref("");
 const modCategoryFilter = ref("all");
@@ -175,14 +190,30 @@ const importStatusClass = computed(() => {
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
+function visibleModCategories(mod: InstalledModSummary) {
+  const categories = [...mod.categories];
+  const userCategoryName = mod.userCategory?.name;
+
+  if (userCategoryName && !categories.includes(userCategoryName)) {
+    categories.push(userCategoryName);
+  }
+
+  return categories.length ? categories : ["未识别"];
+}
+
 const availableModCategories = computed(() =>
-  [...new Set(installedMods.value.flatMap((installedMod) => installedMod.categories))].sort(),
+  [...new Set(installedMods.value.flatMap((installedMod) => visibleModCategories(installedMod)))].sort(
+    (left, right) => left.localeCompare(right, "zh-Hans-CN"),
+  ),
 );
 const filteredInstalledMods = computed(() => {
   const searchText = modSearchQuery.value.trim().toLocaleLowerCase();
 
   return installedMods.value.filter((installedMod) => {
-    if (modCategoryFilter.value !== "all" && !installedMod.categories.includes(modCategoryFilter.value)) {
+    if (
+      modCategoryFilter.value !== "all" &&
+      !visibleModCategories(installedMod).includes(modCategoryFilter.value)
+    ) {
       return false;
     }
 
@@ -211,7 +242,7 @@ const filteredInstalledMods = computed(() => {
       installedMod.name,
       installedMod.originalName,
       installedMod.note,
-      ...installedMod.categories,
+      ...visibleModCategories(installedMod),
       ...installedMod.modelReplacements.flatMap((replacement) => [
         replacement.modelKind,
         replacement.subKind,
@@ -234,7 +265,10 @@ const displayedInstalledMods = computed(() => {
     }
 
     if (modSort.value === "category") {
-      return left.categories.join("、").localeCompare(right.categories.join("、"), "zh-Hans-CN")
+      return visibleModCategories(left).join("、").localeCompare(
+        visibleModCategories(right).join("、"),
+        "zh-Hans-CN",
+      )
         || left.name.localeCompare(right.name, "zh-Hans-CN");
     }
 
@@ -271,6 +305,26 @@ const conflictingModIds = computed(
       ),
     ),
 );
+const conflictPartnerNames = computed<Record<string, string[]>>(() => {
+  const partnersByModId: Record<string, string[]> = {};
+
+  for (const group of conflictGroups.value) {
+    const enabledParticipants = group.participants.filter((participant) => participant.enabled);
+    for (const participant of enabledParticipants) {
+      const partners = (partnersByModId[participant.modId] ??= []);
+      for (const otherParticipant of enabledParticipants) {
+        if (
+          otherParticipant.modId !== participant.modId &&
+          !partners.includes(otherParticipant.name)
+        ) {
+          partners.push(otherParticipant.name);
+        }
+      }
+    }
+  }
+
+  return partnersByModId;
+});
 const selectedConflictGroup = computed(() =>
   conflictGroups.value.find(
     (group) => group.groupId === selectedConflictGroupId.value,
@@ -433,6 +487,16 @@ async function loadInstalledMods() {
   }
 }
 
+async function loadUserModCategories() {
+  try {
+    const categoryList = await listUserModCategories();
+    userModCategories.value = categoryList.categories;
+    categoryError.value = "";
+  } catch (error) {
+    categoryError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
 async function loadConflictReport() {
   try {
     conflictReport.value = await getModConflictReport();
@@ -456,7 +520,12 @@ async function loadModProfiles() {
 }
 
 async function refreshModViews() {
-  await Promise.all([loadInstalledMods(), loadConflictReport(), loadModProfiles()]);
+  await Promise.all([
+    loadInstalledMods(),
+    loadConflictReport(),
+    loadModProfiles(),
+    loadUserModCategories(),
+  ]);
 }
 
 async function refreshCurrentWorkspace() {
@@ -478,31 +547,116 @@ async function refreshCurrentWorkspace() {
   await refreshModViews();
 }
 
-async function editModMetadata(mod: InstalledModSummary) {
-  const currentDisplayName = mod.name === mod.originalName ? "" : mod.name;
-  const displayName = window.prompt(
-    "显示名称留空时使用原始导入名称。",
-    currentDisplayName,
-  );
-
-  if (displayName === null) {
-    return;
+function syncCategoryFilter() {
+  if (
+    modCategoryFilter.value !== "all" &&
+    !availableModCategories.value.includes(modCategoryFilter.value)
+  ) {
+    modCategoryFilter.value = "all";
   }
+}
 
-  const note = window.prompt("备注可用于检索和整理。", mod.note);
-  if (note === null) {
-    return;
-  }
+async function saveModMetadata(
+  mod: InstalledModSummary,
+  patch: ModMetadataPatch,
+): Promise<boolean> {
+  metadataSavingModId.value = mod.id;
+  metadataErrorModId.value = "";
+  metadataError.value = "";
 
-  activeModAction.value = mod.id;
   try {
-    await updateModMetadata(mod.id, displayName, note);
-    deploymentError.value = "";
-    await refreshModViews();
+    await updateModMetadata(mod.id, patch);
+    await loadInstalledMods();
+    syncCategoryFilter();
+    return true;
   } catch (error) {
-    deploymentError.value = error instanceof Error ? error.message : String(error);
+    metadataErrorModId.value = mod.id;
+    metadataError.value = error instanceof Error ? error.message : String(error);
+    return false;
   } finally {
-    activeModAction.value = "";
+    metadataSavingModId.value = "";
+  }
+}
+
+function openCategoryManager(mod?: InstalledModSummary) {
+  pendingCategoryModId.value = mod?.id ?? "";
+  categoryError.value = "";
+  isCategoryManagerOpen.value = true;
+}
+
+function closeCategoryManager() {
+  if (isCategoryAction.value) {
+    return;
+  }
+
+  isCategoryManagerOpen.value = false;
+  pendingCategoryModId.value = "";
+  categoryError.value = "";
+}
+
+async function createUserCategory(name: string) {
+  isCategoryAction.value = true;
+  categoryError.value = "";
+  let shouldCloseDialog = false;
+
+  try {
+    const category = await createUserModCategory(name);
+    await loadUserModCategories();
+    const targetMod = installedMods.value.find((mod) => mod.id === pendingCategoryModId.value);
+
+    if (targetMod) {
+      shouldCloseDialog = await saveModMetadata(targetMod, {
+        categoryOverride: category.id,
+      });
+      if (!shouldCloseDialog) {
+        categoryError.value = "分类已创建，但未能应用到目标 MOD。";
+      }
+    }
+  } catch (error) {
+    categoryError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isCategoryAction.value = false;
+  }
+
+  if (shouldCloseDialog) {
+    closeCategoryManager();
+  }
+}
+
+async function renameUserCategory(categoryId: string, name: string) {
+  isCategoryAction.value = true;
+  categoryError.value = "";
+
+  try {
+    await renameUserModCategory(categoryId, name);
+    await Promise.all([loadUserModCategories(), loadInstalledMods()]);
+    syncCategoryFilter();
+  } catch (error) {
+    categoryError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isCategoryAction.value = false;
+  }
+}
+
+async function deleteUserCategory(category: UserModCategory) {
+  const shouldDelete = window.confirm(
+    `删除分类 ${category.name} 会使使用它的 MOD 回到自动分类。是否继续？`,
+  );
+  if (!shouldDelete) {
+    return;
+  }
+
+  isCategoryAction.value = true;
+  categoryError.value = "";
+
+  try {
+    await deleteUserModCategory(category.id);
+    await Promise.all([loadUserModCategories(), loadInstalledMods()]);
+    syncCategoryFilter();
+  } catch (error) {
+    categoryError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isCategoryAction.value = false;
   }
 }
 
@@ -1405,6 +1559,7 @@ onBeforeUnmount(() => {
           :active-profile="activeModProfile"
           :selected-profile-id="selectedProfileId"
           :is-profile-action="isProfileAction"
+          :is-category-action="isCategoryAction"
           :search-query="modSearchQuery"
           :category-filter="modCategoryFilter"
           :status-filter="modStatusFilter"
@@ -1415,6 +1570,7 @@ onBeforeUnmount(() => {
           @create-profile="createProfile"
           @rename-profile="renameSelectedProfile"
           @delete-profile="deleteSelectedProfile"
+          @manage-categories="openCategoryManager()"
           @update-search-query="modSearchQuery = $event"
           @update-category-filter="modCategoryFilter = $event"
           @update-status-filter="modStatusFilter = $event"
@@ -1422,6 +1578,7 @@ onBeforeUnmount(() => {
           @update-sort="modSort = $event"
         />
         <p v-if="profileError" class="error">{{ profileError }}</p>
+        <p v-if="categoryError && !isCategoryManagerOpen" class="error">{{ categoryError }}</p>
         <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
         <p v-if="installedMods.length" class="hint">
           显示 {{ displayedInstalledMods.length }} / {{ installedMods.length }} 个 MOD；此处排序不影响冲突覆盖顺序。
@@ -1429,10 +1586,16 @@ onBeforeUnmount(() => {
         <ModLibraryTable
           :mods="displayedInstalledMods"
           :installed-mod-count="installedMods.length"
+          :user-categories="userModCategories"
           :conflicting-mod-ids="conflictingModIds"
+          :conflict-partner-names="conflictPartnerNames"
           :active-mod-action="activeModAction"
           :opening-mod-folder-id="openingModFolderId"
-          @edit="editModMetadata"
+          :metadata-saving-mod-id="metadataSavingModId"
+          :metadata-error-mod-id="metadataErrorModId"
+          :metadata-error="metadataError"
+          @update-metadata="saveModMetadata"
+          @create-category="openCategoryManager"
           @open-folder="showInstalledModFolder"
           @enable="enableInstalledMod"
           @disable="disableInstalledMod"
@@ -1713,6 +1876,17 @@ onBeforeUnmount(() => {
       @close="isAgentPanelOpen = false"
     />
   </main>
+
+  <ModCategoryManager
+    :is-open="isCategoryManagerOpen"
+    :categories="userModCategories"
+    :is-busy="isCategoryAction"
+    :error="categoryError"
+    @close="closeCategoryManager"
+    @create="createUserCategory"
+    @rename="renameUserCategory"
+    @delete="deleteUserCategory"
+  />
 
   <div v-if="isDragActive" class="drag-overlay">
     <div>

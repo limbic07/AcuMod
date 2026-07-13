@@ -18,7 +18,10 @@ use crate::storage::{config, profiles};
 use super::model_recognition::{recognize_model_replacements, ModelReplacement};
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 8;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 9;
+const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 8;
+const USER_MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 1;
+const USER_MOD_CATEGORY_NAME_LIMIT: usize = 40;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -112,6 +115,8 @@ pub struct InstalledModSummary {
     pub original_name: String,
     pub note: String,
     pub categories: Vec<String>,
+    pub category_override: Option<String>,
+    pub user_category: Option<UserModCategory>,
     pub mod_path: String,
     pub content_path: String,
     pub manifest_path: String,
@@ -321,7 +326,43 @@ pub struct ModMetadataUpdateResult {
     pub name: String,
     pub original_name: String,
     pub note: String,
+    pub category_override: Option<String>,
+    pub user_category: Option<UserModCategory>,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserModCategory {
+    pub id: String,
+    pub name: String,
+    pub created_at_unix_seconds: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserModCategoryList {
+    pub categories: Vec<UserModCategory>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserModCategoryDeleteResult {
+    pub category_id: String,
+    pub cleared_mod_count: usize,
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModMetadataPatch {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub category_override: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -389,6 +430,8 @@ struct InstalledModManifest {
     display_name: Option<String>,
     #[serde(default)]
     note: String,
+    #[serde(default)]
+    category_override: Option<String>,
     source_path: String,
     content_root_path: String,
     detection_method: String,
@@ -401,6 +444,24 @@ struct InstalledModManifest {
     model_replacements: Vec<ModelReplacement>,
     #[serde(default)]
     deployed_files: Vec<DeployedModFile>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserModCategoryStore {
+    #[serde(default = "default_user_mod_category_store_schema_version")]
+    schema_version: u32,
+    #[serde(default)]
+    categories: Vec<UserModCategory>,
+}
+
+impl Default for UserModCategoryStore {
+    fn default() -> Self {
+        Self {
+            schema_version: USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
+            categories: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -419,6 +480,10 @@ struct ConflictPathGroup {
 
 fn default_conflict_order_schema_version() -> u32 {
     1
+}
+
+fn default_user_mod_category_store_schema_version() -> u32 {
+    USER_MOD_CATEGORY_STORE_SCHEMA_VERSION
 }
 
 #[derive(Clone)]
@@ -696,34 +761,138 @@ pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, S
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     load_or_initialize_profile_store(&paths)?;
+    load_or_initialize_user_mod_category_store(&paths)?;
     list_installed_mods_from(&paths.installed_path)
 }
 
 pub fn update_mod_metadata(
     app: &tauri::AppHandle,
     mod_id: String,
-    display_name: String,
-    note: String,
+    patch: ModMetadataPatch,
 ) -> Result<ModMetadataUpdateResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     validate_mod_id(&mod_id)?;
-    let display_name = validate_mod_display_name(&display_name)?;
-    let note = validate_mod_note(&note)?;
+    if patch.display_name.is_none() && patch.note.is_none() && patch.category_override.is_none() {
+        return Err("MOD metadata update must include at least one field.".to_string());
+    }
+
+    let category_store = load_or_initialize_user_mod_category_store(&paths)?;
     let mut context = load_installed_manifest(&paths.installed_path, &mod_id)?;
 
-    context.manifest.display_name = (!display_name.is_empty()).then_some(display_name);
-    context.manifest.note = note;
+    if let Some(display_name) = patch.display_name {
+        let display_name = validate_mod_display_name(&display_name)?;
+        context.manifest.display_name = (!display_name.is_empty()).then_some(display_name);
+    }
+
+    if let Some(note) = patch.note {
+        context.manifest.note = validate_mod_note(&note)?;
+    }
+
+    if let Some(category_override) = patch.category_override {
+        context.manifest.category_override =
+            resolve_category_override(&category_store, &category_override)?;
+    }
+
+    refresh_manifest_model_replacements(&mut context.manifest)?;
     context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
     save_manifest(&context.manifest_path, &context.manifest)?;
+
+    let user_category = resolve_user_category(&category_store, &context.manifest.category_override);
 
     Ok(ModMetadataUpdateResult {
         mod_id: context.manifest.id.clone(),
         name: manifest_display_name(&context.manifest),
         original_name: context.manifest.name.clone(),
         note: context.manifest.note.clone(),
-        message: "MOD display name and note were updated without changing deployment files."
-            .to_string(),
+        category_override: context.manifest.category_override.clone(),
+        user_category,
+        message: "MOD metadata was updated without changing deployment files.".to_string(),
+    })
+}
+
+pub fn list_user_mod_categories(app: &tauri::AppHandle) -> Result<UserModCategoryList, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let store = load_or_initialize_user_mod_category_store(&paths)?;
+    let categories = sorted_user_mod_categories(&store.categories);
+
+    Ok(UserModCategoryList {
+        message: format!("{} user MOD category(s) are available.", categories.len()),
+        categories,
+    })
+}
+
+pub fn create_user_mod_category(
+    app: &tauri::AppHandle,
+    name: String,
+) -> Result<UserModCategory, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let mut store = load_or_initialize_user_mod_category_store(&paths)?;
+    let name = validate_user_mod_category_name(&name)?;
+
+    ensure_user_mod_category_name_is_available(&store.categories, &name, None)?;
+    let category = UserModCategory {
+        id: unique_user_mod_category_id(&store.categories, &name)?,
+        name,
+        created_at_unix_seconds: unix_seconds_now()?,
+    };
+    store.categories.push(category.clone());
+    save_user_mod_category_store(&paths.categories_path, &store)?;
+
+    Ok(category)
+}
+
+pub fn rename_user_mod_category(
+    app: &tauri::AppHandle,
+    category_id: String,
+    name: String,
+) -> Result<UserModCategory, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    validate_user_mod_category_id(&category_id)?;
+    let mut store = load_or_initialize_user_mod_category_store(&paths)?;
+    let name = validate_user_mod_category_name(&name)?;
+
+    ensure_user_mod_category_name_is_available(&store.categories, &name, Some(&category_id))?;
+    let category = store
+        .categories
+        .iter_mut()
+        .find(|category| category.id == category_id)
+        .ok_or_else(|| format!("User MOD category was not found: {category_id}"))?;
+    category.name = name;
+    let category = category.clone();
+    save_user_mod_category_store(&paths.categories_path, &store)?;
+
+    Ok(category)
+}
+
+pub fn delete_user_mod_category(
+    app: &tauri::AppHandle,
+    category_id: String,
+) -> Result<UserModCategoryDeleteResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    validate_user_mod_category_id(&category_id)?;
+    let mut store = load_or_initialize_user_mod_category_store(&paths)?;
+    let category_index = store
+        .categories
+        .iter()
+        .position(|category| category.id == category_id)
+        .ok_or_else(|| format!("User MOD category was not found: {category_id}"))?;
+
+    let cleared_mod_count =
+        clear_category_override_from_manifests(&paths.installed_path, &category_id)?;
+    store.categories.remove(category_index);
+    save_user_mod_category_store(&paths.categories_path, &store)?;
+
+    Ok(UserModCategoryDeleteResult {
+        category_id,
+        cleared_mod_count,
+        message:
+            "User MOD category was deleted and affected MODs returned to automatic classification."
+                .to_string(),
     })
 }
 
@@ -1373,6 +1542,7 @@ fn install_mod_from_folder_into_with_options(
             name: mod_name.clone(),
             display_name: None,
             note: String::new(),
+            category_override: None,
             source_path: original_source_path.unwrap_or_else(|| preview.source_path.clone()),
             content_root_path,
             detection_method: preview.detection_method.clone(),
@@ -1815,6 +1985,7 @@ fn common_native_pc_child_name(path: &Path) -> Option<String> {
 fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, String> {
     let mut mods = Vec::new();
     let mut warnings = Vec::new();
+    let user_category_store = load_user_mod_category_store_for_installed_root(installed_root)?;
 
     if !installed_root.exists() {
         return Ok(InstalledModList {
@@ -1885,12 +2056,24 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             }
         };
 
+        let categories = model_categories(&model_replacements);
+        let user_category =
+            resolve_user_category(&user_category_store, &manifest.category_override);
+        if manifest.category_override.is_some() && user_category.is_none() {
+            warnings.push(format!(
+                "MOD {} references a missing user category and is using automatic classification.",
+                manifest.name
+            ));
+        }
+
         mods.push(InstalledModSummary {
             id: manifest.id.clone(),
             name: manifest_display_name(&manifest),
             original_name: manifest.name.clone(),
             note: manifest.note.clone(),
-            categories: model_categories(&model_replacements),
+            categories,
+            category_override: user_category.as_ref().map(|category| category.id.clone()),
+            user_category,
             mod_path: path_to_string(&mod_path),
             content_path: path_to_string(&mod_path.join("content")),
             manifest_path: path_to_string(&manifest_path),
@@ -1927,7 +2110,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
 fn model_replacements_for_manifest(
     manifest: &InstalledModManifest,
 ) -> Result<Vec<ModelReplacement>, String> {
-    if manifest.schema_version >= CURRENT_MOD_MANIFEST_SCHEMA_VERSION {
+    if manifest.schema_version >= CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION {
         return Ok(manifest.model_replacements.clone());
     }
 
@@ -1937,6 +2120,14 @@ fn model_replacements_for_manifest(
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
     recognize_model_replacements(&deploy_relative_paths)
+}
+
+fn refresh_manifest_model_replacements(manifest: &mut InstalledModManifest) -> Result<(), String> {
+    if manifest.schema_version < CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION {
+        manifest.model_replacements = model_replacements_for_manifest(manifest)?;
+    }
+
+    Ok(())
 }
 
 fn manifest_display_name(manifest: &InstalledModManifest) -> String {
@@ -3469,6 +3660,37 @@ fn validate_mod_note(note: &str) -> Result<String, String> {
     Ok(note.to_string())
 }
 
+fn validate_user_mod_category_id(category_id: &str) -> Result<(), String> {
+    if category_id.is_empty()
+        || category_id == "."
+        || category_id == ".."
+        || category_id.contains('/')
+        || category_id.contains('\\')
+        || category_id.contains(':')
+    {
+        return Err(format!("Unsafe user MOD category id: {category_id}"));
+    }
+
+    Ok(())
+}
+
+fn validate_user_mod_category_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("User MOD category name cannot be empty.".to_string());
+    }
+    if name == "自动" {
+        return Err("User MOD category name is reserved: 自动".to_string());
+    }
+    if name.chars().count() > USER_MOD_CATEGORY_NAME_LIMIT {
+        return Err(format!(
+            "User MOD category name must contain at most {USER_MOD_CATEGORY_NAME_LIMIT} characters."
+        ));
+    }
+
+    Ok(name.to_string())
+}
+
 fn deployment_key(path: &Path) -> String {
     path_to_string(path).to_lowercase()
 }
@@ -3721,6 +3943,7 @@ struct LibraryPaths {
     mods_path: PathBuf,
     installed_path: PathBuf,
     profiles_path: PathBuf,
+    categories_path: PathBuf,
     staging_path: PathBuf,
     import_staging_path: PathBuf,
 }
@@ -3730,6 +3953,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
     let mods_path = software_data_path.join("mods");
     let installed_path = mods_path.join("installed");
     let profiles_path = mods_path.join("profiles.json");
+    let categories_path = mods_path.join("categories.json");
     let staging_path = mods_path.join("staging");
     let import_staging_path = staging_path.join("imports");
 
@@ -3738,6 +3962,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
         mods_path,
         installed_path,
         profiles_path,
+        categories_path,
         staging_path,
         import_staging_path,
     })
@@ -3755,6 +3980,173 @@ fn ensure_library_directories(paths: &LibraryPaths) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn load_or_initialize_user_mod_category_store(
+    paths: &LibraryPaths,
+) -> Result<UserModCategoryStore, String> {
+    let store_exists = paths.categories_path.is_file();
+    let mut store = load_user_mod_category_store(&paths.categories_path)?;
+    let mut changed = !store_exists;
+
+    if store.schema_version != USER_MOD_CATEGORY_STORE_SCHEMA_VERSION {
+        store.schema_version = USER_MOD_CATEGORY_STORE_SCHEMA_VERSION;
+        changed = true;
+    }
+
+    if changed {
+        save_user_mod_category_store(&paths.categories_path, &store)?;
+    }
+
+    Ok(store)
+}
+
+fn load_user_mod_category_store(categories_path: &Path) -> Result<UserModCategoryStore, String> {
+    if !categories_path.exists() {
+        return Ok(UserModCategoryStore::default());
+    }
+
+    if !categories_path.is_file() {
+        return Err(format!(
+            "User MOD category store is not a file: {}",
+            categories_path.display()
+        ));
+    }
+
+    let category_json = fs::read_to_string(categories_path).map_err(|error| {
+        format!(
+            "Could not read user MOD category store {}: {error}",
+            categories_path.display()
+        )
+    })?;
+    serde_json::from_str::<UserModCategoryStore>(&category_json).map_err(|error| {
+        format!(
+            "Could not parse user MOD category store {}: {error}",
+            categories_path.display()
+        )
+    })
+}
+
+fn load_user_mod_category_store_for_installed_root(
+    installed_root: &Path,
+) -> Result<UserModCategoryStore, String> {
+    let Some(mods_path) = installed_root.parent() else {
+        return Ok(UserModCategoryStore::default());
+    };
+
+    load_user_mod_category_store(&mods_path.join("categories.json"))
+}
+
+fn save_user_mod_category_store(
+    categories_path: &Path,
+    store: &UserModCategoryStore,
+) -> Result<(), String> {
+    let category_json = serde_json::to_string_pretty(store)
+        .map_err(|error| format!("Could not serialize user MOD category store: {error}"))?;
+    fs::write(categories_path, category_json).map_err(|error| {
+        format!(
+            "Could not write user MOD category store {}: {error}",
+            categories_path.display()
+        )
+    })
+}
+
+fn sorted_user_mod_categories(categories: &[UserModCategory]) -> Vec<UserModCategory> {
+    let mut categories = categories.to_vec();
+    categories.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    categories
+}
+
+fn resolve_user_category(
+    store: &UserModCategoryStore,
+    category_override: &Option<String>,
+) -> Option<UserModCategory> {
+    category_override.as_deref().and_then(|category_id| {
+        store
+            .categories
+            .iter()
+            .find(|category| category.id == category_id)
+            .cloned()
+    })
+}
+
+fn resolve_category_override(
+    store: &UserModCategoryStore,
+    raw_category_id: &str,
+) -> Result<Option<String>, String> {
+    let category_id = raw_category_id.trim();
+    if category_id.is_empty() {
+        return Ok(None);
+    }
+
+    validate_user_mod_category_id(category_id)?;
+    if !store
+        .categories
+        .iter()
+        .any(|category| category.id == category_id)
+    {
+        return Err(format!("User MOD category was not found: {category_id}"));
+    }
+
+    Ok(Some(category_id.to_string()))
+}
+
+fn ensure_user_mod_category_name_is_available(
+    categories: &[UserModCategory],
+    name: &str,
+    excluded_category_id: Option<&str>,
+) -> Result<(), String> {
+    let normalized_name = name.to_lowercase();
+    if categories.iter().any(|category| {
+        Some(category.id.as_str()) != excluded_category_id
+            && category.name.trim().to_lowercase() == normalized_name
+    }) {
+        return Err(format!("User MOD category already exists: {name}"));
+    }
+
+    Ok(())
+}
+
+fn unique_user_mod_category_id(
+    categories: &[UserModCategory],
+    name: &str,
+) -> Result<String, String> {
+    let base_id = format!("category-{}-{}", unix_seconds_now()?, slugify(name));
+    let mut category_id = base_id.clone();
+    let mut suffix = 2;
+
+    while categories.iter().any(|category| category.id == category_id) {
+        category_id = format!("{base_id}-{suffix}");
+        suffix += 1;
+    }
+
+    Ok(category_id)
+}
+
+fn clear_category_override_from_manifests(
+    installed_root: &Path,
+    category_id: &str,
+) -> Result<usize, String> {
+    let mut cleared_mod_count = 0;
+
+    for mut context in load_all_installed_manifests(installed_root)? {
+        if context.manifest.category_override.as_deref() != Some(category_id) {
+            continue;
+        }
+
+        context.manifest.category_override = None;
+        refresh_manifest_model_replacements(&mut context.manifest)?;
+        context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+        save_manifest(&context.manifest_path, &context.manifest)?;
+        cleared_mod_count += 1;
+    }
+
+    Ok(cleared_mod_count)
 }
 
 fn initialize_import_staging(paths: &LibraryPaths) -> Result<(), String> {
@@ -4048,13 +4440,15 @@ mod tests {
     use crate::storage::profiles;
 
     use super::{
-        apply_conflict_order_from, build_profile_switch_plan, clear_import_staging,
-        disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
-        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
-        list_installed_mods_from, load_or_initialize_profile_store, move_conflict_participant_from,
-        preview_disable_mod_from, preview_enable_mod_from, preview_mod_import,
-        preview_restore_all_mods_from, preview_uninstall_mod_from, restore_all_mods_from,
+        apply_conflict_order_from, build_profile_switch_plan,
+        clear_category_override_from_manifests, clear_import_staging, disable_mod_from,
+        enable_mod_from, get_mod_conflict_report_from, install_mod_from_candidate_into,
+        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
+        load_or_initialize_profile_store, move_conflict_participant_from, preview_disable_mod_from,
+        preview_enable_mod_from, preview_mod_import, preview_restore_all_mods_from,
+        preview_uninstall_mod_from, restore_all_mods_from, save_user_mod_category_store,
         switch_mod_profile_from, uninstall_mod_from, validate_archive_path, LibraryPaths,
+        UserModCategory, UserModCategoryStore, USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
 
     #[test]
@@ -4275,7 +4669,10 @@ mod tests {
         let manifest_json = fs::read_to_string(&result.manifest_path).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
 
-        assert_eq!(manifest["schemaVersion"], 8);
+        assert_eq!(
+            manifest["schemaVersion"],
+            serde_json::Value::from(super::CURRENT_MOD_MANIFEST_SCHEMA_VERSION)
+        );
         assert_eq!(result.model_replacements[0].sub_kind, "太刀");
         assert_eq!(manifest["modelReplacements"][0]["modelKind"], "weapon");
 
@@ -5133,6 +5530,64 @@ mod tests {
     }
 
     #[test]
+    fn user_category_override_is_resolved_and_can_return_to_automatic_classification() {
+        let source_root = temp_root("user_category_source");
+        let mods_root = temp_root("user_category_mods");
+        let installed_root = mods_root.join("installed");
+        fs::create_dir_all(&installed_root).unwrap();
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("weapon")
+                .join("sword.mod3"),
+        );
+        let result =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+
+        let category = UserModCategory {
+            id: "category-visual".to_string(),
+            name: "外观收藏".to_string(),
+            created_at_unix_seconds: 1,
+        };
+        save_user_mod_category_store(
+            &mods_root.join("categories.json"),
+            &UserModCategoryStore {
+                schema_version: USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
+                categories: vec![category.clone()],
+            },
+        )
+        .unwrap();
+
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
+        manifest["categoryOverride"] = serde_json::Value::from(category.id.clone());
+        fs::write(
+            &result.manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let categorized = list_installed_mods_from(&installed_root).unwrap();
+        assert_eq!(
+            categorized.mods[0].category_override.as_deref(),
+            Some("category-visual")
+        );
+        assert_eq!(categorized.mods[0].user_category.as_ref(), Some(&category));
+
+        assert_eq!(
+            clear_category_override_from_manifests(&installed_root, "category-visual").unwrap(),
+            1
+        );
+        let automatic = list_installed_mods_from(&installed_root).unwrap();
+        assert!(automatic.mods[0].category_override.is_none());
+        assert!(automatic.mods[0].user_category.is_none());
+
+        cleanup(source_root);
+        cleanup(mods_root);
+    }
+
+    #[test]
     fn reports_shared_model_targets_for_conflicting_mods() {
         let first_source = temp_root("shared_model_first_source");
         let second_source = temp_root("shared_model_second_source");
@@ -5218,6 +5673,7 @@ mod tests {
             mods_path: profile_root.join("mods"),
             installed_path: installed_root.clone(),
             profiles_path: profile_root.join("profiles.json"),
+            categories_path: profile_root.join("mods").join("categories.json"),
             staging_path: profile_root.join("staging"),
             import_staging_path: profile_root.join("staging").join("imports"),
         };

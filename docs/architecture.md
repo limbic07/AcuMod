@@ -56,10 +56,10 @@ App shell
 
 - `src/App.vue` 暂时继续持有既有的页面状态和操作函数，避免在 UI 重构时改变已经验证的 Tauri 调用链。
 - `src/components/` 放应用壳的可复用组件，例如侧边导航、顶部栏和悬浮 AI 窗口；后续业务区块稳定后再逐步抽成 `src/views/` 下的页面。
-- MOD 库、导入 MOD、设置和冲突管理共享同一个 `WorkspaceView` 页面状态。进入冲突管理时只替换右侧主工作区，左侧导航和顶部状态区保持可用，并可直接切换到其它页面。
-- UI 只负责切换工作区和展示 DTO。切换页面不得重置未完成的导入预览、操作计划或后端状态。
+- MOD 库、导入 MOD、冲突管理和设置是侧边导航中同级的 `WorkspaceView` 页面。切换页面时只替换右侧内容区中的当前页面，左侧导航和顶部状态区保持可用，并可直接切换到其它页面。
+- UI 只负责切换当前页面和展示 DTO。切换页面不得重置未完成的导入预览、操作计划或后端状态。
 
-悬浮 AI 助手是独立于当前工作区的窗口层。它可以在浏览 MOD 库、导入或设置时打开，但未来只能通过与普通 UI 相同的 `src/api/* -> Tauri command -> Rust service -> OperationPlan` 链路提交动作；不能直接读写文件、绕过预览或跳过用户确认。
+悬浮 AI 助手是独立于当前页面的窗口层。它可以在浏览 MOD 库、导入或设置时打开，但未来只能通过与普通 UI 相同的 `src/api/* -> Tauri command -> Rust service -> OperationPlan` 链路提交动作；不能直接读写文件、绕过预览或跳过用户确认。
 
 ## 前端职责
 
@@ -169,6 +169,8 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 `staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
+`AcumodData/mods/categories.json` 保存用户创建的全局分类定义。每个 `installed/<mod_id>/manifest.json` 只保存可选的分类 ID 覆盖；分类定义不放进 Profile，也不修改 MOD 内容。删除分类时，服务层必须先清除全部 manifest 对该分类 ID 的引用，使对应 MOD 自动回退到 ID 表推导的分类。
+
 ## MOD 导入目录识别
 
 文件夹导入和压缩包导入应共用同一套目录识别规则。压缩包只负责先解包到暂存目录；解包后的目录树仍然走同一个识别入口。
@@ -228,7 +230,7 @@ MOD 文件列表
 
 当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型命中多个部位时，后端合并为一个套装 DTO 并返回部位列表。
 
-新导入 MOD 使用 manifest schema 8 持久化 `modelReplacements`、显示名称和备注。旧 schema 1 至 7 manifest 保持可读，列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。投射器接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录；未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
+新导入 MOD 使用 manifest schema 9 持久化 `modelReplacements`、显示名称、备注和可选 `categoryOverride`。schema 8 已保存的模型识别结果保持可读，缺少分类覆盖时自动分类；schema 1 至 7 manifest 在列表加载时根据已有 `files[].deployRelativePath` 即时补算，不修改 MOD 文件。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。投射器接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录；未知规范目录仍返回底层 ID，`recognitionSource` 为 `pathPattern`。
 
 后续如果支持同类型模型替换目标选择，应作为独立功能设计。该功能不能修改 MOD 库中的原始文件，应在部署阶段生成新的部署计划。MVP 暂不做任何模型改绑，包括通过路径、文件名或文件内容进行改绑。
 
@@ -402,7 +404,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 8 manifest 持久化结果，schema 1 至 7 manifest 读取时兼容补算；`vfx/mod` 附属资源不作为装备替换目标显示。
+4. Rust `model_recognition` service 返回 `ModelReplacement`，schema 9 manifest 持久化结果；schema 8 已保存的识别结果保持可读，schema 1 至 7 manifest 读取时兼容补算；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容。

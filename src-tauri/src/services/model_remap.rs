@@ -133,7 +133,18 @@ struct PathRemapRule {
     target_token: String,
     source_numeric_token: Option<String>,
     target_numeric_token: Option<String>,
-    rename_companion_file_tokens: bool,
+    file_name_rules: Vec<FileNameRemapRule>,
+}
+
+#[derive(Clone)]
+enum FileNameRemapRule {
+    ModelToken {
+        rename_outside_root: bool,
+    },
+    ArmorEpvBaseId {
+        source_set_id: String,
+        target_set_id: String,
+    },
 }
 
 struct PairedSlingerInference {
@@ -994,19 +1005,40 @@ fn path_rules_for_group(
                 .source_model_ids
                 .iter()
                 .zip(&target.model_paths)
-                .map(|(source, target)| path_rule(source, target, true))
+                .map(|(source, target)| {
+                    path_rule(
+                        source,
+                        target,
+                        vec![FileNameRemapRule::ModelToken {
+                            rename_outside_root: true,
+                        }],
+                    )
+                })
                 .collect())
         }
         "armor" => {
             let source_id = single_source_model_id(group)?;
             let target_id = &target.model_id;
+            let source_set_id = armor_set_base_id(source_id)
+                .ok_or_else(|| format!("防具模型 ID 不符合 plNNN_NNNN 格式：{source_id}"))?;
+            let target_set_id = armor_set_base_id(target_id)
+                .ok_or_else(|| format!("防具目标模型 ID 不符合 plNNN_NNNN 格式：{target_id}"))?;
+            let file_name_rules = vec![
+                FileNameRemapRule::ModelToken {
+                    rename_outside_root: false,
+                },
+                FileNameRemapRule::ArmorEpvBaseId {
+                    source_set_id,
+                    target_set_id,
+                },
+            ];
             Ok(["pl/f_equip", "pl/m_equip"]
                 .into_iter()
                 .map(|root| {
                     path_rule(
                         &format!("{root}/{source_id}"),
                         &format!("{root}/{target_id}"),
-                        false,
+                        file_name_rules.clone(),
                     )
                 })
                 .collect())
@@ -1016,7 +1048,9 @@ fn path_rules_for_group(
             Ok(vec![path_rule(
                 &format!("otomo/equip/{source_id}"),
                 &format!("otomo/equip/{}", target.model_id),
-                false,
+                vec![FileNameRemapRule::ModelToken {
+                    rename_outside_root: false,
+                }],
             )])
         }
         "hair" => {
@@ -1024,7 +1058,9 @@ fn path_rules_for_group(
             Ok(vec![path_rule(
                 &format!("pl/hair/{source_id}"),
                 &format!("pl/hair/{}", target.model_id),
-                false,
+                vec![FileNameRemapRule::ModelToken {
+                    rename_outside_root: false,
+                }],
             )])
         }
         "slinger" => {
@@ -1032,7 +1068,9 @@ fn path_rules_for_group(
             Ok(vec![path_rule(
                 &format!("wp/slg/{source_id}"),
                 &format!("wp/slg/{}", target.model_id),
-                false,
+                vec![FileNameRemapRule::ModelToken {
+                    rename_outside_root: false,
+                }],
             )])
         }
         other => Err(format!("不支持该模型改绑类别：{other}")),
@@ -1042,7 +1080,7 @@ fn path_rules_for_group(
 fn path_rule(
     source_root: &str,
     target_root: &str,
-    rename_companion_file_tokens: bool,
+    file_name_rules: Vec<FileNameRemapRule>,
 ) -> PathRemapRule {
     let source_token = source_root
         .rsplit('/')
@@ -1061,7 +1099,7 @@ fn path_rule(
         target_root: target_root.to_string(),
         source_token,
         target_token,
-        rename_companion_file_tokens,
+        file_name_rules,
     }
 }
 
@@ -1081,17 +1119,42 @@ fn apply_path_rule(path: &str, rule: &PathRemapRule) -> String {
         root_was_replaced = true;
     }
 
-    if let Some(file_name) = components.last_mut() {
-        if root_was_replaced || rule.rename_companion_file_tokens {
-            *file_name =
-                replace_ascii_case_insensitive(file_name, &rule.source_token, &rule.target_token);
-        }
-        if root_was_replaced {
-            if let (Some(source_numeric), Some(target_numeric)) = (
-                rule.source_numeric_token.as_deref(),
-                rule.target_numeric_token.as_deref(),
-            ) {
-                *file_name = replace_numeric_model_token(file_name, source_numeric, target_numeric);
+    if let Some(file_name_index) = components.len().checked_sub(1) {
+        for file_name_rule in &rule.file_name_rules {
+            match file_name_rule {
+                FileNameRemapRule::ModelToken {
+                    rename_outside_root,
+                } if root_was_replaced || *rename_outside_root => {
+                    let file_name = &mut components[file_name_index];
+                    *file_name = replace_ascii_case_insensitive(
+                        file_name,
+                        &rule.source_token,
+                        &rule.target_token,
+                    );
+                    if root_was_replaced {
+                        if let (Some(source_numeric), Some(target_numeric)) = (
+                            rule.source_numeric_token.as_deref(),
+                            rule.target_numeric_token.as_deref(),
+                        ) {
+                            *file_name = replace_numeric_model_token(
+                                file_name,
+                                source_numeric,
+                                target_numeric,
+                            );
+                        }
+                    }
+                }
+                FileNameRemapRule::ArmorEpvBaseId {
+                    source_set_id,
+                    target_set_id,
+                } if root_was_replaced => {
+                    if let Some(file_name) =
+                        rewrite_armor_epv_file_name(&components, source_set_id, target_set_id)
+                    {
+                        components[file_name_index] = file_name;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1152,6 +1215,49 @@ fn numeric_model_token(model_id: &str) -> Option<String> {
             .chars()
             .all(|character| character.is_ascii_digit() || character == '_'))
     .then(|| token.to_string())
+}
+
+fn armor_set_base_id(model_id: &str) -> Option<String> {
+    let value = model_id.strip_prefix("pl")?;
+    let (set_id, variant_id) = value.split_once('_')?;
+    (set_id.len() == 3
+        && variant_id.len() == 4
+        && set_id.chars().all(|character| character.is_ascii_digit())
+        && variant_id
+            .chars()
+            .all(|character| character.is_ascii_digit()))
+    .then(|| set_id.to_string())
+}
+
+fn rewrite_armor_epv_file_name(
+    components: &[String],
+    source_set_id: &str,
+    target_set_id: &str,
+) -> Option<String> {
+    const ARMOR_PARTS: [&str; 5] = ["head", "body", "arm", "wst", "leg"];
+
+    let file_name_index = components.len().checked_sub(1)?;
+    let epv_directory_index = file_name_index.checked_sub(1)?;
+    let part_directory_index = epv_directory_index.checked_sub(1)?;
+    let file_name = components.get(file_name_index)?;
+    let part = components.get(part_directory_index)?;
+
+    if !components[epv_directory_index].eq_ignore_ascii_case("epv")
+        || !ARMOR_PARTS
+            .iter()
+            .any(|expected_part| part.eq_ignore_ascii_case(expected_part))
+    {
+        return None;
+    }
+
+    for gender in ["f", "m"] {
+        let expected = format!("{gender}_{part}{source_set_id}.epv3");
+        if file_name.eq_ignore_ascii_case(&expected) {
+            return Some(format!("{gender}_{part}{target_set_id}.epv3"));
+        }
+    }
+
+    None
 }
 
 fn build_texture_path_rewrites(
@@ -1344,6 +1450,72 @@ mod tests {
             "nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3"
         );
         assert_eq!(effective[1].deploy_relative_path, files[1]);
+    }
+
+    #[test]
+    fn remaps_armor_epv_files_by_set_id_for_each_part() {
+        let replacements = vec![replacement("armor", "防具套装", "set", "pl105_0000")];
+        let files = [
+            "nativePC/pl/f_equip/pl105_0000/head/epv/f_head105.epv3",
+            "nativePC/pl/f_equip/pl105_0000/body/epv/f_body105.epv3",
+            "nativePC/pl/f_equip/pl105_0000/arm/epv/f_arm105.epv3",
+            "nativePC/pl/f_equip/pl105_0000/wst/epv/f_wst105.epv3",
+            "nativePC/pl/f_equip/pl105_0000/leg/epv/f_leg105.epv3",
+            "nativePC/pl/m_equip/pl105_0000/body/epv/m_body105.epv3",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl001_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files(&files, &replacements, &selections).unwrap();
+        let expected = [
+            "nativePC/pl/f_equip/pl001_0000/head/epv/f_head001.epv3",
+            "nativePC/pl/f_equip/pl001_0000/body/epv/f_body001.epv3",
+            "nativePC/pl/f_equip/pl001_0000/arm/epv/f_arm001.epv3",
+            "nativePC/pl/f_equip/pl001_0000/wst/epv/f_wst001.epv3",
+            "nativePC/pl/f_equip/pl001_0000/leg/epv/f_leg001.epv3",
+            "nativePC/pl/m_equip/pl001_0000/body/epv/m_body001.epv3",
+        ];
+
+        for (file, expected_path) in effective.iter().zip(expected) {
+            assert_eq!(file.deploy_relative_path, expected_path);
+        }
+    }
+
+    #[test]
+    fn armor_epv_uses_target_set_id_without_target_variant() {
+        let replacements = vec![replacement("armor", "防具套装", "set", "pl106_0000")];
+        let file = "nativePC/pl/f_equip/pl106_0000/body/epv/f_body106.epv3".to_string();
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl106_0000".to_string(),
+            target_id: "armor:pl027_0010".to_string(),
+        }];
+
+        let effective = build_effective_remap_files(&[file], &replacements, &selections).unwrap();
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl027_0010/body/epv/f_body027.epv3"
+        );
+    }
+
+    #[test]
+    fn armor_epv_rewrite_keeps_nonstandard_epv_file_names() {
+        let replacements = vec![replacement("armor", "防具套装", "set", "pl105_0000")];
+        let file = "nativePC/pl/f_equip/pl105_0000/body/epv/f_body105_alternate.epv3".to_string();
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl001_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files(&[file], &replacements, &selections).unwrap();
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl001_0000/body/epv/f_body105_alternate.epv3"
+        );
     }
 
     #[test]

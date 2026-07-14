@@ -26,10 +26,10 @@ use super::model_remap::{
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 13;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 14;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 13;
-const USER_MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 1;
-const USER_MOD_CATEGORY_NAME_LIMIT: usize = 40;
+const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 2;
+const MOD_CATEGORY_NAME_LIMIT: usize = 40;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
@@ -122,9 +122,8 @@ pub struct InstalledModSummary {
     pub name: String,
     pub original_name: String,
     pub note: String,
-    pub categories: Vec<String>,
-    pub category_override: Option<String>,
-    pub user_category: Option<UserModCategory>,
+    pub category_ids: Vec<String>,
+    pub categories: Vec<ModCategory>,
     pub mod_path: String,
     pub content_path: String,
     pub manifest_path: String,
@@ -388,14 +387,14 @@ pub struct ModMetadataUpdateResult {
     pub name: String,
     pub original_name: String,
     pub note: String,
-    pub category_override: Option<String>,
-    pub user_category: Option<UserModCategory>,
+    pub category_ids: Vec<String>,
+    pub categories: Vec<ModCategory>,
     pub message: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct UserModCategory {
+pub struct ModCategory {
     pub id: String,
     pub name: String,
     pub created_at_unix_seconds: u64,
@@ -403,16 +402,16 @@ pub struct UserModCategory {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserModCategoryList {
-    pub categories: Vec<UserModCategory>,
+pub struct ModCategoryList {
+    pub categories: Vec<ModCategory>,
     pub message: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserModCategoryDeleteResult {
+pub struct ModCategoryDeleteResult {
     pub category_id: String,
-    pub cleared_mod_count: usize,
+    pub affected_mod_count: usize,
     pub message: String,
 }
 
@@ -424,7 +423,7 @@ pub struct ModMetadataPatch {
     #[serde(default)]
     pub note: Option<String>,
     #[serde(default)]
-    pub category_override: Option<String>,
+    pub category_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -438,6 +437,10 @@ struct InstalledModManifest {
     #[serde(default)]
     note: String,
     #[serde(default)]
+    category_ids: Vec<String>,
+    // schema 13 and earlier stored one optional user override. It is read only
+    // so existing libraries can be migrated into the unified category list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     category_override: Option<String>,
     source_path: String,
     content_root_path: String,
@@ -457,18 +460,41 @@ struct InstalledModManifest {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct UserModCategoryStore {
-    #[serde(default = "default_user_mod_category_store_schema_version")]
+struct ModCategoryStore {
+    #[serde(default = "default_mod_category_store_schema_version")]
     schema_version: u32,
     #[serde(default)]
-    categories: Vec<UserModCategory>,
+    categories: Vec<StoredModCategory>,
+    #[serde(default)]
+    suppressed_recognition_keys: Vec<String>,
 }
 
-impl Default for UserModCategoryStore {
+impl Default for ModCategoryStore {
     fn default() -> Self {
         Self {
-            schema_version: USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
+            schema_version: MOD_CATEGORY_STORE_SCHEMA_VERSION,
             categories: Vec::new(),
+            suppressed_recognition_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StoredModCategory {
+    id: String,
+    name: String,
+    created_at_unix_seconds: u64,
+    #[serde(default)]
+    recognition_keys: Vec<String>,
+}
+
+impl From<&StoredModCategory> for ModCategory {
+    fn from(category: &StoredModCategory) -> Self {
+        Self {
+            id: category.id.clone(),
+            name: category.name.clone(),
+            created_at_unix_seconds: category.created_at_unix_seconds,
         }
     }
 }
@@ -491,8 +517,8 @@ fn default_conflict_order_schema_version() -> u32 {
     1
 }
 
-fn default_user_mod_category_store_schema_version() -> u32 {
-    USER_MOD_CATEGORY_STORE_SCHEMA_VERSION
+fn default_mod_category_store_schema_version() -> u32 {
+    MOD_CATEGORY_STORE_SCHEMA_VERSION
 }
 
 #[derive(Clone)]
@@ -777,7 +803,6 @@ fn install_mod_from_candidate_into(
 pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    load_or_initialize_user_mod_category_store(&paths)?;
     list_installed_mods_from(&paths.installed_path)
 }
 
@@ -789,11 +814,11 @@ pub fn update_mod_metadata(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     validate_mod_id(&mod_id)?;
-    if patch.display_name.is_none() && patch.note.is_none() && patch.category_override.is_none() {
-        return Err("MOD metadata update must include at least one field.".to_string());
+    if patch.display_name.is_none() && patch.note.is_none() && patch.category_ids.is_none() {
+        return Err("至少需要修改一项 MOD 信息。".to_string());
     }
 
-    let category_store = load_or_initialize_user_mod_category_store(&paths)?;
+    let category_store = load_or_initialize_mod_category_store(&paths)?;
     let mut context = load_installed_manifest(&paths.installed_path, &mod_id)?;
 
     if let Some(display_name) = patch.display_name {
@@ -805,110 +830,117 @@ pub fn update_mod_metadata(
         context.manifest.note = validate_mod_note(&note)?;
     }
 
-    if let Some(category_override) = patch.category_override {
-        context.manifest.category_override =
-            resolve_category_override(&category_store, &category_override)?;
+    if let Some(category_ids) = patch.category_ids {
+        context.manifest.category_ids = resolve_category_ids(&category_store, &category_ids)?;
+        context.manifest.category_override = None;
     }
 
     refresh_manifest_model_replacements(&mut context)?;
     context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
     save_manifest(&context.manifest_path, &context.manifest)?;
 
-    let user_category = resolve_user_category(&category_store, &context.manifest.category_override);
+    let categories = resolve_mod_categories(&category_store, &context.manifest.category_ids);
+    let category_ids = categories
+        .iter()
+        .map(|category| category.id.clone())
+        .collect();
 
     Ok(ModMetadataUpdateResult {
         mod_id: context.manifest.id.clone(),
         name: manifest_display_name(&context.manifest),
         original_name: context.manifest.name.clone(),
         note: context.manifest.note.clone(),
-        category_override: context.manifest.category_override.clone(),
-        user_category,
-        message: "MOD metadata was updated without changing deployment files.".to_string(),
+        category_ids,
+        categories,
+        message: "MOD 信息已保存。".to_string(),
     })
 }
 
-pub fn list_user_mod_categories(app: &tauri::AppHandle) -> Result<UserModCategoryList, String> {
+pub fn list_mod_categories(app: &tauri::AppHandle) -> Result<ModCategoryList, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    let store = load_or_initialize_user_mod_category_store(&paths)?;
-    let categories = sorted_user_mod_categories(&store.categories);
+    let store = load_or_initialize_mod_category_store(&paths)?;
+    let categories = sorted_mod_categories(&store.categories);
 
-    Ok(UserModCategoryList {
-        message: format!("{} user MOD category(s) are available.", categories.len()),
+    Ok(ModCategoryList {
+        message: format!("共有 {} 个分类。", categories.len()),
         categories,
     })
 }
 
-pub fn create_user_mod_category(
-    app: &tauri::AppHandle,
-    name: String,
-) -> Result<UserModCategory, String> {
+pub fn create_mod_category(app: &tauri::AppHandle, name: String) -> Result<ModCategory, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    let mut store = load_or_initialize_user_mod_category_store(&paths)?;
-    let name = validate_user_mod_category_name(&name)?;
+    let mut store = load_or_initialize_mod_category_store(&paths)?;
+    let name = validate_mod_category_name(&name)?;
 
-    ensure_user_mod_category_name_is_available(&store.categories, &name, None)?;
-    let category = UserModCategory {
-        id: unique_user_mod_category_id(&store.categories, &name)?,
+    ensure_mod_category_name_is_available(&store.categories, &name, None)?;
+    let category = StoredModCategory {
+        id: unique_mod_category_id(&store.categories, &name)?,
         name,
         created_at_unix_seconds: unix_seconds_now()?,
+        recognition_keys: Vec::new(),
     };
     store.categories.push(category.clone());
-    save_user_mod_category_store(&paths.categories_path, &store)?;
+    save_mod_category_store(&paths.categories_path, &store)?;
 
-    Ok(category)
+    Ok(ModCategory::from(&category))
 }
 
-pub fn rename_user_mod_category(
+pub fn rename_mod_category(
     app: &tauri::AppHandle,
     category_id: String,
     name: String,
-) -> Result<UserModCategory, String> {
+) -> Result<ModCategory, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    validate_user_mod_category_id(&category_id)?;
-    let mut store = load_or_initialize_user_mod_category_store(&paths)?;
-    let name = validate_user_mod_category_name(&name)?;
+    validate_mod_category_id(&category_id)?;
+    let mut store = load_or_initialize_mod_category_store(&paths)?;
+    let name = validate_mod_category_name(&name)?;
 
-    ensure_user_mod_category_name_is_available(&store.categories, &name, Some(&category_id))?;
+    ensure_mod_category_name_is_available(&store.categories, &name, Some(&category_id))?;
     let category = store
         .categories
         .iter_mut()
         .find(|category| category.id == category_id)
-        .ok_or_else(|| format!("User MOD category was not found: {category_id}"))?;
+        .ok_or_else(|| format!("未找到分类：{category_id}"))?;
     category.name = name;
     let category = category.clone();
-    save_user_mod_category_store(&paths.categories_path, &store)?;
+    save_mod_category_store(&paths.categories_path, &store)?;
 
-    Ok(category)
+    Ok(ModCategory::from(&category))
 }
 
-pub fn delete_user_mod_category(
+pub fn delete_mod_category(
     app: &tauri::AppHandle,
     category_id: String,
-) -> Result<UserModCategoryDeleteResult, String> {
+) -> Result<ModCategoryDeleteResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    validate_user_mod_category_id(&category_id)?;
-    let mut store = load_or_initialize_user_mod_category_store(&paths)?;
+    validate_mod_category_id(&category_id)?;
+    let mut store = load_or_initialize_mod_category_store(&paths)?;
     let category_index = store
         .categories
         .iter()
         .position(|category| category.id == category_id)
-        .ok_or_else(|| format!("User MOD category was not found: {category_id}"))?;
+        .ok_or_else(|| format!("未找到分类：{category_id}"))?;
 
-    let cleared_mod_count =
-        clear_category_override_from_manifests(&paths.installed_path, &category_id)?;
-    store.categories.remove(category_index);
-    save_user_mod_category_store(&paths.categories_path, &store)?;
+    let removed_category = store.categories.remove(category_index);
+    for recognition_key in removed_category.recognition_keys {
+        if !store.suppressed_recognition_keys.contains(&recognition_key) {
+            store.suppressed_recognition_keys.push(recognition_key);
+        }
+    }
+    store.suppressed_recognition_keys.sort();
+    store.suppressed_recognition_keys.dedup();
 
-    Ok(UserModCategoryDeleteResult {
+    let affected_mod_count = remove_category_from_manifests(&paths.installed_path, &category_id)?;
+    save_mod_category_store(&paths.categories_path, &store)?;
+
+    Ok(ModCategoryDeleteResult {
         category_id,
-        cleared_mod_count,
-        message:
-            "User MOD category was deleted and affected MODs returned to automatic classification."
-                .to_string(),
+        affected_mod_count,
+        message: "分类已删除。".to_string(),
     })
 }
 
@@ -1194,6 +1226,15 @@ fn install_mod_from_folder_into_with_options(
 
         let model_replacements =
             recognize_model_replacements_for_library_files(&installed_files, &content_path)?;
+        let mut category_store =
+            load_or_initialize_mod_category_store_for_installed_root(installed_root)?;
+        let (category_ids, category_store_changed) =
+            ensure_recognition_categories(&mut category_store, &model_replacements)?;
+        if category_store_changed {
+            let categories_path = mod_category_store_path(installed_root)
+                .ok_or_else(|| "无法确定分类数据目录。".to_string())?;
+            save_mod_category_store(&categories_path, &category_store)?;
+        }
         let manifest_path = temp_mod_path.join("manifest.json");
         let manifest = InstalledModManifest {
             schema_version: CURRENT_MOD_MANIFEST_SCHEMA_VERSION,
@@ -1201,6 +1242,7 @@ fn install_mod_from_folder_into_with_options(
             name: mod_name.clone(),
             display_name: None,
             note: String::new(),
+            category_ids,
             category_override: None,
             source_path: original_source_path.unwrap_or_else(|| preview.source_path.clone()),
             content_root_path,
@@ -1492,7 +1534,7 @@ fn scan_directories(root: &Path) -> Result<ScanResult, String> {
                 .map_err(|error| format!("Could not read metadata {}: {error}", path.display()))?;
 
             if metadata.file_type().is_symlink() {
-                warnings.push(format!("Skipped symbolic link: {}", path.display()));
+                warnings.push(format!("已跳过符号链接：{}", path.display()));
                 continue;
             }
 
@@ -1646,13 +1688,13 @@ fn common_native_pc_child_name(path: &Path) -> Option<String> {
 fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, String> {
     let mut mods = Vec::new();
     let mut warnings = Vec::new();
-    let user_category_store = load_user_mod_category_store_for_installed_root(installed_root)?;
+    let category_store = load_or_initialize_mod_category_store_for_installed_root(installed_root)?;
 
     if !installed_root.exists() {
         return Ok(InstalledModList {
             mods,
             warnings,
-            message: "No installed MOD directory exists yet.".to_string(),
+            message: "尚未创建本地 MOD 目录。".to_string(),
         });
     }
 
@@ -1685,10 +1727,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
         let manifest_path = mod_path.join("manifest.json");
 
         if !manifest_path.is_file() {
-            warnings.push(format!(
-                "Skipped installed MOD without manifest: {}",
-                mod_path.display()
-            ));
+            warnings.push(format!("已跳过缺少清单文件的 MOD：{}", mod_path.display()));
             continue;
         }
 
@@ -1710,9 +1749,9 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
         let original_model_replacements =
             match model_replacements_for_manifest(&manifest, &content_path) {
                 Ok(model_replacements) => model_replacements,
-                Err(error) => {
+                Err(_error) => {
                     warnings.push(format!(
-                        "Could not recognize model replacements for {}: {error}",
+                        "无法识别 {} 的模型替换信息，请检查 MOD 文件结构。",
                         manifest.name
                     ));
                     Vec::new()
@@ -1723,33 +1762,28 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             &original_model_replacements,
         ) {
             Ok(model_replacements) => model_replacements,
-            Err(error) => {
+            Err(_error) => {
                 warnings.push(format!(
-                    "Could not apply saved model remaps for {}: {error}",
+                    "无法应用 {} 已保存的模型修改，请重新设置替换模型。",
                     manifest.name
                 ));
                 original_model_replacements.clone()
             }
         };
 
-        let categories = model_categories(&model_replacements);
-        let user_category =
-            resolve_user_category(&user_category_store, &manifest.category_override);
-        if manifest.category_override.is_some() && user_category.is_none() {
-            warnings.push(format!(
-                "MOD {} references a missing user category and is using automatic classification.",
-                manifest.name
-            ));
-        }
+        let categories = resolve_mod_categories(&category_store, &manifest.category_ids);
+        let category_ids = categories
+            .iter()
+            .map(|category| category.id.clone())
+            .collect();
 
         mods.push(InstalledModSummary {
             id: manifest.id.clone(),
             name: manifest_display_name(&manifest),
             original_name: manifest.name.clone(),
             note: manifest.note.clone(),
+            category_ids,
             categories,
-            category_override: user_category.as_ref().map(|category| category.id.clone()),
-            user_category,
             mod_path: path_to_string(&mod_path),
             content_path: path_to_string(&mod_path.join("content")),
             manifest_path: path_to_string(&manifest_path),
@@ -1773,9 +1807,9 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
     });
 
     let message = if mods.is_empty() {
-        "No MODs have been imported into the local library yet.".to_string()
+        "本地 MOD 库为空。".to_string()
     } else {
-        format!("{} MOD(s) are installed in the local library.", mods.len())
+        format!("本地 MOD 库共有 {} 个 MOD。", mods.len())
     };
 
     Ok(InstalledModList {
@@ -1954,16 +1988,6 @@ fn manifest_display_name(manifest: &InstalledModManifest) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or(&manifest.name)
         .to_string()
-}
-
-fn model_categories(model_replacements: &[ModelReplacement]) -> Vec<String> {
-    let mut categories = model_replacements
-        .iter()
-        .map(|replacement| model_kind_label(&replacement.model_kind).to_string())
-        .collect::<Vec<_>>();
-    categories.sort();
-    categories.dedup();
-    categories
 }
 
 fn model_kind_label(model_kind: &str) -> &str {
@@ -3853,7 +3877,7 @@ fn validate_mod_note(note: &str) -> Result<String, String> {
     Ok(note.to_string())
 }
 
-fn validate_user_mod_category_id(category_id: &str) -> Result<(), String> {
+fn validate_mod_category_id(category_id: &str) -> Result<(), String> {
     if category_id.is_empty()
         || category_id == "."
         || category_id == ".."
@@ -3861,23 +3885,20 @@ fn validate_user_mod_category_id(category_id: &str) -> Result<(), String> {
         || category_id.contains('\\')
         || category_id.contains(':')
     {
-        return Err(format!("Unsafe user MOD category id: {category_id}"));
+        return Err(format!("分类 ID 不安全：{category_id}"));
     }
 
     Ok(())
 }
 
-fn validate_user_mod_category_name(name: &str) -> Result<String, String> {
+fn validate_mod_category_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err("User MOD category name cannot be empty.".to_string());
+        return Err("分类名称不能为空。".to_string());
     }
-    if name == "自动" {
-        return Err("User MOD category name is reserved: 自动".to_string());
-    }
-    if name.chars().count() > USER_MOD_CATEGORY_NAME_LIMIT {
+    if name.chars().count() > MOD_CATEGORY_NAME_LIMIT {
         return Err(format!(
-            "User MOD category name must contain at most {USER_MOD_CATEGORY_NAME_LIMIT} characters."
+            "分类名称不能超过 {MOD_CATEGORY_NAME_LIMIT} 个字符。"
         ));
     }
 
@@ -4172,77 +4193,200 @@ fn ensure_library_directories(paths: &LibraryPaths) -> Result<(), String> {
     Ok(())
 }
 
-fn load_or_initialize_user_mod_category_store(
-    paths: &LibraryPaths,
-) -> Result<UserModCategoryStore, String> {
-    let store_exists = paths.categories_path.is_file();
-    let mut store = load_user_mod_category_store(&paths.categories_path)?;
+fn load_or_initialize_mod_category_store(paths: &LibraryPaths) -> Result<ModCategoryStore, String> {
+    load_or_initialize_mod_category_store_from(&paths.installed_path, &paths.categories_path)
+}
+
+fn load_or_initialize_mod_category_store_for_installed_root(
+    installed_root: &Path,
+) -> Result<ModCategoryStore, String> {
+    let Some(categories_path) = mod_category_store_path(installed_root) else {
+        return Ok(ModCategoryStore::default());
+    };
+
+    load_or_initialize_mod_category_store_from(installed_root, &categories_path)
+}
+
+fn mod_category_store_path(installed_root: &Path) -> Option<PathBuf> {
+    let is_standard_installed_root = installed_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("installed"))
+        .unwrap_or(false);
+
+    if is_standard_installed_root {
+        installed_root
+            .parent()
+            .map(|mods_path| mods_path.join("categories.json"))
+    } else {
+        Some(installed_root.join(".categories.json"))
+    }
+}
+
+fn load_or_initialize_mod_category_store_from(
+    installed_root: &Path,
+    categories_path: &Path,
+) -> Result<ModCategoryStore, String> {
+    let store_exists = categories_path.is_file();
+    let mut store = load_mod_category_store(categories_path)?;
     let mut changed = !store_exists;
 
-    if store.schema_version != USER_MOD_CATEGORY_STORE_SCHEMA_VERSION {
-        store.schema_version = USER_MOD_CATEGORY_STORE_SCHEMA_VERSION;
+    if store.schema_version != MOD_CATEGORY_STORE_SCHEMA_VERSION {
+        store.schema_version = MOD_CATEGORY_STORE_SCHEMA_VERSION;
         changed = true;
     }
 
+    changed |= migrate_installed_mod_categories(installed_root, &mut store)?;
+
     if changed {
-        save_user_mod_category_store(&paths.categories_path, &store)?;
+        save_mod_category_store(categories_path, &store)?;
     }
 
     Ok(store)
 }
 
-fn load_user_mod_category_store(categories_path: &Path) -> Result<UserModCategoryStore, String> {
+fn load_mod_category_store(categories_path: &Path) -> Result<ModCategoryStore, String> {
     if !categories_path.exists() {
-        return Ok(UserModCategoryStore::default());
+        return Ok(ModCategoryStore::default());
     }
 
     if !categories_path.is_file() {
         return Err(format!(
-            "User MOD category store is not a file: {}",
+            "分类数据路径不是文件：{}",
             categories_path.display()
         ));
     }
 
-    let category_json = fs::read_to_string(categories_path).map_err(|error| {
-        format!(
-            "Could not read user MOD category store {}: {error}",
-            categories_path.display()
-        )
-    })?;
-    serde_json::from_str::<UserModCategoryStore>(&category_json).map_err(|error| {
-        format!(
-            "Could not parse user MOD category store {}: {error}",
-            categories_path.display()
-        )
-    })
+    let category_json = fs::read_to_string(categories_path)
+        .map_err(|error| format!("无法读取分类数据 {}：{error}", categories_path.display()))?;
+    serde_json::from_str::<ModCategoryStore>(&category_json)
+        .map_err(|error| format!("无法解析分类数据 {}：{error}", categories_path.display()))
 }
 
-fn load_user_mod_category_store_for_installed_root(
-    installed_root: &Path,
-) -> Result<UserModCategoryStore, String> {
-    let Some(mods_path) = installed_root.parent() else {
-        return Ok(UserModCategoryStore::default());
-    };
-
-    load_user_mod_category_store(&mods_path.join("categories.json"))
-}
-
-fn save_user_mod_category_store(
-    categories_path: &Path,
-    store: &UserModCategoryStore,
-) -> Result<(), String> {
+fn save_mod_category_store(categories_path: &Path, store: &ModCategoryStore) -> Result<(), String> {
+    if let Some(parent) = categories_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建分类数据目录 {}：{error}", parent.display()))?;
+    }
     let category_json = serde_json::to_string_pretty(store)
-        .map_err(|error| format!("Could not serialize user MOD category store: {error}"))?;
-    fs::write(categories_path, category_json).map_err(|error| {
-        format!(
-            "Could not write user MOD category store {}: {error}",
-            categories_path.display()
-        )
-    })
+        .map_err(|error| format!("无法序列化分类数据：{error}"))?;
+    fs::write(categories_path, category_json)
+        .map_err(|error| format!("无法写入分类数据 {}：{error}", categories_path.display()))
 }
 
-fn sorted_user_mod_categories(categories: &[UserModCategory]) -> Vec<UserModCategory> {
-    let mut categories = categories.to_vec();
+fn migrate_installed_mod_categories(
+    installed_root: &Path,
+    store: &mut ModCategoryStore,
+) -> Result<bool, String> {
+    let mut store_changed = false;
+
+    for mut context in load_all_installed_manifests(installed_root)? {
+        if context.manifest.schema_version >= CURRENT_MOD_MANIFEST_SCHEMA_VERSION
+            && context.manifest.category_override.is_none()
+        {
+            continue;
+        }
+
+        if context.manifest.schema_version < CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION {
+            refresh_manifest_model_replacements(&mut context)?;
+        }
+
+        let (recognized_category_ids, categories_changed) =
+            ensure_recognition_categories(store, &context.manifest.model_replacements)?;
+        store_changed |= categories_changed;
+
+        let mut category_ids = context.manifest.category_ids.clone();
+        category_ids.extend(recognized_category_ids);
+        if let Some(category_override) = context.manifest.category_override.as_deref() {
+            if store
+                .categories
+                .iter()
+                .any(|category| category.id == category_override)
+            {
+                category_ids.push(category_override.to_string());
+            }
+        }
+        category_ids.retain(|category_id| {
+            store
+                .categories
+                .iter()
+                .any(|category| category.id == *category_id)
+        });
+        category_ids.sort();
+        category_ids.dedup();
+
+        context.manifest.category_ids = category_ids;
+        context.manifest.category_override = None;
+        context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+        save_manifest(&context.manifest_path, &context.manifest)?;
+    }
+
+    Ok(store_changed)
+}
+
+fn ensure_recognition_categories(
+    store: &mut ModCategoryStore,
+    model_replacements: &[ModelReplacement],
+) -> Result<(Vec<String>, bool), String> {
+    let mut recognition_keys = model_replacements
+        .iter()
+        .map(|replacement| replacement.model_kind.clone())
+        .filter(|model_kind| model_kind_label(model_kind) != "未识别")
+        .collect::<Vec<_>>();
+    recognition_keys.sort();
+    recognition_keys.dedup();
+
+    let mut category_ids = Vec::new();
+    let mut changed = false;
+
+    for recognition_key in recognition_keys {
+        if store.suppressed_recognition_keys.contains(&recognition_key) {
+            continue;
+        }
+
+        let category_index = store
+            .categories
+            .iter()
+            .position(|category| category.recognition_keys.contains(&recognition_key))
+            .or_else(|| {
+                let expected_name = model_kind_label(&recognition_key);
+                store
+                    .categories
+                    .iter()
+                    .position(|category| category.name == expected_name)
+            });
+
+        let category_id = if let Some(category_index) = category_index {
+            let category = &mut store.categories[category_index];
+            if !category.recognition_keys.contains(&recognition_key) {
+                category.recognition_keys.push(recognition_key.clone());
+                category.recognition_keys.sort();
+                changed = true;
+            }
+            category.id.clone()
+        } else {
+            let base_id = format!("category-recognition-{}", slugify(&recognition_key));
+            let category_id = unique_mod_category_id_from_base(&store.categories, &base_id);
+            store.categories.push(StoredModCategory {
+                id: category_id.clone(),
+                name: model_kind_label(&recognition_key).to_string(),
+                created_at_unix_seconds: unix_seconds_now()?,
+                recognition_keys: vec![recognition_key],
+            });
+            changed = true;
+            category_id
+        };
+
+        category_ids.push(category_id);
+    }
+
+    category_ids.sort();
+    category_ids.dedup();
+    Ok((category_ids, changed))
+}
+
+fn sorted_mod_categories(categories: &[StoredModCategory]) -> Vec<ModCategory> {
+    let mut categories = categories.iter().map(ModCategory::from).collect::<Vec<_>>();
     categories.sort_by(|left, right| {
         left.name
             .to_lowercase()
@@ -4252,42 +4396,43 @@ fn sorted_user_mod_categories(categories: &[UserModCategory]) -> Vec<UserModCate
     categories
 }
 
-fn resolve_user_category(
-    store: &UserModCategoryStore,
-    category_override: &Option<String>,
-) -> Option<UserModCategory> {
-    category_override.as_deref().and_then(|category_id| {
-        store
-            .categories
-            .iter()
-            .find(|category| category.id == category_id)
-            .cloned()
-    })
-}
-
-fn resolve_category_override(
-    store: &UserModCategoryStore,
-    raw_category_id: &str,
-) -> Result<Option<String>, String> {
-    let category_id = raw_category_id.trim();
-    if category_id.is_empty() {
-        return Ok(None);
-    }
-
-    validate_user_mod_category_id(category_id)?;
-    if !store
+fn resolve_mod_categories(store: &ModCategoryStore, category_ids: &[String]) -> Vec<ModCategory> {
+    let category_ids = category_ids.iter().collect::<HashSet<_>>();
+    let selected = store
         .categories
         .iter()
-        .any(|category| category.id == category_id)
-    {
-        return Err(format!("User MOD category was not found: {category_id}"));
-    }
-
-    Ok(Some(category_id.to_string()))
+        .filter(|category| category_ids.contains(&category.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    sorted_mod_categories(&selected)
 }
 
-fn ensure_user_mod_category_name_is_available(
-    categories: &[UserModCategory],
+fn resolve_category_ids(
+    store: &ModCategoryStore,
+    raw_category_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut category_ids = Vec::new();
+
+    for raw_category_id in raw_category_ids {
+        let category_id = raw_category_id.trim();
+        validate_mod_category_id(category_id)?;
+        if !store
+            .categories
+            .iter()
+            .any(|category| category.id == category_id)
+        {
+            return Err(format!("未找到分类：{category_id}"));
+        }
+        if !category_ids.iter().any(|existing| existing == category_id) {
+            category_ids.push(category_id.to_string());
+        }
+    }
+
+    Ok(category_ids)
+}
+
+fn ensure_mod_category_name_is_available(
+    categories: &[StoredModCategory],
     name: &str,
     excluded_category_id: Option<&str>,
 ) -> Result<(), String> {
@@ -4296,18 +4441,19 @@ fn ensure_user_mod_category_name_is_available(
         Some(category.id.as_str()) != excluded_category_id
             && category.name.trim().to_lowercase() == normalized_name
     }) {
-        return Err(format!("User MOD category already exists: {name}"));
+        return Err(format!("分类已存在：{name}"));
     }
 
     Ok(())
 }
 
-fn unique_user_mod_category_id(
-    categories: &[UserModCategory],
-    name: &str,
-) -> Result<String, String> {
+fn unique_mod_category_id(categories: &[StoredModCategory], name: &str) -> Result<String, String> {
     let base_id = format!("category-{}-{}", unix_seconds_now()?, slugify(name));
-    let mut category_id = base_id.clone();
+    Ok(unique_mod_category_id_from_base(categories, &base_id))
+}
+
+fn unique_mod_category_id_from_base(categories: &[StoredModCategory], base_id: &str) -> String {
+    let mut category_id = base_id.to_string();
     let mut suffix = 2;
 
     while categories.iter().any(|category| category.id == category_id) {
@@ -4315,28 +4461,35 @@ fn unique_user_mod_category_id(
         suffix += 1;
     }
 
-    Ok(category_id)
+    category_id
 }
 
-fn clear_category_override_from_manifests(
+fn remove_category_from_manifests(
     installed_root: &Path,
     category_id: &str,
 ) -> Result<usize, String> {
-    let mut cleared_mod_count = 0;
+    let mut affected_mod_count = 0;
 
     for mut context in load_all_installed_manifests(installed_root)? {
-        if context.manifest.category_override.as_deref() != Some(category_id) {
+        let original_count = context.manifest.category_ids.len();
+        context
+            .manifest
+            .category_ids
+            .retain(|existing_id| existing_id != category_id);
+        let legacy_override_removed =
+            context.manifest.category_override.as_deref() == Some(category_id);
+
+        if original_count == context.manifest.category_ids.len() && !legacy_override_removed {
             continue;
         }
 
         context.manifest.category_override = None;
-        refresh_manifest_model_replacements(&mut context)?;
         context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
         save_manifest(&context.manifest_path, &context.manifest)?;
-        cleared_mod_count += 1;
+        affected_mod_count += 1;
     }
 
-    Ok(cleared_mod_count)
+    Ok(affected_mod_count)
 }
 
 fn initialize_import_staging(paths: &LibraryPaths) -> Result<(), String> {
@@ -4440,16 +4593,15 @@ mod tests {
     };
 
     use super::{
-        apply_conflict_order_from, apply_mod_remap_from, armor_set_label,
-        clear_category_override_from_manifests, clear_import_staging, disable_mod_from,
-        enable_mod_from, get_mod_conflict_report_from, install_mod_from_candidate_into,
-        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
-        move_conflict_participant_from, preview_disable_mod_from, preview_enable_mod_from,
-        preview_mod_import, preview_mod_remap_from, preview_restore_all_mods_from,
-        preview_uninstall_mod_from, read_conflict_order_store, remove_mod_from_conflict_orders,
-        restore_all_mods_from, save_user_mod_category_store, uninstall_mod_from,
-        validate_archive_path, UserModCategory, UserModCategoryStore,
-        USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
+        apply_conflict_order_from, apply_mod_remap_from, armor_set_label, clear_import_staging,
+        disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
+        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
+        list_installed_mods_from, move_conflict_participant_from, preview_disable_mod_from,
+        preview_enable_mod_from, preview_mod_import, preview_mod_remap_from,
+        preview_restore_all_mods_from, preview_uninstall_mod_from, read_conflict_order_store,
+        remove_category_from_manifests, remove_mod_from_conflict_orders, restore_all_mods_from,
+        save_mod_category_store, uninstall_mod_from, validate_archive_path, ModCategoryStore,
+        StoredModCategory, MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
 
     #[test]
@@ -5588,37 +5740,40 @@ mod tests {
     }
 
     #[test]
-    fn user_category_override_is_resolved_and_can_return_to_automatic_classification() {
-        let source_root = temp_root("user_category_source");
-        let mods_root = temp_root("user_category_mods");
+    fn migrates_legacy_category_override_into_unified_categories() {
+        let source_root = temp_root("legacy_category_source");
+        let mods_root = temp_root("legacy_category_mods");
         let installed_root = mods_root.join("installed");
         fs::create_dir_all(&installed_root).unwrap();
         write_file(
             &source_root
                 .join("nativePC")
-                .join("weapon")
-                .join("sword.mod3"),
+                .join("pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3"),
         );
         let result =
             install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
                 .unwrap();
 
-        let category = UserModCategory {
+        let category = StoredModCategory {
             id: "category-visual".to_string(),
             name: "外观收藏".to_string(),
             created_at_unix_seconds: 1,
+            recognition_keys: Vec::new(),
         };
-        save_user_mod_category_store(
+        save_mod_category_store(
             &mods_root.join("categories.json"),
-            &UserModCategoryStore {
-                schema_version: USER_MOD_CATEGORY_STORE_SCHEMA_VERSION,
+            &ModCategoryStore {
+                schema_version: 1,
                 categories: vec![category.clone()],
+                suppressed_recognition_keys: Vec::new(),
             },
         )
         .unwrap();
 
         let mut manifest: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&result.manifest_path).unwrap()).unwrap();
+        manifest["schemaVersion"] = serde_json::Value::from(13);
+        manifest.as_object_mut().unwrap().remove("categoryIds");
         manifest["categoryOverride"] = serde_json::Value::from(category.id.clone());
         fs::write(
             &result.manifest_path,
@@ -5627,19 +5782,31 @@ mod tests {
         .unwrap();
 
         let categorized = list_installed_mods_from(&installed_root).unwrap();
-        assert_eq!(
-            categorized.mods[0].category_override.as_deref(),
-            Some("category-visual")
-        );
-        assert_eq!(categorized.mods[0].user_category.as_ref(), Some(&category));
+        assert_eq!(categorized.mods[0].category_ids.len(), 2);
+        assert!(categorized.mods[0]
+            .categories
+            .iter()
+            .any(|current| current.name == "防具"));
+        assert!(categorized.mods[0]
+            .categories
+            .iter()
+            .any(|current| current.name == category.name));
 
         assert_eq!(
-            clear_category_override_from_manifests(&installed_root, "category-visual").unwrap(),
+            remove_category_from_manifests(&installed_root, "category-visual").unwrap(),
             1
         );
-        let automatic = list_installed_mods_from(&installed_root).unwrap();
-        assert!(automatic.mods[0].category_override.is_none());
-        assert!(automatic.mods[0].user_category.is_none());
+        let remaining = list_installed_mods_from(&installed_root).unwrap();
+        assert_eq!(remaining.mods[0].categories.len(), 1);
+        assert_eq!(remaining.mods[0].categories[0].name, "防具");
+
+        let store: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(mods_root.join("categories.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            store["schemaVersion"],
+            serde_json::Value::from(MOD_CATEGORY_STORE_SCHEMA_VERSION)
+        );
 
         cleanup(source_root);
         cleanup(mods_root);

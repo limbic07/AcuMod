@@ -66,10 +66,13 @@ const pageCopy: Record<WorkspaceView, { title: string; description: string }> = 
 <style scoped>
 .workspace-topbar {
   display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  padding: 24px 28px;
+  padding: 22px 24px;
   border-bottom: 1px solid #d7e0dc;
   background: #ffffff;
 }
@@ -103,6 +106,7 @@ const pageCopy: Record<WorkspaceView, { title: string; description: string }> = 
 
 .topbar-actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
 }

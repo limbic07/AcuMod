@@ -66,7 +66,7 @@ function updateSort(event: Event) {
           type="button"
           class="icon-button"
           :disabled="props.isCategoryAction"
-          aria-label="管理用户分类"
+          aria-label="管理分类"
           data-tooltip="分类管理"
           @click="$emit('manageCategories')"
         >

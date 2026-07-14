@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import type { UserModCategory } from "../api/modLibrary";
+import type { ModCategory } from "../api/modLibrary";
 
 const props = defineProps<{
   isOpen: boolean;
-  categories: UserModCategory[];
+  categories: ModCategory[];
   isBusy: boolean;
   error: string;
 }>();
@@ -13,7 +13,7 @@ const emit = defineEmits<{
   close: [];
   create: [name: string];
   rename: [categoryId: string, name: string];
-  delete: [category: UserModCategory];
+  delete: [category: ModCategory];
 }>();
 
 const newCategoryName = ref("");
@@ -24,7 +24,7 @@ function createCategory() {
   emit("create", newCategoryName.value);
 }
 
-function startRenaming(category: UserModCategory) {
+function startRenaming(category: ModCategory) {
   editingCategoryId.value = category.id;
   editingCategoryName.value = category.name;
 }
@@ -147,7 +147,7 @@ watch(
           </template>
         </li>
       </ul>
-      <p v-else class="empty-category-state">还没有用户分类。</p>
+      <p v-else class="empty-category-state">还没有分类。</p>
     </section>
   </div>
 </template>

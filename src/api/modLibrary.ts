@@ -93,9 +93,8 @@ export interface InstalledModSummary {
   name: string;
   originalName: string;
   note: string;
-  categories: string[];
-  categoryOverride: string | null;
-  userCategory: UserModCategory | null;
+  categoryIds: string[];
+  categories: ModCategory[];
   modPath: string;
   contentPath: string;
   manifestPath: string;
@@ -336,32 +335,31 @@ export interface ModMetadataUpdateResult {
   name: string;
   originalName: string;
   note: string;
-  categoryOverride: string | null;
-  userCategory: UserModCategory | null;
+  categoryIds: string[];
+  categories: ModCategory[];
   message: string;
 }
 
 export interface ModMetadataPatch {
   displayName?: string;
   note?: string;
-  // An empty string explicitly returns the MOD to automatic classification.
-  categoryOverride?: string;
+  categoryIds?: string[];
 }
 
-export interface UserModCategory {
+export interface ModCategory {
   id: string;
   name: string;
   createdAtUnixSeconds: number;
 }
 
-export interface UserModCategoryList {
-  categories: UserModCategory[];
+export interface ModCategoryList {
+  categories: ModCategory[];
   message: string;
 }
 
-export interface UserModCategoryDeleteResult {
+export interface ModCategoryDeleteResult {
   categoryId: string;
-  clearedModCount: number;
+  affectedModCount: number;
   message: string;
 }
 
@@ -383,28 +381,28 @@ export function updateModMetadata(
   });
 }
 
-export function listUserModCategories(): Promise<UserModCategoryList> {
-  return invoke<UserModCategoryList>("list_user_mod_categories");
+export function listModCategories(): Promise<ModCategoryList> {
+  return invoke<ModCategoryList>("list_mod_categories");
 }
 
-export function createUserModCategory(name: string): Promise<UserModCategory> {
-  return invoke<UserModCategory>("create_user_mod_category", { name });
+export function createModCategory(name: string): Promise<ModCategory> {
+  return invoke<ModCategory>("create_mod_category", { name });
 }
 
-export function renameUserModCategory(
+export function renameModCategory(
   categoryId: string,
   name: string,
-): Promise<UserModCategory> {
-  return invoke<UserModCategory>("rename_user_mod_category", {
+): Promise<ModCategory> {
+  return invoke<ModCategory>("rename_mod_category", {
     categoryId,
     name,
   });
 }
 
-export function deleteUserModCategory(
+export function deleteModCategory(
   categoryId: string,
-): Promise<UserModCategoryDeleteResult> {
-  return invoke<UserModCategoryDeleteResult>("delete_user_mod_category", {
+): Promise<ModCategoryDeleteResult> {
+  return invoke<ModCategoryDeleteResult>("delete_mod_category", {
     categoryId,
   });
 }

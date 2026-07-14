@@ -1,10 +1,10 @@
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
-    ModArchiveImportOutcome, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
-    ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
-    ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan,
-    ModUninstallPlan, ModUninstallResult, RestoreAllPlan, RestoreAllResult, UserModCategory,
-    UserModCategoryDeleteResult, UserModCategoryList,
+    ModArchiveImportOutcome, ModCategory, ModCategoryDeleteResult, ModCategoryList,
+    ModConflictMoveResult, ModConflictReport, ModDeploymentPlan, ModDeploymentResult,
+    ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus, ModMetadataPatch,
+    ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan, ModUninstallPlan,
+    ModUninstallResult, RestoreAllPlan, RestoreAllResult,
 };
 
 #[tauri::command]
@@ -65,33 +65,30 @@ pub fn update_mod_metadata(
 }
 
 #[tauri::command]
-pub fn list_user_mod_categories(app: tauri::AppHandle) -> Result<UserModCategoryList, String> {
-    mod_library::list_user_mod_categories(&app)
+pub fn list_mod_categories(app: tauri::AppHandle) -> Result<ModCategoryList, String> {
+    mod_library::list_mod_categories(&app)
 }
 
 #[tauri::command]
-pub fn create_user_mod_category(
-    app: tauri::AppHandle,
-    name: String,
-) -> Result<UserModCategory, String> {
-    mod_library::create_user_mod_category(&app, name)
+pub fn create_mod_category(app: tauri::AppHandle, name: String) -> Result<ModCategory, String> {
+    mod_library::create_mod_category(&app, name)
 }
 
 #[tauri::command]
-pub fn rename_user_mod_category(
+pub fn rename_mod_category(
     app: tauri::AppHandle,
     category_id: String,
     name: String,
-) -> Result<UserModCategory, String> {
-    mod_library::rename_user_mod_category(&app, category_id, name)
+) -> Result<ModCategory, String> {
+    mod_library::rename_mod_category(&app, category_id, name)
 }
 
 #[tauri::command]
-pub fn delete_user_mod_category(
+pub fn delete_mod_category(
     app: tauri::AppHandle,
     category_id: String,
-) -> Result<UserModCategoryDeleteResult, String> {
-    mod_library::delete_user_mod_category(&app, category_id)
+) -> Result<ModCategoryDeleteResult, String> {
+    mod_library::delete_mod_category(&app, category_id)
 }
 
 #[tauri::command]

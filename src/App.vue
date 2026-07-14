@@ -17,8 +17,8 @@ import {
 import {
   applyModRemap,
   applyConflictOrder,
-  createUserModCategory,
-  deleteUserModCategory,
+  createModCategory,
+  deleteModCategory,
   disableMod,
   enableMod,
   getModConflictReport,
@@ -28,7 +28,7 @@ import {
   installModFromCandidate,
   installModFromFolder,
   listInstalledMods,
-  listUserModCategories,
+  listModCategories,
   moveConflictParticipant,
   openInstalledModFolder,
   previewApplyConflictOrder,
@@ -38,32 +38,24 @@ import {
   previewModRemap,
   previewRestoreAllMods,
   previewUninstallMod,
-  renameUserModCategory,
+  renameModCategory,
   restoreAllMods,
   uninstallMod,
   updateModMetadata,
   type InstalledModList,
   type InstalledModSummary,
-  type ApplyConflictOrderPlan,
-  type ApplyConflictOrderResult,
   type ModConflictReport,
-  type ModDeploymentPlan,
-  type ModDeploymentResult,
-  type ModDisablePlan,
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
   type ModMetadataPatch,
   type ModRemapDetails,
   type ModelRemapGroup,
-  type ModRemapPlan,
   type ModelReplacement,
-  type ModUninstallPlan,
-  type ModUninstallResult,
-  type RestoreAllPlan,
-  type RestoreAllResult,
-  type UserModCategory,
+  type ModCategory,
 } from "./api/modLibrary";
+
+const MANUAL_SLINGER_TARGET = "__manual_slinger_target__";
 
 const appInfo = ref<AppInfo | null>(null);
 const gameStatus = ref<GameDirectoryStatus | null>(null);
@@ -71,24 +63,14 @@ const modLibraryStatus = ref<ModLibraryStatus | null>(null);
 const installedModList = ref<InstalledModList | null>(null);
 const importPreview = ref<ModImportPreview | null>(null);
 const installResult = ref<ModInstallResult | null>(null);
-const deploymentPlan = ref<ModDeploymentPlan | null>(null);
-const deploymentResult = ref<ModDeploymentResult | null>(null);
-const disablePlan = ref<ModDisablePlan | null>(null);
-const uninstallPlan = ref<ModUninstallPlan | null>(null);
-const uninstallResult = ref<ModUninstallResult | null>(null);
-const restorePlan = ref<RestoreAllPlan | null>(null);
-const restoreResult = ref<RestoreAllResult | null>(null);
 const conflictReport = ref<ModConflictReport | null>(null);
-const userModCategories = ref<UserModCategory[]>([]);
-const conflictOrderPlan = ref<ApplyConflictOrderPlan | null>(null);
-const conflictOrderResult = ref<ApplyConflictOrderResult | null>(null);
+const modCategories = ref<ModCategory[]>([]);
 const remapDetails = ref<ModRemapDetails | null>(null);
-const remapPlan = ref<ModRemapPlan | null>(null);
 const selectedRemapGroupKey = ref("");
 const selectedRemapTargetId = ref("");
 const manualSlingerTargetId = ref("");
+const remapSaveWarnings = ref<string[]>([]);
 const remapError = ref("");
-const isLoadingRemap = ref(false);
 const isApplyingRemap = ref(false);
 const manualPath = ref("");
 const importPath = ref("");
@@ -134,6 +116,15 @@ const modConflictFilter = ref("all");
 const modSort = ref<"installation" | "name" | "category" | "replacement">("installation");
 let stopDragListener: (() => void) | undefined;
 
+function userFacingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message && !/^[A-Za-z]/.test(message.trim())) {
+    return message;
+  }
+  console.error(message);
+  return "操作失败，请检查输入内容、文件权限和游戏目录设置。";
+}
+
 const statusLabel = computed(() => {
   if (!gameStatus.value) {
     return "未读取";
@@ -158,9 +149,25 @@ const statusClass = computed(() => {
   return gameStatus.value.isValid ? "success" : "warning";
 });
 
+const gameStatusMessage = computed(() => {
+  if (!gameStatus.value) {
+    return "Loading...";
+  }
+  if (gameStatus.value.isValid) {
+    return "游戏目录可用。";
+  }
+  return gameStatus.value.isConfigured
+    ? "已保存的游戏目录当前不可用，请重新设置。"
+    : "尚未设置游戏目录。";
+});
+
+function gameSourceLabel(source: string) {
+  return source === "autoDetection" ? "自动检测" : source === "savedConfig" ? "已保存配置" : "未设置";
+}
+
 const importStatusLabel = computed(() => {
   if (!importPreview.value) {
-    return "未预览";
+    return "未识别";
   }
 
   if (importPreview.value.status === "ready") {
@@ -186,18 +193,52 @@ const importStatusClass = computed(() => {
   return importPreview.value.status === "ready" ? "success" : "warning";
 });
 
+const importHeaderMessage = computed(() => {
+  const preview = importPreview.value;
+  if (!preview) {
+    return "选择 MOD 文件夹或压缩包开始识别。";
+  }
+  if (preview.status === "ready") {
+    return "已识别 MOD 内容，可以导入本地 MOD 库。";
+  }
+  if (preview.status === "ambiguous") {
+    return "识别到多个 MOD 版本，请选择需要导入的内容。";
+  }
+  if (preview.requiresGameRootConfirmation) {
+    return "未识别到 nativePC 结构，请确认此 MOD 是否安装到游戏根目录。";
+  }
+  return "未找到可导入的 MOD 内容。";
+});
+
+function detectionMethodLabel(method: string) {
+  const labels: Record<string, string> = {
+    multipleCandidates: "多个可选内容根",
+    emptyDirectory: "空目录",
+    userConfirmedGameRoot: "用户确认游戏根目录",
+    unrecognizedRoot: "未识别目录结构",
+    invalidSource: "无效来源",
+    nativePcDirectory: "nativePC 目录",
+    selectedNativePcChildDirectory: "nativePC 一级目录",
+    nativePcChildDirectory: "常见 nativePC 目录",
+  };
+  return labels[method] ?? "未知方式";
+}
+
+function deployRootLabel(deployRoot: string) {
+  return deployRoot === "nativePC"
+    ? "nativePC"
+    : deployRoot === "gameRoot"
+      ? "游戏根目录"
+      : "未确定";
+}
+
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
 function visibleModCategories(mod: InstalledModSummary) {
-  const categories = [...mod.categories];
-  const userCategoryName = mod.userCategory?.name;
-
-  if (userCategoryName && !categories.includes(userCategoryName)) {
-    categories.push(userCategoryName);
-  }
-
-  return categories.length ? categories : ["未识别"];
+  return mod.categories.length
+    ? mod.categories.map((category) => category.name)
+    : ["未分类"];
 }
 
 const availableModCategories = computed(() =>
@@ -289,12 +330,6 @@ const displayedInstalledMods = computed(() => {
 const enabledModCount = computed(
   () => installedMods.value.filter((installedMod) => installedMod.enabled).length,
 );
-const deploymentPlanFiles = computed(() => deploymentPlan.value?.files.slice(0, 12) ?? []);
-const deployedFiles = computed(() => deploymentResult.value?.files.slice(0, 12) ?? []);
-const disablePlanFiles = computed(() => disablePlan.value?.files.slice(0, 12) ?? []);
-const uninstallLibraryFiles = computed(() => uninstallPlan.value?.libraryFiles.slice(0, 12) ?? []);
-const restorePlanMods = computed(() => restorePlan.value?.mods.slice(0, 12) ?? []);
-const restoreResultMods = computed(() => restoreResult.value?.mods.slice(0, 12) ?? []);
 const conflictGroups = computed(() => conflictReport.value?.groups ?? []);
 const conflictingModIds = computed(
   () =>
@@ -331,6 +366,9 @@ const selectedConflictGroup = computed(() =>
 );
 const selectedRemapGroup = computed(() =>
   remapDetails.value?.groups.find((group) => group.groupKey === selectedRemapGroupKey.value),
+);
+const visibleRemapWarnings = computed(() =>
+  [...new Set([...(remapDetails.value?.warnings ?? []), ...remapSaveWarnings.value])],
 );
 
 function modelReplacementTitle(replacement: ModelReplacement) {
@@ -477,7 +515,7 @@ async function loadAppInfo() {
     appInfo.value = await getAppInfo();
     appError.value = "";
   } catch (error) {
-    appError.value = error instanceof Error ? error.message : String(error);
+    appError.value = userFacingError(error);
   } finally {
     isLoadingApp.value = false;
   }
@@ -491,7 +529,7 @@ async function loadGameStatus() {
     applyGameStatus(status);
     gameError.value = "";
   } catch (error) {
-    gameError.value = error instanceof Error ? error.message : String(error);
+    gameError.value = userFacingError(error);
   } finally {
     isLoadingGame.value = false;
   }
@@ -504,7 +542,7 @@ async function loadModLibraryStatus() {
     modLibraryStatus.value = await getModLibraryStatus();
     modLibraryError.value = "";
   } catch (error) {
-    modLibraryError.value = error instanceof Error ? error.message : String(error);
+    modLibraryError.value = userFacingError(error);
   } finally {
     isLoadingModLibrary.value = false;
   }
@@ -515,17 +553,17 @@ async function loadInstalledMods() {
     installedModList.value = await listInstalledMods();
     modLibraryError.value = "";
   } catch (error) {
-    modLibraryError.value = error instanceof Error ? error.message : String(error);
+    modLibraryError.value = userFacingError(error);
   }
 }
 
-async function loadUserModCategories() {
+async function loadModCategories() {
   try {
-    const categoryList = await listUserModCategories();
-    userModCategories.value = categoryList.categories;
+    const categoryList = await listModCategories();
+    modCategories.value = categoryList.categories;
     categoryError.value = "";
   } catch (error) {
-    categoryError.value = error instanceof Error ? error.message : String(error);
+    categoryError.value = userFacingError(error);
   }
 }
 
@@ -534,12 +572,14 @@ async function loadConflictReport() {
     conflictReport.value = await getModConflictReport();
     modLibraryError.value = "";
   } catch (error) {
-    modLibraryError.value = error instanceof Error ? error.message : String(error);
+    modLibraryError.value = userFacingError(error);
   }
 }
 
 async function refreshModViews() {
-  await Promise.all([loadInstalledMods(), loadConflictReport(), loadUserModCategories()]);
+  // MOD 列表首次读取可能迁移旧分类；迁移完成后再并行读取其余视图，避免同时写分类文件。
+  await loadInstalledMods();
+  await Promise.all([loadConflictReport(), loadModCategories()]);
 }
 
 async function refreshCurrentWorkspace() {
@@ -585,7 +625,7 @@ async function saveModMetadata(
     return true;
   } catch (error) {
     metadataErrorModId.value = mod.id;
-    metadataError.value = error instanceof Error ? error.message : String(error);
+    metadataError.value = userFacingError(error);
     return false;
   } finally {
     metadataSavingModId.value = "";
@@ -608,26 +648,26 @@ function closeCategoryManager() {
   categoryError.value = "";
 }
 
-async function createUserCategory(name: string) {
+async function createCategory(name: string) {
   isCategoryAction.value = true;
   categoryError.value = "";
   let shouldCloseDialog = false;
 
   try {
-    const category = await createUserModCategory(name);
-    await loadUserModCategories();
+    const category = await createModCategory(name);
+    await loadModCategories();
     const targetMod = installedMods.value.find((mod) => mod.id === pendingCategoryModId.value);
 
     if (targetMod) {
       shouldCloseDialog = await saveModMetadata(targetMod, {
-        categoryOverride: category.id,
+        categoryIds: [...new Set([...targetMod.categoryIds, category.id])],
       });
       if (!shouldCloseDialog) {
         categoryError.value = "分类已创建，但未能应用到目标 MOD。";
       }
     }
   } catch (error) {
-    categoryError.value = error instanceof Error ? error.message : String(error);
+    categoryError.value = userFacingError(error);
   } finally {
     isCategoryAction.value = false;
   }
@@ -637,24 +677,24 @@ async function createUserCategory(name: string) {
   }
 }
 
-async function renameUserCategory(categoryId: string, name: string) {
+async function renameCategory(categoryId: string, name: string) {
   isCategoryAction.value = true;
   categoryError.value = "";
 
   try {
-    await renameUserModCategory(categoryId, name);
-    await Promise.all([loadUserModCategories(), loadInstalledMods()]);
+    await renameModCategory(categoryId, name);
+    await Promise.all([loadModCategories(), loadInstalledMods()]);
     syncCategoryFilter();
   } catch (error) {
-    categoryError.value = error instanceof Error ? error.message : String(error);
+    categoryError.value = userFacingError(error);
   } finally {
     isCategoryAction.value = false;
   }
 }
 
-async function deleteUserCategory(category: UserModCategory) {
+async function deleteCategory(category: ModCategory) {
   const shouldDelete = window.confirm(
-    `删除分类 ${category.name} 会使使用它的 MOD 回到自动分类。是否继续？`,
+    `删除分类“${category.name}”后，使用它的 MOD 将移除此分类。是否继续？`,
   );
   if (!shouldDelete) {
     return;
@@ -664,11 +704,11 @@ async function deleteUserCategory(category: UserModCategory) {
   categoryError.value = "";
 
   try {
-    await deleteUserModCategory(category.id);
-    await Promise.all([loadUserModCategories(), loadInstalledMods()]);
+    await deleteModCategory(category.id);
+    await Promise.all([loadModCategories(), loadInstalledMods()]);
     syncCategoryFilter();
   } catch (error) {
-    categoryError.value = error instanceof Error ? error.message : String(error);
+    categoryError.value = userFacingError(error);
   } finally {
     isCategoryAction.value = false;
   }
@@ -680,8 +720,6 @@ function openConflictManager() {
   }
 
   conflictActionError.value = "";
-  conflictOrderPlan.value = null;
-  conflictOrderResult.value = null;
   activeView.value = "conflicts";
 }
 
@@ -697,8 +735,6 @@ function selectWorkspace(view: WorkspaceView) {
 function selectConflict(groupId: string) {
   selectedConflictGroupId.value = groupId;
   conflictActionError.value = "";
-  conflictOrderPlan.value = null;
-  conflictOrderResult.value = null;
 }
 
 async function runGameAction(action: () => Promise<GameDirectoryStatus>) {
@@ -709,7 +745,7 @@ async function runGameAction(action: () => Promise<GameDirectoryStatus>) {
     applyGameStatus(status);
     gameError.value = "";
   } catch (error) {
-    gameError.value = error instanceof Error ? error.message : String(error);
+    gameError.value = userFacingError(error);
   } finally {
     isLoadingGame.value = false;
   }
@@ -745,7 +781,7 @@ async function previewImportPath(allowGameRoot = false) {
 
     if (preview.requiresGameRootConfirmation) {
       const shouldUseGameRoot = window.confirm(
-        "未识别到 nativePC 或常见 nativePC 内部目录。这个 MOD 可能需要安装到游戏根目录。是否按游戏根目录预览？",
+        "未识别到 nativePC 或常见 nativePC 内部目录。这个 MOD 可能需要安装到游戏根目录，是否继续识别？",
       );
 
       if (shouldUseGameRoot) {
@@ -753,7 +789,7 @@ async function previewImportPath(allowGameRoot = false) {
       }
     }
   } catch (error) {
-    importError.value = error instanceof Error ? error.message : String(error);
+    importError.value = userFacingError(error);
   } finally {
     isPreviewingImport.value = false;
   }
@@ -781,7 +817,7 @@ async function installPreviewedMod() {
     await loadModLibraryStatus();
     await refreshModViews();
   } catch (error) {
-    importError.value = error instanceof Error ? error.message : String(error);
+    importError.value = userFacingError(error);
   } finally {
     isInstallingMod.value = false;
   }
@@ -802,7 +838,7 @@ async function installArchive() {
     await loadModLibraryStatus();
     await refreshModViews();
   } catch (error) {
-    archiveError.value = error instanceof Error ? error.message : String(error);
+    archiveError.value = userFacingError(error);
   } finally {
     isInstallingArchive.value = false;
   }
@@ -830,7 +866,7 @@ async function installSelectedCandidate() {
     await refreshModViews();
     await loadModLibraryStatus();
   } catch (error) {
-    importError.value = error instanceof Error ? error.message : String(error);
+    importError.value = userFacingError(error);
   } finally {
     isInstallingMod.value = false;
   }
@@ -876,7 +912,7 @@ async function confirmDroppedImport() {
       }
     }
   } catch (error) {
-    dragError.value = error instanceof Error ? error.message : String(error);
+    dragError.value = userFacingError(error);
   } finally {
     isHandlingDrop.value = false;
   }
@@ -886,10 +922,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
 
   try {
-    deploymentResult.value = null;
-    disablePlan.value = null;
     const plan = await previewEnableMod(mod.id);
-    deploymentPlan.value = plan;
     deploymentError.value = "";
 
     let confirmOverwrite = false;
@@ -904,10 +937,10 @@ async function enableInstalledMod(mod: InstalledModSummary) {
       }
     }
 
-    deploymentResult.value = await enableMod(mod.id, confirmOverwrite);
+    await enableMod(mod.id, confirmOverwrite);
     await refreshModViews();
   } catch (error) {
-    deploymentError.value = error instanceof Error ? error.message : String(error);
+    deploymentError.value = userFacingError(error);
   } finally {
     activeModAction.value = "";
   }
@@ -917,10 +950,7 @@ async function disableInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
 
   try {
-    deploymentPlan.value = null;
-    deploymentResult.value = null;
     const plan = await previewDisableMod(mod.id);
-    disablePlan.value = plan;
     deploymentError.value = "";
 
     const shouldDisable = window.confirm(
@@ -931,10 +961,10 @@ async function disableInstalledMod(mod: InstalledModSummary) {
       return;
     }
 
-    deploymentResult.value = await disableMod(mod.id);
+    await disableMod(mod.id);
     await refreshModViews();
   } catch (error) {
-    deploymentError.value = error instanceof Error ? error.message : String(error);
+    deploymentError.value = userFacingError(error);
   } finally {
     activeModAction.value = "";
   }
@@ -947,7 +977,7 @@ async function showInstalledModFolder(mod: InstalledModSummary) {
     await openInstalledModFolder(mod.id);
     modLibraryError.value = "";
   } catch (error) {
-    modLibraryError.value = error instanceof Error ? error.message : String(error);
+    modLibraryError.value = userFacingError(error);
   } finally {
     openingModFolderId.value = "";
   }
@@ -983,29 +1013,33 @@ function remapGroupSourceLabel(group: ModelRemapGroup) {
 function selectRemapGroup(groupKey: string) {
   selectedRemapGroupKey.value = groupKey;
   const group = remapDetails.value?.groups.find((candidate) => candidate.groupKey === groupKey);
-  selectedRemapTargetId.value = group?.selectedTargetId ?? "";
-  manualSlingerTargetId.value =
-    group?.modelKind === "slinger" && group.selectedTargetId?.startsWith("slinger:")
-      ? group.selectedTargetId.slice("slinger:".length)
-      : "";
-  remapPlan.value = null;
+  const savedTargetId = group?.selectedTargetId ?? "";
+  const isKnownTarget = group?.targets.some((target) => target.targetId === savedTargetId) ?? false;
+  const usesManualSlingerTarget = Boolean(
+    group?.allowsManualTarget && savedTargetId && !isKnownTarget,
+  );
+  selectedRemapTargetId.value = usesManualSlingerTarget
+    ? MANUAL_SLINGER_TARGET
+    : savedTargetId;
+  manualSlingerTargetId.value = usesManualSlingerTarget
+    ? savedTargetId.replace(/^slinger:/, "")
+    : "";
+  remapSaveWarnings.value = [];
   remapError.value = "";
-}
-
-function updateRemapGroup(event: Event) {
-  selectRemapGroup((event.target as HTMLSelectElement).value);
 }
 
 function updateRemapTarget(event: Event) {
   selectedRemapTargetId.value = (event.target as HTMLSelectElement).value;
-  manualSlingerTargetId.value = "";
-  remapPlan.value = null;
+  if (selectedRemapTargetId.value !== MANUAL_SLINGER_TARGET) {
+    manualSlingerTargetId.value = "";
+  }
+  remapSaveWarnings.value = [];
   remapError.value = "";
 }
 
 function updateManualSlingerTarget(event: Event) {
   manualSlingerTargetId.value = (event.target as HTMLInputElement).value;
-  remapPlan.value = null;
+  remapSaveWarnings.value = [];
   remapError.value = "";
 }
 
@@ -1015,17 +1049,18 @@ function requestedRemapTargetId() {
     return null;
   }
   const manualTarget = manualSlingerTargetId.value.trim().toLowerCase();
-  if (group.modelKind === "slinger" && manualTarget) {
+  if (selectedRemapTargetId.value === MANUAL_SLINGER_TARGET && manualTarget) {
     return manualTarget;
   }
-  return selectedRemapTargetId.value || null;
+  return selectedRemapTargetId.value === MANUAL_SLINGER_TARGET
+    ? null
+    : selectedRemapTargetId.value || null;
 }
 
 async function openRemapManager(mod: InstalledModSummary) {
-  isLoadingRemap.value = true;
   remapDetails.value = null;
   remapError.value = "";
-  remapPlan.value = null;
+  remapSaveWarnings.value = [];
 
   try {
     remapDetails.value = await getModRemapDetails(mod.id);
@@ -1036,10 +1071,8 @@ async function openRemapManager(mod: InstalledModSummary) {
       selectRemapGroup(firstGroup.groupKey);
     }
   } catch (error) {
-    remapError.value = error instanceof Error ? error.message : String(error);
+    remapError.value = userFacingError(error);
     modLibraryError.value = remapError.value;
-  } finally {
-    isLoadingRemap.value = false;
   }
 }
 
@@ -1048,64 +1081,49 @@ function closeRemapManager(force = false) {
     return;
   }
   remapDetails.value = null;
-  remapPlan.value = null;
   selectedRemapGroupKey.value = "";
   selectedRemapTargetId.value = "";
   manualSlingerTargetId.value = "";
+  remapSaveWarnings.value = [];
   remapError.value = "";
-}
-
-async function previewSelectedRemap() {
-  const details = remapDetails.value;
-  const group = selectedRemapGroup.value;
-  if (!details || !group) {
-    return;
-  }
-
-  isLoadingRemap.value = true;
-  remapError.value = "";
-  try {
-    remapPlan.value = await previewModRemap(
-      details.modId,
-      group.groupKey,
-      requestedRemapTargetId(),
-    );
-  } catch (error) {
-    remapPlan.value = null;
-    remapError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    isLoadingRemap.value = false;
-  }
 }
 
 async function applySelectedRemap() {
   const details = remapDetails.value;
   const group = selectedRemapGroup.value;
-  const plan = remapPlan.value;
-  if (!details || !group || !plan) {
+  if (!details || !group) {
     return;
   }
-
-  const shouldApply = window.confirm(
-    `确认将“${plan.sourceLabel}”调整为“${plan.targetLabel}”？\n将改变 ${plan.changedFileCount} 个部署文件，修正 ${plan.mrl3RewriteCount} 条 MRL3 贴图路径和 ${plan.evamRewriteCount} 个 EVAM 飞翔爪绑定。本地 MOD 原文件不会修改。`,
-  );
-  if (!shouldApply) {
+  if (
+    selectedRemapTargetId.value === MANUAL_SLINGER_TARGET &&
+    !manualSlingerTargetId.value.trim()
+  ) {
+    remapError.value = "请输入飞翔爪编号。";
     return;
   }
 
   isApplyingRemap.value = true;
   remapError.value = "";
   try {
+    const plan = await previewModRemap(
+      details.modId,
+      group.groupKey,
+      requestedRemapTargetId(),
+    );
+    remapSaveWarnings.value = plan.warnings;
+    if (
+      plan.warnings.length &&
+      !window.confirm(`${plan.warnings.join("\n")}\n\n仍要保存这次修改吗？`)
+    ) {
+      return;
+    }
     await applyModRemap(details.modId, group.groupKey, plan.targetId);
     await refreshModViews();
     closeRemapManager(true);
   } catch (error) {
-    remapError.value = error instanceof Error ? error.message : String(error);
+    remapError.value = userFacingError(error);
   } finally {
     isApplyingRemap.value = false;
-    if (remapDetails.value === null) {
-      remapPlan.value = null;
-    }
   }
 }
 
@@ -1113,9 +1131,7 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
 
   try {
-    uninstallResult.value = null;
     const plan = await previewUninstallMod(mod.id);
-    uninstallPlan.value = plan;
     deploymentError.value = "";
 
     const shouldUninstall = window.confirm(
@@ -1130,14 +1146,11 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
       return;
     }
 
-    uninstallResult.value = await uninstallMod(mod.id);
-    deploymentPlan.value = null;
-    deploymentResult.value = null;
-    disablePlan.value = null;
+    await uninstallMod(mod.id);
     await loadModLibraryStatus();
     await refreshModViews();
   } catch (error) {
-    deploymentError.value = error instanceof Error ? error.message : String(error);
+    deploymentError.value = userFacingError(error);
   } finally {
     activeModAction.value = "";
   }
@@ -1147,9 +1160,7 @@ async function restoreAllInstalledMods() {
   isRestoringAll.value = true;
 
   try {
-    restoreResult.value = null;
     const plan = await previewRestoreAllMods();
-    restorePlan.value = plan;
     deploymentError.value = "";
 
     if (plan.affectedModCount === 0) {
@@ -1164,15 +1175,10 @@ async function restoreAllInstalledMods() {
       return;
     }
 
-    restoreResult.value = await restoreAllMods();
-    deploymentPlan.value = null;
-    deploymentResult.value = null;
-    disablePlan.value = null;
-    uninstallPlan.value = null;
-    uninstallResult.value = null;
+    await restoreAllMods();
     await refreshModViews();
   } catch (error) {
-    deploymentError.value = error instanceof Error ? error.message : String(error);
+    deploymentError.value = userFacingError(error);
   } finally {
     isRestoringAll.value = false;
   }
@@ -1193,7 +1199,7 @@ async function moveSelectedConflictParticipant(
     conflictActionError.value = "";
     await loadConflictReport();
   } catch (error) {
-    conflictActionError.value = error instanceof Error ? error.message : String(error);
+    conflictActionError.value = userFacingError(error);
   } finally {
     activeModAction.value = "";
   }
@@ -1207,9 +1213,7 @@ async function applySelectedConflictOrder() {
   isApplyingConflict.value = true;
 
   try {
-    conflictOrderResult.value = null;
     const plan = await previewApplyConflictOrder(selectedConflictGroupId.value);
-    conflictOrderPlan.value = plan;
     conflictActionError.value = "";
 
     if (plan.applicableFileCount === 0) {
@@ -1219,20 +1223,20 @@ async function applySelectedConflictOrder() {
     const shouldApply = window.confirm(
       plan.requiresOverwriteConfirmation
         ? "目标文件不是 Acumod 已记录的文件，将被覆盖。是否继续？"
-        : `将当前覆盖顺序应用到 ${plan.applicableFileCount} 个冲突文件，是否继续？`,
+        : `保存当前覆盖顺序，并更新 ${plan.applicableFileCount} 个冲突文件，是否继续？`,
     );
 
     if (!shouldApply) {
       return;
     }
 
-    conflictOrderResult.value = await applyConflictOrder(
+    await applyConflictOrder(
       selectedConflictGroupId.value,
       plan.requiresOverwriteConfirmation,
     );
     await refreshModViews();
   } catch (error) {
-    conflictActionError.value = error instanceof Error ? error.message : String(error);
+    conflictActionError.value = userFacingError(error);
   } finally {
     isApplyingConflict.value = false;
   }
@@ -1297,7 +1301,7 @@ onBeforeUnmount(() => {
       <div class="panel-heading">
         <div>
           <h2>游戏目录</h2>
-          <p>{{ gameStatus?.message ?? "Loading game directory status..." }}</p>
+          <p>{{ gameStatusMessage }}</p>
         </div>
         <button type="button" :disabled="isLoadingGame" @click="autoDetectGameDirectory">
           {{ isLoadingGame ? "处理中" : "自动检测" }}
@@ -1327,7 +1331,7 @@ onBeforeUnmount(() => {
         </div>
         <div>
           <dt>来源</dt>
-          <dd>{{ gameStatus.source }}</dd>
+          <dd>{{ gameSourceLabel(gameStatus.source) }}</dd>
         </div>
         <div>
           <dt>执行文件</dt>
@@ -1348,19 +1352,19 @@ onBeforeUnmount(() => {
             <div class="panel-heading compact">
               <div>
                 <h2>应用信息</h2>
-                <p v-if="isLoadingApp">Loading app info...</p>
+                <p v-if="isLoadingApp">Loading...</p>
                 <p v-else-if="appError" class="error">{{ appError }}</p>
-                <p v-else>{{ appInfo?.backend ?? "No backend response yet." }}</p>
+                <p v-else>{{ appInfo ? "应用运行正常。" : "尚未读取应用信息。" }}</p>
               </div>
             </div>
 
             <dl v-if="appInfo" class="facts compact-facts">
               <div>
-                <dt>Name</dt>
+                <dt>名称</dt>
                 <dd>{{ appInfo.name }}</dd>
               </div>
               <div>
-                <dt>Version</dt>
+                <dt>版本</dt>
                 <dd>{{ appInfo.version }}</dd>
               </div>
             </dl>
@@ -1371,14 +1375,8 @@ onBeforeUnmount(() => {
           <section class="panel">
       <div class="panel-heading">
         <div>
-          <h2>MOD 导入识别预览</h2>
-          <p>
-            {{
-              importPreview?.message ??
-              modLibraryStatus?.message ??
-              "Loading MOD library status..."
-            }}
-          </p>
+          <h2>识别 MOD</h2>
+          <p>{{ importHeaderMessage }}</p>
         </div>
         <span class="status-pill" :class="importStatusClass">{{ importStatusLabel }}</span>
       </div>
@@ -1391,10 +1389,10 @@ onBeforeUnmount(() => {
             v-model.trim="importPath"
             type="text"
             autocomplete="off"
-            placeholder="D:\Downloads\Cool Sword Mod"
+            placeholder="D:\下载\太刀外观 MOD"
           />
           <button type="submit" :disabled="isPreviewingImport || !importPath">
-            {{ isPreviewingImport ? "识别中" : "预览" }}
+            {{ isPreviewingImport ? "识别中" : "识别 MOD" }}
           </button>
         </div>
       </form>
@@ -1407,7 +1405,7 @@ onBeforeUnmount(() => {
             v-model.trim="archivePath"
             type="text"
             autocomplete="off"
-            placeholder="D:\Downloads\Cool Sword Mod.zip"
+            placeholder="D:\下载\太刀外观 MOD.zip"
           />
           <button type="submit" :disabled="isInstallingArchive || !archivePath">
             {{ isInstallingArchive ? "解包导入中" : "导入压缩包" }}
@@ -1420,14 +1418,14 @@ onBeforeUnmount(() => {
         v-if="importPreview?.requiresGameRootConfirmation"
         class="notice warning-notice"
       >
-        <p>{{ importPreview.message }}</p>
+        <p>此 MOD 没有可识别的 nativePC 结构，请确认它是否应安装到游戏根目录。</p>
         <button type="button" :disabled="isPreviewingImport" @click="confirmGameRootPreview">
-          确认按游戏根目录预览
+          按游戏根目录识别
         </button>
       </div>
 
       <div v-if="importPreview?.status === 'ready'" class="notice success-notice">
-        <p>当前预览可以导入到 Acumod 本地 MOD 库；这一步不会写入 MHW 游戏目录。</p>
+        <p>识别完成，可以导入 Acumod 本地 MOD 库；此时不会写入 MHW 游戏目录。</p>
         <button type="button" :disabled="isInstallingMod" @click="installPreviewedMod">
           {{ isInstallingMod ? "导入中" : "导入到 MOD 库" }}
         </button>
@@ -1459,11 +1457,11 @@ onBeforeUnmount(() => {
       <dl v-if="importPreview" class="facts">
         <div>
           <dt>识别方式</dt>
-          <dd>{{ importPreview.detectionMethod }}</dd>
+          <dd>{{ detectionMethodLabel(importPreview.detectionMethod) }}</dd>
         </div>
         <div>
           <dt>部署根</dt>
-          <dd>{{ importPreview.deployRoot }}</dd>
+          <dd>{{ deployRootLabel(importPreview.deployRoot) }}</dd>
         </div>
         <div>
           <dt>内容根</dt>
@@ -1478,7 +1476,7 @@ onBeforeUnmount(() => {
       <dl v-if="installResult" class="facts">
         <div>
           <dt>导入结果</dt>
-          <dd>{{ installResult.message }}</dd>
+          <dd>{{ installResult.alreadyInstalled ? "MOD 已存在，未重复导入。" : "MOD 已导入本地库。" }}</dd>
         </div>
         <div>
           <dt>状态</dt>
@@ -1501,7 +1499,7 @@ onBeforeUnmount(() => {
           <dd>{{ installResult.contentPath }}</dd>
         </div>
         <div>
-          <dt>Manifest</dt>
+          <dt>清单文件</dt>
           <dd>{{ installResult.manifestPath }}</dd>
         </div>
         <div>
@@ -1558,7 +1556,7 @@ onBeforeUnmount(() => {
               />
               <span>
                 <strong>{{ candidate.relativePath || candidate.rootPath }}</strong>
-                <small>{{ candidate.fileCount }} files / {{ candidate.deployRoot }}</small>
+                <small>{{ candidate.fileCount }} 个文件 / {{ deployRootLabel(candidate.deployRoot) }}</small>
               </span>
             </label>
           </li>
@@ -1566,7 +1564,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="previewedFiles.length" class="preview-block">
-        <h3>部署路径预览</h3>
+        <h3>将导入的文件</h3>
         <ul class="file-preview">
           <li v-for="file in previewedFiles" :key="file.sourcePath">
             <span>{{ file.sourceRelativePath }}</span>
@@ -1639,14 +1637,13 @@ onBeforeUnmount(() => {
           @update-sort="modSort = $event"
         />
         <p v-if="categoryError && !isCategoryManagerOpen" class="error">{{ categoryError }}</p>
-        <p class="hint">{{ installedModList?.message ?? "正在读取本地 MOD 库..." }}</p>
         <p v-if="installedMods.length" class="hint">
           显示 {{ displayedInstalledMods.length }} / {{ installedMods.length }} 个 MOD；此处排序不影响冲突覆盖顺序。
         </p>
         <ModLibraryTable
           :mods="displayedInstalledMods"
           :installed-mod-count="installedMods.length"
-          :user-categories="userModCategories"
+          :categories="modCategories"
           :conflicting-mod-ids="conflictingModIds"
           :conflict-partner-names="conflictPartnerNames"
           :active-mod-action="activeModAction"
@@ -1665,122 +1662,6 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="deploymentError" class="error">{{ deploymentError }}</p>
-
-      <div v-if="deploymentPlan" class="preview-block">
-        <h3>启用计划</h3>
-        <p class="hint">{{ deploymentPlan.message }}</p>
-        <ul v-if="deploymentPlan.warnings.length" class="compact-list">
-          <li v-for="warning in deploymentPlan.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-        <ul v-if="deploymentPlanFiles.length" class="file-preview">
-          <li v-for="file in deploymentPlanFiles" :key="file.targetPath">
-            <span>{{ file.deployRelativePath }}</span>
-            <strong>{{ file.targetExists ? "目标已存在" : file.targetPath }}</strong>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="disablePlan" class="preview-block">
-        <h3>禁用预览</h3>
-        <p class="hint">{{ disablePlan.message }}</p>
-        <ul v-if="disablePlan.warnings.length" class="compact-list">
-          <li v-for="warning in disablePlan.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-        <ul v-if="disablePlanFiles.length" class="file-preview">
-          <li v-for="file in disablePlanFiles" :key="file.deployedPath">
-            <span>{{ file.deployRelativePath }}</span>
-            <strong>{{ file.deployedPath }}</strong>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="deploymentResult" class="preview-block">
-        <h3>启停结果</h3>
-        <p class="hint">{{ deploymentResult.message }}</p>
-        <ul v-if="deploymentResult.warnings.length" class="compact-list">
-          <li v-for="warning in deploymentResult.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-        <ul v-if="deployedFiles.length" class="file-preview">
-          <li v-for="file in deployedFiles" :key="file.deployedPath">
-            <span>{{ file.deployRelativePath }}</span>
-            <strong>{{ file.deployedPath }}</strong>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="restorePlan" class="preview-block">
-        <h3>一键还原预览</h3>
-        <p class="hint">{{ restorePlan.message }}</p>
-        <ul v-if="restorePlan.warnings.length" class="compact-list">
-          <li v-for="warning in restorePlan.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-        <ul v-if="restorePlanMods.length" class="compact-list">
-          <li v-for="mod in restorePlanMods" :key="mod.modId">
-            <span>{{ mod.name }}</span>
-            <strong>{{ mod.deployedFileCount }} files</strong>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="restoreResult" class="preview-block">
-        <h3>一键还原结果</h3>
-        <p class="hint">{{ restoreResult.message }}</p>
-        <ul v-if="restoreResult.warnings.length" class="compact-list">
-          <li v-for="warning in restoreResult.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-        <ul v-if="restoreResultMods.length" class="compact-list">
-          <li v-for="mod in restoreResultMods" :key="mod.modId">
-            <span>{{ mod.name }}</span>
-            <strong>{{ mod.deployedFileCount }} files</strong>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="uninstallPlan" class="preview-block">
-        <h3>卸载预览</h3>
-        <p class="hint">{{ uninstallPlan.message }}</p>
-        <ul v-if="uninstallPlan.warnings.length" class="compact-list">
-          <li v-for="warning in uninstallPlan.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-        <ul v-if="uninstallLibraryFiles.length" class="file-preview">
-          <li v-for="file in uninstallLibraryFiles" :key="file.libraryRelativePath">
-            <span>{{ file.deployRelativePath }}</span>
-            <strong>{{ file.libraryRelativePath }}</strong>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="uninstallResult" class="preview-block">
-        <h3>卸载结果</h3>
-        <p class="hint">{{ uninstallResult.message }}</p>
-        <dl class="facts compact-facts">
-          <div>
-            <dt>部署文件</dt>
-            <dd>{{ uninstallResult.removedDeployedFileCount }}</dd>
-          </div>
-          <div>
-            <dt>库内文件</dt>
-            <dd>{{ uninstallResult.removedLibraryFileCount }}</dd>
-          </div>
-        </dl>
-        <ul v-if="uninstallResult.warnings.length" class="compact-list">
-          <li v-for="warning in uninstallResult.warnings" :key="warning">
-            <span>{{ warning }}</span>
-          </li>
-        </ul>
-      </div>
 
       <div v-if="installedModList?.warnings.length" class="preview-block">
         <h3>MOD 库警告</h3>
@@ -1829,7 +1710,7 @@ onBeforeUnmount(() => {
               :disabled="isApplyingConflict || selectedConflictGroup.enabledParticipantCount === 0"
               @click="applySelectedConflictOrder"
             >
-              {{ isApplyingConflict ? "应用中" : "应用此组顺序" }}
+              {{ isApplyingConflict ? "保存中" : "保存顺序" }}
             </button>
           </div>
 
@@ -1875,21 +1756,6 @@ onBeforeUnmount(() => {
             当前没有已启用的参与 MOD，无法应用这个冲突。
           </p>
           <p v-if="conflictActionError" class="error">{{ conflictActionError }}</p>
-
-          <div v-if="conflictOrderPlan" class="preview-block">
-            <h3>应用预览</h3>
-            <p class="hint">{{ conflictOrderPlan.message }}</p>
-            <ul v-if="conflictOrderPlan.warnings.length" class="compact-list">
-              <li v-for="warning in conflictOrderPlan.warnings" :key="warning">
-                <span>{{ warning }}</span>
-              </li>
-            </ul>
-          </div>
-
-          <div v-if="conflictOrderResult" class="preview-block">
-            <h3>应用结果</h3>
-            <p class="hint">{{ conflictOrderResult.message }}</p>
-          </div>
         </template>
         <p v-else class="hint">当前没有需要处理的 MOD 冲突组。</p>
       </section>
@@ -1907,20 +1773,20 @@ onBeforeUnmount(() => {
 
   <ModCategoryManager
     :is-open="isCategoryManagerOpen"
-    :categories="userModCategories"
+    :categories="modCategories"
     :is-busy="isCategoryAction"
     :error="categoryError"
     @close="closeCategoryManager"
-    @create="createUserCategory"
-    @rename="renameUserCategory"
-    @delete="deleteUserCategory"
+    @create="createCategory"
+    @rename="renameCategory"
+    @delete="deleteCategory"
   />
 
   <div v-if="remapDetails" class="dialog-backdrop" role="presentation">
     <section class="confirm-dialog remap-dialog" role="dialog" aria-modal="true" aria-labelledby="remap-dialog-title">
       <div class="remap-dialog-heading">
         <div>
-          <h2 id="remap-dialog-title">模型替换目标</h2>
+          <h2 id="remap-dialog-title">修改替换模型</h2>
           <p>{{ remapDetails.name }}</p>
         </div>
         <button
@@ -1935,44 +1801,49 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <ul v-if="remapDetails.warnings.length" class="compact-list remap-warnings">
-        <li v-for="warning in remapDetails.warnings" :key="warning"><span>{{ warning }}</span></li>
+      <ul v-if="visibleRemapWarnings.length" class="compact-list remap-warnings">
+        <li v-for="warning in visibleRemapWarnings" :key="warning"><span>{{ warning }}</span></li>
       </ul>
 
-      <p v-if="remapDetails.enabled" class="hint remap-disabled-hint">{{ remapDetails.message }}</p>
+      <p v-if="remapDetails.enabled" class="hint remap-disabled-hint">
+        请先禁用此 MOD，再修改替换模型。
+      </p>
 
       <template v-if="selectedRemapGroup">
-        <div class="remap-fields">
-          <label>
-            <span>替换分组</span>
-            <select :value="selectedRemapGroupKey" :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled" @change="updateRemapGroup">
-              <option v-for="group in remapDetails.groups" :key="group.groupKey" :value="group.groupKey">
-                {{ group.subKind }} · {{ remapGroupSourceLabel(group) }}
-              </option>
-            </select>
-          </label>
+        <div v-if="remapDetails.groups.length > 1" class="remap-group-tabs" role="tablist" aria-label="选择替换分组">
+          <button
+            v-for="group in remapDetails.groups"
+            :key="group.groupKey"
+            type="button"
+            role="tab"
+            :aria-selected="group.groupKey === selectedRemapGroupKey"
+            :class="{ active: group.groupKey === selectedRemapGroupKey }"
+            :disabled="isApplyingRemap || remapDetails.enabled"
+            @click="selectRemapGroup(group.groupKey)"
+          >
+            {{ group.subKind }} · {{ remapGroupSourceLabel(group) }}
+          </button>
+        </div>
 
-          <div class="remap-source">
-            <span>导入时目标</span>
-            <strong>{{ remapGroupSourceLabel(selectedRemapGroup) }}</strong>
-            <small>{{ selectedRemapGroup.sourceModelIds.join(" + ") }}</small>
-          </div>
-
+        <div class="remap-fields simplified-remap-fields">
           <label>
-            <span>部署目标</span>
-            <select :value="selectedRemapTargetId" :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled" @change="updateRemapTarget">
-              <option value="">恢复导入时目标</option>
+            <span>替换模型</span>
+            <select :value="selectedRemapTargetId" :disabled="isApplyingRemap || remapDetails.enabled" @change="updateRemapTarget">
+              <option value="">恢复默认</option>
               <option v-for="target in selectedRemapGroup.targets" :key="target.targetId" :value="target.targetId">
                 {{ remapTargetOptionLabel(selectedRemapGroup, target.targetId) }}
               </option>
+              <option v-if="selectedRemapGroup.allowsManualTarget" :value="MANUAL_SLINGER_TARGET">
+                其他飞翔爪编号
+              </option>
             </select>
           </label>
 
-          <label v-if="selectedRemapGroup.allowsManualTarget">
-            <span>自定义投射器 ID</span>
+          <label v-if="selectedRemapTargetId === MANUAL_SLINGER_TARGET">
+            <span>飞翔爪编号</span>
             <input
               :value="manualSlingerTargetId"
-              :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled"
+              :disabled="isApplyingRemap || remapDetails.enabled"
               placeholder="例如 slg106_0000"
               @input="updateManualSlingerTarget"
             />
@@ -1981,35 +1852,10 @@ onBeforeUnmount(() => {
 
         <p v-if="remapError" class="error">{{ remapError }}</p>
 
-        <section v-if="remapPlan" class="remap-plan">
-          <div class="remap-plan-summary">
-            <span>{{ remapPlan.sourceLabel }}</span>
-            <strong aria-hidden="true">&#8594;</strong>
-            <span>{{ remapPlan.targetLabel }}</span>
-          </div>
-          <p>
-            {{ remapPlan.changedFileCount }} 个部署文件变化，{{ remapPlan.mrl3RewriteCount }} 条 MRL3 贴图路径修正，{{ remapPlan.evamRewriteCount }} 个 EVAM 飞翔爪绑定修正
-          </p>
-          <ul v-if="remapPlan.warnings.length" class="compact-list remap-warnings">
-            <li v-for="warning in remapPlan.warnings" :key="warning"><span>{{ warning }}</span></li>
-          </ul>
-          <div v-if="remapPlan.files.length" class="remap-file-list">
-            <div v-for="file in remapPlan.files" :key="`${file.sourceDeployRelativePath}-${file.effectiveDeployRelativePath}`">
-              <span>{{ file.sourceDeployRelativePath }}</span>
-              <strong>{{ file.effectiveDeployRelativePath }}</strong>
-              <small v-if="file.mrl3RewriteCount">MRL3 修正 {{ file.mrl3RewriteCount }} 条</small>
-              <small v-if="file.evamRewriteCount">EVAM 飞翔爪绑定修正 {{ file.evamRewriteCount }} 个</small>
-            </div>
-          </div>
-        </section>
-
         <div class="section-actions">
           <button type="button" class="secondary-button" :disabled="isApplyingRemap" @click="closeRemapManager()">取消</button>
-          <button type="button" class="secondary-button" :disabled="isLoadingRemap || isApplyingRemap || remapDetails.enabled" @click="previewSelectedRemap">
-            {{ isLoadingRemap ? "预览中" : "生成预览" }}
-          </button>
-          <button type="button" :disabled="!remapPlan || isApplyingRemap || remapDetails.enabled" @click="applySelectedRemap">
-            {{ isApplyingRemap ? "保存中" : "确认保存" }}
+          <button type="button" :disabled="isApplyingRemap || remapDetails.enabled" @click="applySelectedRemap">
+            {{ isApplyingRemap ? "保存中" : "保存修改" }}
           </button>
         </div>
       </template>
@@ -2040,26 +1886,32 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-shell {
   display: grid;
-  grid-template-columns: 224px minmax(0, 1fr);
+  grid-template-columns: 188px minmax(0, 1fr);
   min-height: 100vh;
   background: #f4f7f6;
 }
 
 .app-workspace {
   display: grid;
+  width: 100%;
+  max-width: calc(100vw - 188px);
   min-width: 0;
   min-height: 100vh;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 .workspace-content {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
-  padding: 24px 28px 48px;
+  padding: 20px 24px 44px;
   overflow: auto;
 }
 
 .workspace-page {
-  width: min(1180px, 100%);
+  width: 100%;
+  max-width: 1180px;
+  min-width: 0;
   margin: 0 auto;
 }
 
@@ -2106,7 +1958,8 @@ h2 {
 }
 
 .panel {
-  padding: 28px;
+  min-width: 0;
+  padding: 22px;
   border: 1px solid #d9e2df;
   border-radius: 8px;
   background: #ffffff;
@@ -2865,7 +2718,7 @@ dd {
 }
 
 .remap-dialog {
-  width: min(780px, 100%);
+  width: min(620px, 100%);
   max-height: calc(100vh - 48px);
   overflow: auto;
 }
@@ -2903,88 +2756,45 @@ dd {
 
 .remap-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 
-.remap-fields label,
-.remap-source {
+.remap-fields label {
   display: grid;
   min-width: 0;
   gap: 5px;
 }
 
-.remap-fields label > span,
-.remap-source > span {
+.remap-fields label > span {
   color: #61756f;
   font-size: 0.76rem;
   font-weight: 700;
 }
 
-.remap-source {
-  align-content: center;
-  min-height: 70px;
-  padding: 10px 12px;
-  border: 1px solid #dce5e2;
-  border-radius: 6px;
-  background: #f7faf9;
+.remap-group-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
 }
 
-.remap-source strong,
-.remap-source small {
-  overflow-wrap: anywhere;
-}
-
-.remap-source small {
-  color: #61756f;
-}
-
-.remap-plan {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid #b8d6cb;
-  border-radius: 6px;
-  background: #f2f8f5;
-}
-
-.remap-plan > p {
+.remap-group-tabs button {
+  min-height: 34px;
+  padding: 0 10px;
+  flex: 0 0 auto;
+  border: 1px solid #cbd8d4;
+  border-radius: 5px;
   color: #52645f;
-  font-size: 0.82rem;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.78rem;
 }
 
-.remap-plan-summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  color: #24332f;
-}
-
-.remap-plan-summary span:last-child {
+.remap-group-tabs button.active {
+  border-color: #24745b;
   color: #17613f;
-  font-weight: 700;
-}
-
-.remap-file-list {
-  display: grid;
-  max-height: 260px;
-  overflow: auto;
-  border-top: 1px solid #dce8e3;
-}
-
-.remap-file-list > div {
-  display: grid;
-  gap: 3px;
-  padding: 9px 0;
-  border-bottom: 1px solid #dce8e3;
-  font-size: 0.74rem;
-  overflow-wrap: anywhere;
-}
-
-.remap-file-list span,
-.remap-file-list small {
-  color: #61756f;
+  background: #edf5f1;
 }
 
 .remap-warnings li {
@@ -3020,15 +2830,15 @@ dd {
     grid-template-columns: 1fr;
   }
 
+  .app-workspace {
+    max-width: 100vw;
+  }
+
   .workspace-content {
     padding: 16px 12px 40px;
   }
 
   .remap-fields {
-    grid-template-columns: 1fr;
-  }
-
-  .remap-plan-summary {
     grid-template-columns: 1fr;
   }
 

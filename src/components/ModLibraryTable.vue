@@ -1,13 +1,11 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
+import { nextTick, reactive, ref, watch } from "vue";
 import type {
   InstalledModSummary,
+  ModCategory,
   ModMetadataPatch,
   ModelReplacement,
-  UserModCategory,
 } from "../api/modLibrary";
-
-const CREATE_CATEGORY_VALUE = "__create_user_category__";
 
 type EditableField = "name" | "note";
 
@@ -19,7 +17,7 @@ interface ModDraft {
 const props = defineProps<{
   mods: InstalledModSummary[];
   installedModCount: number;
-  userCategories: UserModCategory[];
+  categories: ModCategory[];
   conflictingModIds: Set<string>;
   conflictPartnerNames: Record<string, string[]>;
   activeModAction: string;
@@ -41,6 +39,7 @@ const emit = defineEmits<{
 
 const editingCell = ref<{ modId: string; field: EditableField } | null>(null);
 const editingCategoryModId = ref("");
+const editingInputs = ref<HTMLInputElement[]>([]);
 const drafts = reactive<Record<string, ModDraft>>({});
 const expandedModIds = ref(new Set<string>());
 
@@ -80,19 +79,14 @@ function modelReplacementTitle(replacement: ModelReplacement) {
   return replacement.subKind || modelKindLabel(replacement.modelKind);
 }
 
-function automaticCategorySummary(mod: InstalledModSummary) {
-  return mod.categories.length ? mod.categories.join("、") : "未识别";
+function categorySummary(mod: InstalledModSummary) {
+  return mod.categories.length
+    ? mod.categories.map((category) => category.name).join("、")
+    : "未分类";
 }
 
 function categoryTags(mod: InstalledModSummary) {
-  const tags = mod.categories.map((name) => ({ name, isUserCategory: false }));
-  const userCategoryName = mod.userCategory?.name;
-
-  if (userCategoryName && !tags.some((tag) => tag.name === userCategoryName)) {
-    tags.push({ name: userCategoryName, isUserCategory: true });
-  }
-
-  return tags.length ? tags : [{ name: "未识别", isUserCategory: false }];
+  return mod.categories.length ? mod.categories : [{ id: "", name: "未分类", createdAtUnixSeconds: 0 }];
 }
 
 function replacementTargetLabel(replacement: ModelReplacement) {
@@ -148,7 +142,7 @@ function isEditing(mod: InstalledModSummary, field: EditableField) {
 
 function persistedDraftValue(mod: InstalledModSummary, field: EditableField) {
   if (field === "name") {
-    return mod.name === mod.originalName ? "" : mod.name;
+    return mod.name;
   }
 
   return mod.note;
@@ -174,7 +168,7 @@ function setDraftValue(mod: InstalledModSummary, field: EditableField, event: Ev
   }
 }
 
-function beginEditing(mod: InstalledModSummary, field: EditableField) {
+async function beginEditing(mod: InstalledModSummary, field: EditableField) {
   if (props.metadataSavingModId || props.activeModAction) {
     return;
   }
@@ -188,6 +182,11 @@ function beginEditing(mod: InstalledModSummary, field: EditableField) {
   }
 
   editingCell.value = { modId: mod.id, field };
+  await nextTick();
+  const input = editingInputs.value[0];
+  input?.focus();
+  const valueLength = input?.value.length ?? 0;
+  input?.setSelectionRange(valueLength, valueLength);
 }
 
 function clearDraftField(mod: InstalledModSummary, field: EditableField) {
@@ -223,30 +222,44 @@ function commitEditing(mod: InstalledModSummary, field: EditableField) {
   const persistedValue = persistedDraftValue(mod, field);
   editingCell.value = null;
 
+  if (field === "name" && !value.trim()) {
+    clearDraftField(mod, field);
+    return;
+  }
+
   if (value.trim() === persistedValue.trim()) {
     clearDraftField(mod, field);
     return;
   }
 
-  emit("updateMetadata", mod, field === "name" ? { displayName: value } : { note: value });
+  const patch =
+    field === "name"
+      ? { displayName: value.trim() === mod.originalName.trim() ? "" : value }
+      : { note: value };
+  emit("updateMetadata", mod, patch);
 }
 
-function updateCategory(mod: InstalledModSummary, event: Event) {
-  const select = event.target as HTMLSelectElement;
-  const categoryId = select.value;
+function toggleCategory(mod: InstalledModSummary, categoryId: string, event: Event) {
+  const isSelected = (event.target as HTMLInputElement).checked;
+  const categoryIds = new Set(mod.categoryIds);
+  if (isSelected) {
+    categoryIds.add(categoryId);
+  } else {
+    categoryIds.delete(categoryId);
+  }
+  emit("updateMetadata", mod, { categoryIds: [...categoryIds] });
+}
+
+function clearCategories(mod: InstalledModSummary) {
+  if (!mod.categoryIds.length) {
+    return;
+  }
+  emit("updateMetadata", mod, { categoryIds: [] });
+}
+
+function createCategory(mod: InstalledModSummary) {
   editingCategoryModId.value = "";
-
-  if (categoryId === CREATE_CATEGORY_VALUE) {
-    select.value = mod.categoryOverride ?? "";
-    emit("createCategory", mod);
-    return;
-  }
-
-  if (categoryId === (mod.categoryOverride ?? "")) {
-    return;
-  }
-
-  emit("updateMetadata", mod, { categoryOverride: categoryId });
+  emit("createCategory", mod);
 }
 
 function isEditingCategory(mod: InstalledModSummary) {
@@ -258,11 +271,12 @@ function beginCategoryEditing(mod: InstalledModSummary) {
     return;
   }
 
-  editingCategoryModId.value = mod.id;
+  editingCategoryModId.value = editingCategoryModId.value === mod.id ? "" : mod.id;
 }
 
-function cancelCategoryEditing(mod: InstalledModSummary) {
-  if (isEditingCategory(mod)) {
+function closeCategoryMenuWhenFocusLeaves(mod: InstalledModSummary, event: FocusEvent) {
+  const categoryEditor = event.currentTarget as HTMLElement;
+  if (!categoryEditor.contains(event.relatedTarget as Node | null) && isEditingCategory(mod)) {
     editingCategoryModId.value = "";
   }
 }
@@ -371,11 +385,11 @@ watch(
               <div class="name-editor">
                 <input
                   v-if="isEditing(mod, 'name')"
+                  ref="editingInputs"
                   :value="draftValue(mod, 'name')"
                   class="inline-editor"
                   maxlength="120"
                   aria-label="MOD 显示名称"
-                  autofocus
                   @input="setDraftValue(mod, 'name', $event)"
                   @blur="commitEditing(mod, 'name')"
                   @keydown.enter.prevent="commitEditing(mod, 'name')"
@@ -406,40 +420,50 @@ watch(
             </td>
 
             <td class="mod-category">
-              <select
-                v-if="isEditingCategory(mod)"
-                class="category-selector"
-                :value="mod.categoryOverride ?? ''"
-                :disabled="!!props.metadataSavingModId || !!props.activeModAction"
-                aria-label="选择用户分类"
-                autofocus
-                @change="updateCategory(mod, $event)"
-                @blur="cancelCategoryEditing(mod)"
-              >
-                <option value="">不设置用户分类</option>
-                <option v-for="category in props.userCategories" :key="category.id" :value="category.id">
-                  {{ category.name }}
-                </option>
-                <option :value="CREATE_CATEGORY_VALUE">+ 新建分类</option>
-              </select>
-              <button
-                v-else
-                type="button"
-                class="category-tag-button"
-                :disabled="!!props.metadataSavingModId || !!props.activeModAction"
-                :title="categoryTags(mod).map((tag) => tag.name).join('、')"
-                :aria-label="`编辑 MOD 分类：${categoryTags(mod).map((tag) => tag.name).join('、')}`"
-                @click="beginCategoryEditing(mod)"
-              >
-                <span
-                  v-for="tag in categoryTags(mod)"
-                  :key="tag.name"
-                  class="category-tag"
-                  :class="{ 'user-category-tag': tag.isUserCategory, 'unknown-category-tag': tag.name === '未识别' }"
+              <div class="category-editor" @focusout="closeCategoryMenuWhenFocusLeaves(mod, $event)">
+                <button
+                  type="button"
+                  class="category-tag-button"
+                  :class="{ active: isEditingCategory(mod) }"
+                  :disabled="!!props.metadataSavingModId || !!props.activeModAction"
+                  :title="categoryTags(mod).map((tag) => tag.name).join('、')"
+                  :aria-label="`编辑 MOD 分类：${categoryTags(mod).map((tag) => tag.name).join('、')}`"
+                  :aria-expanded="isEditingCategory(mod)"
+                  @click="beginCategoryEditing(mod)"
                 >
-                  {{ tag.name }}
-                </span>
-              </button>
+                  <span
+                    v-for="tag in categoryTags(mod)"
+                    :key="tag.id || tag.name"
+                    class="category-tag"
+                    :class="{ 'unknown-category-tag': !tag.id }"
+                  >
+                    {{ tag.name }}
+                  </span>
+                </button>
+
+                <div v-if="isEditingCategory(mod)" class="category-menu" @keydown.esc="editingCategoryModId = ''">
+                  <label v-for="category in props.categories" :key="category.id" class="category-option">
+                    <input
+                      type="checkbox"
+                      :checked="mod.categoryIds.includes(category.id)"
+                      :disabled="!!props.metadataSavingModId || !!props.activeModAction"
+                      @change="toggleCategory(mod, category.id, $event)"
+                    />
+                    <span>{{ category.name }}</span>
+                  </label>
+                  <p v-if="!props.categories.length" class="empty-category-options">暂无分类</p>
+                  <div class="category-menu-actions">
+                    <button
+                      type="button"
+                      :disabled="!mod.categoryIds.length || !!props.metadataSavingModId"
+                      @click="clearCategories(mod)"
+                    >
+                      清空分类
+                    </button>
+                    <button type="button" @click="createCategory(mod)">新建分类</button>
+                  </div>
+                </div>
+              </div>
             </td>
 
             <td class="replacement-summary" :class="{ 'has-remap-entry': hasRemappableTarget(mod) }">
@@ -472,11 +496,11 @@ watch(
             <td class="mod-note">
               <input
                 v-if="isEditing(mod, 'note')"
+                ref="editingInput"
                 :value="draftValue(mod, 'note')"
                 class="inline-editor"
                 maxlength="800"
                 aria-label="MOD 备注"
-                autofocus
                 @input="setDraftValue(mod, 'note', $event)"
                 @blur="commitEditing(mod, 'note')"
                 @keydown.enter.prevent="commitEditing(mod, 'note')"
@@ -538,8 +562,8 @@ watch(
             <td colspan="7" class="mod-details-cell">
               <div class="mod-details-grid">
                 <section>
-                  <h4>识别分类</h4>
-                  <p>{{ automaticCategorySummary(mod) }}</p>
+                  <h4>分类</h4>
+                  <p>{{ categorySummary(mod) }}</p>
                 </section>
                 <section>
                   <h4>原始名称</h4>
@@ -612,6 +636,8 @@ watch(
 
 <style scoped>
 .mod-table-scroll {
+  width: 100%;
+  max-width: 100%;
   margin-top: 12px;
   overflow: auto;
   border: 1px solid #dfe7e3;
@@ -620,26 +646,26 @@ watch(
 
 .mod-table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 850px;
   table-layout: fixed;
   border-collapse: collapse;
   background: #ffffff;
 }
 
 .status-column {
-  width: 58px;
+  width: 48px;
 }
 
 .index-column {
-  width: 58px;
+  width: 44px;
 }
 
 .name-column {
-  width: 20%;
+  width: 22%;
 }
 
 .category-column {
-  width: 18%;
+  width: 14%;
 }
 
 .replacement-column {
@@ -647,11 +673,11 @@ watch(
 }
 
 .note-column {
-  width: 16%;
+  width: 12%;
 }
 
 .actions-column {
-  width: 116px;
+  width: 104px;
 }
 
 .mod-table th,
@@ -681,7 +707,6 @@ watch(
   background: #f9fcfa;
 }
 
-.mod-status,
 .name-editor,
 .mod-action-buttons {
   display: flex;
@@ -689,7 +714,11 @@ watch(
 }
 
 .mod-status {
-  justify-content: center;
+  text-align: center !important;
+}
+
+.mod-status .status-button {
+  margin: 0 auto;
 }
 
 .mod-index {
@@ -702,8 +731,8 @@ watch(
 .icon-button {
   position: relative;
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   place-items: center;
   border: 1px solid #cbd8d4;
@@ -795,8 +824,7 @@ watch(
   white-space: nowrap;
 }
 
-.inline-editor,
-.category-selector {
+.inline-editor {
   width: 100%;
   min-height: 34px;
   padding: 0 9px;
@@ -807,15 +835,13 @@ watch(
   font: inherit;
 }
 
-.inline-editor:focus,
-.category-selector:focus {
+.inline-editor:focus {
   outline: 2px solid #c6e0d3;
   outline-offset: 0;
 }
 
-.category-selector:disabled {
-  color: #72837e;
-  background: #f1f5f3;
+.category-editor {
+  position: relative;
 }
 
 .category-tag-button {
@@ -839,6 +865,11 @@ watch(
   outline-offset: 2px;
 }
 
+.category-tag-button.active {
+  outline: 2px solid #8cbca8;
+  outline-offset: 2px;
+}
+
 .category-tag-button:disabled {
   cursor: not-allowed;
 }
@@ -858,16 +889,84 @@ watch(
   white-space: nowrap;
 }
 
-.category-tag.user-category-tag {
-  border-color: #c7c9e8;
-  color: #454389;
-  background: #f1f1fb;
-}
-
 .category-tag.unknown-category-tag {
   border-color: #d7e1dd;
   color: #72837e;
   background: #f7faf8;
+}
+
+.category-menu {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 6px);
+  left: -8px;
+  display: grid;
+  width: min(240px, 70vw);
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid #cbd8d4;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 33, 31, 0.16);
+}
+
+.category-option {
+  display: flex;
+  min-height: 34px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 7px;
+  border-radius: 4px;
+  color: #334b44;
+  cursor: pointer;
+}
+
+.category-option:hover {
+  background: #f0f6f3;
+}
+
+.category-option input {
+  width: 15px;
+  height: 15px;
+  accent-color: #24745b;
+}
+
+.empty-category-options {
+  margin: 0;
+  padding: 8px;
+  color: #72837e;
+  font-size: 0.78rem;
+}
+
+.category-menu-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  padding: 7px 3px 1px;
+  border-top: 1px solid #e7eeeb;
+}
+
+.category-menu-actions button {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid #cbd8d4;
+  border-radius: 4px;
+  color: #315e52;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.category-menu-actions button:hover:not(:disabled) {
+  border-color: #8cbca8;
+  background: #edf5f1;
+}
+
+.category-menu-actions button:disabled {
+  color: #9aa8a4;
+  cursor: not-allowed;
 }
 
 .conflict-indicator {
@@ -960,11 +1059,13 @@ watch(
 }
 
 .mod-actions {
+  padding-right: 6px !important;
+  padding-left: 6px !important;
   white-space: nowrap;
 }
 
 .mod-action-buttons {
-  gap: 6px;
+  gap: 3px;
   justify-content: flex-start;
 }
 

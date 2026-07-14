@@ -19,7 +19,7 @@ defineEmits<{
       <span class="brand-mark" aria-hidden="true">A</span>
       <div>
         <strong>Acumod</strong>
-        <span>MHW MOD Manager</span>
+        <span>Acumen MOD Manager</span>
       </div>
     </div>
 

@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "Acumod",
-        "width": 1320,
-        "height": 760,
-        "minWidth": 1040,
-        "minHeight": 660
+        "title": "Acumen MOD Manager",
+        "width": 1440,
+        "height": 820,
+        "minWidth": 1100,
+        "minHeight": 680
       }
     ],
     "security": {

@@ -109,10 +109,15 @@ struct LegacyBoxPaths {
 }
 
 pub(crate) struct LegacyBoxImportSource {
-    module_id: String,
-    name: String,
-    module_path: PathBuf,
-    files_path: PathBuf,
+    pub(crate) module_id: String,
+    pub(crate) name: String,
+    pub(crate) module_path: PathBuf,
+    pub(crate) files_path: PathBuf,
+}
+
+pub(crate) struct LegacyBoxTakeoverSources {
+    pub(crate) box_game_path: Option<PathBuf>,
+    pub(crate) sources: Vec<LegacyBoxImportSource>,
 }
 
 struct CollectedLegacyFile {
@@ -201,6 +206,26 @@ pub(crate) fn load_legacy_box_import_sources(
     }
 
     let paths = resolve_legacy_box_paths(raw_box_path)?;
+    load_import_sources_from_paths(&paths, module_ids)
+}
+
+/// 读取接管预检需要的盒子游戏目录与已选择模块，不扫描或修改游戏文件。
+pub(crate) fn load_legacy_box_takeover_sources(
+    raw_box_path: &str,
+    module_ids: &[String],
+) -> Result<LegacyBoxTakeoverSources, String> {
+    let paths = resolve_legacy_box_paths(raw_box_path)?;
+    let sources = load_import_sources_from_paths(&paths, module_ids)?;
+    Ok(LegacyBoxTakeoverSources {
+        box_game_path: paths.game_path,
+        sources,
+    })
+}
+
+fn load_import_sources_from_paths(
+    paths: &LegacyBoxPaths,
+    module_ids: &[String],
+) -> Result<Vec<LegacyBoxImportSource>, String> {
     let mut seen_ids = HashSet::new();
     let mut sources = Vec::new();
 

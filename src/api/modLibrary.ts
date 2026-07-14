@@ -144,6 +144,55 @@ export interface LegacyBoxImportResult {
   message: string;
 }
 
+export interface LegacyBoxTakeoverMod {
+  moduleId: string;
+  name: string;
+  modId: string | null;
+  isReady: boolean;
+  message: string;
+}
+
+export interface LegacyBoxTakeoverParticipant {
+  modId: string;
+  name: string;
+  isSelectedFromBox: boolean;
+  order: number;
+}
+
+export interface LegacyBoxTakeoverConflictGroup {
+  groupId: string;
+  conflictFileCount: number;
+  participants: LegacyBoxTakeoverParticipant[];
+}
+
+export interface LegacyBoxTakeoverMismatch {
+  deployRelativePath: string;
+  expectedModName: string;
+  status: "missing" | "different";
+}
+
+export interface LegacyBoxTakeoverPlan {
+  canApply: boolean;
+  boxGamePath: string | null;
+  acumodGamePath: string;
+  selectedMods: LegacyBoxTakeoverMod[];
+  expectedFileCount: number;
+  matchingFileCount: number;
+  missingFileCount: number;
+  differentFileCount: number;
+  conflictGroups: LegacyBoxTakeoverConflictGroup[];
+  mismatches: LegacyBoxTakeoverMismatch[];
+  warnings: string[];
+  message: string;
+}
+
+export interface LegacyBoxTakeoverResult {
+  adoptedModCount: number;
+  recordedFileCount: number;
+  conflictGroupCount: number;
+  message: string;
+}
+
 export interface InstalledModSummary {
   id: string;
   name: string;
@@ -578,6 +627,31 @@ export function importLegacyBoxMods(
   return invoke<LegacyBoxImportResult>("import_legacy_box_mods", {
     boxPath,
     moduleIds,
+  });
+}
+
+// 接管预检和确认接管都会在 Rust 端重新核验，避免前端缓存的文件状态被当成最终依据。
+export function previewLegacyBoxTakeover(
+  boxPath: string,
+  moduleIds: string[],
+  conflictOrders: Record<string, string[]>,
+): Promise<LegacyBoxTakeoverPlan> {
+  return invoke<LegacyBoxTakeoverPlan>("preview_legacy_box_takeover", {
+    boxPath,
+    moduleIds,
+    conflictOrders,
+  });
+}
+
+export function applyLegacyBoxTakeover(
+  boxPath: string,
+  moduleIds: string[],
+  conflictOrders: Record<string, string[]>,
+): Promise<LegacyBoxTakeoverResult> {
+  return invoke<LegacyBoxTakeoverResult>("apply_legacy_box_takeover", {
+    boxPath,
+    moduleIds,
+    conflictOrders,
   });
 }
 

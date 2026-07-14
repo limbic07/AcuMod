@@ -129,7 +129,9 @@ src-tauri/src/commands/game.rs
   save_game_directory(app, path) -> Result<GameDirectoryStatus, String>
 ```
 
-当前 MOD 导入识别切片：
+当前 MOD 导入识别切片与下一步目标：
+
+显式接管原型中的 `previewLegacyBoxTakeover`、`applyLegacyBoxTakeover` 及对应 Rust command 仍暂时存在于代码中，但已废弃，下一切片必须成组删除。目标调用链如下：
 
 ```text
 src/api/modLibrary.ts
@@ -159,6 +161,10 @@ src/api/modLibrary.ts
 
   importLegacyBoxMods(boxPath, moduleIds)
   -> invoke<LegacyBoxImportResult>("import_legacy_box_mods", { boxPath, moduleIds })
+  -> 导入完成后由 Rust 自动执行状态同步，结果写入 LegacyBoxImportResult.stateSync
+
+  refreshGameModStates()
+  -> invoke<ModStateSyncResult>("refresh_game_mod_states")
 
   previewEnableMod(modId)
   -> invoke<ModDeploymentPlan>("preview_enable_mod", { modId })
@@ -207,6 +213,8 @@ src-tauri/src/commands/mod_library.rs
 
   import_legacy_box_mods(app, box_path, module_ids) -> Result<LegacyBoxImportResult, String>
 
+  refresh_game_mod_states(app) -> Result<ModStateSyncResult, String>
+
   preview_enable_mod(app, mod_id) -> Result<ModDeploymentPlan, String>
 
   enable_mod(app, mod_id, confirm_overwrite) -> Result<ModDeploymentResult, String>
@@ -238,6 +246,8 @@ src-tauri/src/services/mod_library.rs
   读取 installed/*/manifest.json 生成已安装 MOD 列表
   使用 Acumod 内置 7-Zip 解包组件解包 .zip/.7z/.rar，再复用文件夹导入逻辑
   多候选时重新校验并只导入用户选择的一个内容根
+  盒子导入完成后调用 mod_state_sync service；完全匹配自动启用，可完整解释的部分匹配自动启用并纳入冲突顺序，其余自动保持未启用
+  观察所得部署记录删除前重新比较本地库有效内容；外部改动、归属不明或仍有等价提供者时保留文件
   调用 model_recognition service，将路径识别和 EVAM 关联结果写入当前 manifest schema 14
   调用 model_remap service，校验并保存五类改绑选择，生成有效部署文件、MRL3 贴图路径修正和 EVAM 飞翔爪绑定修正
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
@@ -257,6 +267,43 @@ src-tauri/src/services/model_remap.rs
   仅支持武器、防具、随从防具、投射器和玩家发型
   根据 manifest.modelRemaps 以类别化路径规则生成有效部署路径；防具规范 EPV 文件按三位套装号重命名，人物语音始终只读
 ```
+
+计划新增 `src-tauri/src/services/mod_state_sync.rs`，避免继续扩大 `mod_library.rs`。职责边界：
+
+- `legacy_box.rs`：解析第三方盒子结构，只返回来源模块和文件。
+- `mod_library.rs`：安装本地副本、读取和写入 manifest、执行既有启停与冲突操作。
+- `mod_state_sync.rs`：建立有效文件提供者索引、执行内容比较、推导状态与冲突有向图，返回不写文件的 `ModStateSyncPlan`。
+- `commands/mod_library.rs`：通过后台任务调用分析，再让 `mod_library` 一次提交 manifest 和冲突顺序。
+
+`ModStateSyncResult` 对前端只暴露简化结果：
+
+```text
+enabledModCount
+partiallyOverriddenModCount
+disabledModCount
+mixedConflictGroupCount
+mods[]:
+  modId
+  enabled
+  partiallyOverridden
+  message
+warnings[]
+```
+
+内部逐文件匹配类别不作为 MOD 状态暴露给前端，只用于算法和可展开诊断。
+
+状态同步测试矩阵至少覆盖：
+
+1. 单个 MOD 全部文件匹配，自动启用。
+2. 单个 MOD 部分匹配且存在缺失文件，保持未启用。
+3. B 完全匹配、A 其余文件全部被 B 覆盖，A 标记为已启用且部分被覆盖，顺序为 `B -> A`。
+4. `C -> B -> A` 多层覆盖链通过迭代分析稳定建立。
+5. A、B 同路径且内容相同，不产生冲突边。
+6. A、B 在不同路径互相覆盖形成环，两者保持未启用并报告一个混合冲突组。
+7. MOD 完全无匹配，即使所有路径都有其它提供者，仍保持未启用。
+8. 已由 Acumod 管理的启用 MOD 作为可信提供者，但内容漂移时不能解释新 MOD 的覆盖。
+9. EVAM 和 MRL3 改绑后的有效内容使用部署转换结果比较。
+10. 观察所得文件被外部修改后，禁用和卸载均保留目标文件。
 
 当前传统管理器增强命令：
 

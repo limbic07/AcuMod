@@ -129,9 +129,9 @@ src-tauri/src/commands/game.rs
   save_game_directory(app, path) -> Result<GameDirectoryStatus, String>
 ```
 
-当前 MOD 导入识别切片与下一步目标：
+当前 MOD 导入与状态同步调用链：
 
-显式接管原型中的 `previewLegacyBoxTakeover`、`applyLegacyBoxTakeover` 及对应 Rust command 仍暂时存在于代码中，但已废弃，下一切片必须成组删除。目标调用链如下：
+显式接管原型中的 UI、typed wrapper、DTO 和 Rust command 已成组移除。当前调用链如下：
 
 ```text
 src/api/modLibrary.ts
@@ -248,7 +248,7 @@ src-tauri/src/services/mod_library.rs
   多候选时重新校验并只导入用户选择的一个内容根
   盒子导入完成后调用 mod_state_sync service；完全匹配自动启用，可完整解释的部分匹配自动启用并纳入冲突顺序，其余自动保持未启用
   观察所得部署记录删除前重新比较本地库有效内容；外部改动、归属不明或仍有等价提供者时保留文件
-  调用 model_recognition service，将路径识别和 EVAM 关联结果写入当前 manifest schema 14
+  调用 model_recognition service，将路径识别和 EVAM 关联结果写入当前 manifest schema 15
   调用 model_remap service，校验并保存五类改绑选择，生成有效部署文件、MRL3 贴图路径修正和 EVAM 飞翔爪绑定修正
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
@@ -268,12 +268,12 @@ src-tauri/src/services/model_remap.rs
   根据 manifest.modelRemaps 以类别化路径规则生成有效部署路径；防具规范 EPV 文件按三位套装号重命名，人物语音始终只读
 ```
 
-计划新增 `src-tauri/src/services/mod_state_sync.rs`，避免继续扩大 `mod_library.rs`。职责边界：
+已新增 `src-tauri/src/services/mod_state_sync.rs`，避免继续扩大 `mod_library.rs`。职责边界：
 
 - `legacy_box.rs`：解析第三方盒子结构，只返回来源模块和文件。
-- `mod_library.rs`：安装本地副本、读取和写入 manifest、执行既有启停与冲突操作。
-- `mod_state_sync.rs`：建立有效文件提供者索引、执行内容比较、推导状态与冲突有向图，返回不写文件的 `ModStateSyncPlan`。
-- `commands/mod_library.rs`：通过后台任务调用分析，再让 `mod_library` 一次提交 manifest 和冲突顺序。
+- `mod_library.rs`：安装本地副本、读取和写入 manifest、使用有效部署计划比较文件、执行既有启停与冲突操作。
+- `mod_state_sync.rs`：只根据逐文件比对事实推导状态与冲突有向图，返回不写文件的 `ModStateSyncPlan`。
+- `commands/mod_library.rs`：通过后台任务调用状态同步，再让 `mod_library` 一次提交 manifest 和冲突顺序。
 
 `ModStateSyncResult` 对前端只暴露简化结果：
 
@@ -399,7 +399,7 @@ Vue UI
 1. 导入 service 根据最终 `deployRelativePath` 和库内 `.evam` 文件调用内容感知识别入口。
 2. Rust 查询编译进应用的武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪和人物语音精简索引；投射器未核实名称保留资源 ID，不按防具同号推断。
 3. 只有实际存在匹配 `wp/slg` 模型时，严格通过格式校验的 `.evam` 才作为该飞翔爪的关联防具写入 `associations`；孤立 `.evam` 不生成识别结果。
-4. 结果随 `ModInstallResult` 返回并写入当前 manifest schema 14。
+4. 结果随 `ModInstallResult` 返回并写入当前 manifest schema 15。
 5. `list_installed_mods` 读取 schema 1 至 12 的旧 manifest 时结合库内文件内容重算识别结果；武器和防具只在规范资源根目录识别，`vfx/mod` 中的同名模型只作为附属资源保留。
 6. Vue 展示模型类型、子类型、模型 ID、游戏名称和可选关联防具摘要。
 
@@ -407,7 +407,7 @@ Vue UI
 
 1. Vue 调用 `get_mod_remap_details`，只显示后端判定为可改绑的五类分组和同类型目标。
 2. 用户选择目标并点击保存后，Vue 在内部调用 `preview_mod_remap`；Rust 校验原路径、有效路径、MRL3 修正、EVAM 绑定和碰撞，不写 manifest。前端只显示必要警告，不展示技术统计。
-3. 校验通过后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 14 manifest。
+3. 校验通过后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 15 manifest。
 4. `preview_enable_mod`、`enable_mod`、冲突检测和冲突顺序应用不再直接使用原始 `files[].deployRelativePath`，而是统一调用有效部署文件生成器。
 5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；飞翔爪改绑只修改已关联 `.evam` 的绑定字段；本地库原文件保持不变。
 

@@ -17,7 +17,6 @@ import {
   type GameDirectoryStatus,
 } from "./api/game";
 import {
-  applyLegacyBoxTakeover,
   applyModRemap,
   applyConflictOrder,
   createModCategory,
@@ -38,12 +37,12 @@ import {
   moveModLibraryItem,
   openInstalledModFolder,
   previewApplyConflictOrder,
-  previewLegacyBoxTakeover,
   previewModImport,
   previewModRemap,
   previewRestoreAllMods,
   previewUninstallMod,
   renameModCategory,
+  refreshGameModStates,
   restoreAllMods,
   scanLegacyBoxMods,
   uninstallMod,
@@ -53,12 +52,11 @@ import {
   type LegacyBoxImportResult,
   type LegacyBoxMod,
   type LegacyBoxScan,
-  type LegacyBoxTakeoverPlan,
-  type LegacyBoxTakeoverResult,
   type ModConflictReport,
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
+  type ModStateSyncResult,
   type ModMetadataPatch,
   type ModRemapDetails,
   type ModelRemapGroup,
@@ -99,11 +97,8 @@ const archivePath = ref("");
 const legacyBoxPath = ref("");
 const legacyBoxScan = ref<LegacyBoxScan | null>(null);
 const legacyBoxImportResult = ref<LegacyBoxImportResult | null>(null);
-const legacyBoxTakeoverPlan = ref<LegacyBoxTakeoverPlan | null>(null);
-const legacyBoxTakeoverResult = ref<LegacyBoxTakeoverResult | null>(null);
-const legacyBoxTakeoverOrders = ref<Record<string, string[]>>({});
+const legacyBoxStateSyncResult = ref<ModStateSyncResult | null>(null);
 const selectedLegacyBoxModuleIds = ref<string[]>([]);
-const selectedLegacyBoxTakeoverModuleIds = ref<string[]>([]);
 const selectedLegacyBoxModuleId = ref("");
 const candidateImportSourcePath = ref("");
 const candidateOriginalArchivePath = ref<string | null>(null);
@@ -124,8 +119,7 @@ const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
 const isScanningLegacyBox = ref(false);
 const isImportingLegacyBox = ref(false);
-const isPreviewingLegacyBoxTakeover = ref(false);
-const isApplyingLegacyBoxTakeover = ref(false);
+const isRefreshingGameModStates = ref(false);
 const activeModAction = ref("");
 const openingModFolderId = ref("");
 const metadataSavingModId = ref("");
@@ -317,16 +311,6 @@ function legacyBoxRecordLabel(mod: LegacyBoxMod) {
   return mod.boxEnabled ? "盒子记录：已启用" : "盒子记录：未启用";
 }
 
-function legacyBoxTakeoverMismatchLabel(status: "missing" | "different") {
-  return status === "missing" ? "游戏目录缺少文件" : "游戏目录中的文件不同";
-}
-
-function resetLegacyBoxTakeoverState() {
-  legacyBoxTakeoverPlan.value = null;
-  legacyBoxTakeoverResult.value = null;
-  legacyBoxTakeoverOrders.value = {};
-}
-
 function selectAllLegacyBoxMods() {
   if (!legacyBoxScan.value) {
     return;
@@ -337,29 +321,6 @@ function selectAllLegacyBoxMods() {
 
 function clearLegacyBoxModSelection() {
   selectedLegacyBoxModuleIds.value = [];
-}
-
-function hasSameModIds(left: string[], right: string[]) {
-  return (
-    left.length === right.length &&
-    new Set(left).size === left.length &&
-    left.every((modId) => right.includes(modId))
-  );
-}
-
-function syncLegacyBoxTakeoverOrders(plan: LegacyBoxTakeoverPlan) {
-  const nextOrders: Record<string, string[]> = {};
-
-  for (const group of plan.conflictGroups) {
-    const participantIds = group.participants.map((participant) => participant.modId);
-    const currentOrder = legacyBoxTakeoverOrders.value[group.groupId];
-    nextOrders[group.groupId] =
-      currentOrder && hasSameModIds(currentOrder, participantIds)
-        ? currentOrder
-        : participantIds;
-  }
-
-  legacyBoxTakeoverOrders.value = nextOrders;
 }
 
 function formatFileSize(bytes: number) {
@@ -383,10 +344,11 @@ const selectedLegacyBoxMod = computed<LegacyBoxMod | null>(() => {
 });
 const previewedLegacyBoxFiles = computed(() => selectedLegacyBoxMod.value?.files.slice(0, 80) ?? []);
 const selectedLegacyBoxModCount = computed(() => selectedLegacyBoxModuleIds.value.length);
-const selectedLegacyBoxTakeoverModCount = computed(
-  () => selectedLegacyBoxTakeoverModuleIds.value.length,
-);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
+
+function installedModName(modId: string): string {
+  return installedMods.value.find((mod) => mod.id === modId)?.name ?? modId;
+}
 const isOperationInProgress = computed(
   () => activeOperation.value !== null && !activeOperation.value.terminal,
 );
@@ -1128,19 +1090,15 @@ async function installSelectedCandidate() {
 
 async function scanLegacyBox() {
   isScanningLegacyBox.value = true;
-  resetLegacyBoxTakeoverState();
 
   try {
     // 盒子扫描只读取其配置、info.xml 和文件内容；实际部署状态不能直接改变 Acumod 的启用状态。
     const scan = await scanLegacyBoxMods(legacyBoxPath.value);
     legacyBoxScan.value = scan;
     legacyBoxImportResult.value = null;
-    // 盒子目录中的每个模块都已有完整 files 内容，因此默认全部导入；启用与接管仍由后续独立操作决定。
+    legacyBoxStateSyncResult.value = null;
+    // 盒子目录中的每个模块都已有完整 files 内容，因此默认全部导入；启用状态由导入后的实际文件检测决定。
     selectedLegacyBoxModuleIds.value = scan.mods.map((mod) => mod.moduleId);
-    // 接管默认只针对盒子记录为启用的模块；已由 Acumod 管理的重复 MOD 不需要勾选。
-    selectedLegacyBoxTakeoverModuleIds.value = scan.mods
-      .filter((mod) => mod.boxEnabled)
-      .map((mod) => mod.moduleId);
     selectedLegacyBoxModuleId.value = scan.mods[0]?.moduleId ?? "";
     legacyBoxError.value = "";
   } catch (error) {
@@ -1157,12 +1115,13 @@ async function importSelectedLegacyBoxMods() {
 
   isImportingLegacyBox.value = true;
   try {
-    // 导入只复制盒子 files 目录到本地库；接管现有游戏部署会在下一切片单独处理。
-    legacyBoxImportResult.value = await importLegacyBoxMods(
+    // Rust 会在复制和内容关联后自动完成只读状态检测；前端不推断启用状态。
+    const result = await importLegacyBoxMods(
       legacyBoxScan.value.boxPath,
       selectedLegacyBoxModuleIds.value,
     );
-    resetLegacyBoxTakeoverState();
+    legacyBoxImportResult.value = result;
+    legacyBoxStateSyncResult.value = result.stateSync;
     legacyBoxError.value = "";
     await loadModLibraryStatus();
     await refreshModViews();
@@ -1173,102 +1132,17 @@ async function importSelectedLegacyBoxMods() {
   }
 }
 
-async function previewLegacyBoxTakeoverPlan() {
-  if (!legacyBoxScan.value || !selectedLegacyBoxTakeoverModuleIds.value.length) {
-    return;
-  }
-
-  isPreviewingLegacyBoxTakeover.value = true;
+async function refreshLegacyBoxGameModStates() {
+  isRefreshingGameModStates.value = true;
   try {
-    // 每次调整顺序后都交给 Rust 重新计算赢家并逐文件比对，前端不保存可信的接管结论。
-    const plan = await previewLegacyBoxTakeover(
-      legacyBoxScan.value.boxPath,
-      selectedLegacyBoxTakeoverModuleIds.value,
-      legacyBoxTakeoverOrders.value,
-    );
-    legacyBoxTakeoverPlan.value = plan;
-    syncLegacyBoxTakeoverOrders(plan);
-    legacyBoxTakeoverResult.value = null;
+    // 手动检测复用同一条 Rust 状态同步链路，不会复制、覆盖或删除游戏目录文件。
+    legacyBoxStateSyncResult.value = await refreshGameModStates();
     legacyBoxError.value = "";
-  } catch (error) {
-    legacyBoxError.value = userFacingError(error);
-  } finally {
-    isPreviewingLegacyBoxTakeover.value = false;
-  }
-}
-
-async function moveLegacyBoxTakeoverParticipant(
-  groupId: string,
-  modId: string,
-  direction: -1 | 1,
-) {
-  const group = legacyBoxTakeoverPlan.value?.conflictGroups.find(
-    (candidate) => candidate.groupId === groupId,
-  );
-  if (!group) {
-    return;
-  }
-
-  const currentOrder =
-    legacyBoxTakeoverOrders.value[groupId] ??
-    group.participants.map((participant) => participant.modId);
-  const currentIndex = currentOrder.indexOf(modId);
-  const nextIndex = currentIndex + direction;
-  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentOrder.length) {
-    return;
-  }
-
-  const nextOrder = [...currentOrder];
-  [nextOrder[currentIndex], nextOrder[nextIndex]] = [
-    nextOrder[nextIndex],
-    nextOrder[currentIndex],
-  ];
-  legacyBoxTakeoverOrders.value = {
-    ...legacyBoxTakeoverOrders.value,
-    [groupId]: nextOrder,
-  };
-  await previewLegacyBoxTakeoverPlan();
-}
-
-async function confirmLegacyBoxTakeover() {
-  const plan = legacyBoxTakeoverPlan.value;
-  if (
-    !legacyBoxScan.value ||
-    !plan?.canApply ||
-    !selectedLegacyBoxTakeoverModuleIds.value.length
-  ) {
-    return;
-  }
-
-  const shouldTakeOver = await requestConfirmation({
-    title: "确认接管已部署文件",
-    message: "Acumod 将记录当前已核验的游戏文件，并把所选 MOD 标记为已启用。",
-    details: [
-      "将接管 " + plan.expectedFileCount + " 个文件和 " + plan.selectedMods.length + " 个盒子 MOD。",
-      "此操作不会复制、覆盖或删除游戏目录中的任何文件。",
-      "以后停用、卸载或还原前，会先确认接管文件仍与本地库一致；外部改动过的文件会保留。",
-    ],
-    confirmLabel: "确认接管",
-  });
-  if (!shouldTakeOver) {
-    return;
-  }
-
-  isApplyingLegacyBoxTakeover.value = true;
-  try {
-    legacyBoxTakeoverResult.value = await applyLegacyBoxTakeover(
-      legacyBoxScan.value.boxPath,
-      selectedLegacyBoxTakeoverModuleIds.value,
-      legacyBoxTakeoverOrders.value,
-    );
-    legacyBoxTakeoverPlan.value = null;
-    legacyBoxError.value = "";
-    await loadModLibraryStatus();
     await refreshModViews();
   } catch (error) {
     legacyBoxError.value = userFacingError(error);
   } finally {
-    isApplyingLegacyBoxTakeover.value = false;
+    isRefreshingGameModStates.value = false;
   }
 }
 
@@ -1828,7 +1702,7 @@ onBeforeUnmount(() => {
         <div class="section-title-row">
           <div>
             <h3>从狩技 MOD 盒子导入</h3>
-            <p class="hint">扫描只读取盒子记录和游戏文件；导入仅复制到本地 MOD 库，不会接管或改写游戏目录。</p>
+            <p class="hint">扫描和状态检测只读取游戏文件；导入保存本地副本后会自动判断实际启用状态，不会改写游戏目录。</p>
           </div>
         </div>
 
@@ -1900,6 +1774,14 @@ onBeforeUnmount(() => {
               >
                 {{ isImportingLegacyBox ? "导入中" : "导入到 MOD 库" }}
               </button>
+              <button
+                type="button"
+                class="secondary-button"
+                :disabled="isImportingLegacyBox || isRefreshingGameModStates"
+                @click="refreshLegacyBoxGameModStates"
+              >
+                {{ isRefreshingGameModStates ? "检测中" : "检测游戏实际状态" }}
+              </button>
             </div>
           </div>
 
@@ -1908,10 +1790,9 @@ onBeforeUnmount(() => {
               <thead>
                 <tr>
                   <th scope="col">导入</th>
-                  <th scope="col">接管</th>
                   <th scope="col">名称</th>
                   <th scope="col">盒子记录</th>
-                  <th scope="col">游戏目录实际状态</th>
+                  <th scope="col">初步文件比对</th>
                   <th scope="col">文件</th>
                 </tr>
               </thead>
@@ -1929,16 +1810,6 @@ onBeforeUnmount(() => {
                       type="checkbox"
                       :value="mod.moduleId"
                       :aria-label="'选择 ' + mod.name"
-                    />
-                  </td>
-                  <td @click.stop>
-                    <input
-                      v-model="selectedLegacyBoxTakeoverModuleIds"
-                      class="legacy-box-checkbox"
-                      type="checkbox"
-                      :value="mod.moduleId"
-                      :aria-label="'接管 ' + mod.name"
-                      @change="resetLegacyBoxTakeoverState"
                     />
                   </td>
                   <td>
@@ -1988,149 +1859,40 @@ onBeforeUnmount(() => {
           </ul>
         </div>
 
-        <div v-if="legacyBoxScan" class="preview-block legacy-box-takeover">
-          <div class="section-title-row">
+        <div v-if="legacyBoxStateSyncResult" class="preview-block">
+          <h3>游戏实际状态</h3>
+          <p class="hint">{{ legacyBoxStateSyncResult.message }}</p>
+          <dl class="facts compact-facts">
             <div>
-              <h3>接管已部署文件</h3>
-              <p class="hint">
-                已选择 {{ selectedLegacyBoxTakeoverModCount }} 个盒子 MOD 参与接管。已由 Acumod 管理的重复 MOD 不需要勾选。
-              </p>
+              <dt>已启用</dt>
+              <dd>{{ legacyBoxStateSyncResult.enabledModCount }} 个</dd>
             </div>
-            <button
-              type="button"
-              class="secondary-button"
-              :disabled="isPreviewingLegacyBoxTakeover || isApplyingLegacyBoxTakeover || !selectedLegacyBoxTakeoverModCount"
-              @click="previewLegacyBoxTakeoverPlan"
-            >
-              {{ isPreviewingLegacyBoxTakeover ? "预检中" : "预检接管" }}
-            </button>
-          </div>
-
-          <template v-if="legacyBoxTakeoverPlan">
-            <p
-              class="takeover-summary"
-              :class="{ success: legacyBoxTakeoverPlan.canApply, warning: !legacyBoxTakeoverPlan.canApply }"
-            >
-              {{ legacyBoxTakeoverPlan.message }}
-            </p>
-
-            <dl class="facts compact-facts takeover-facts">
-              <div>
-                <dt>预期文件</dt>
-                <dd>{{ legacyBoxTakeoverPlan.expectedFileCount }} 个</dd>
-              </div>
-              <div>
-                <dt>已核验</dt>
-                <dd>{{ legacyBoxTakeoverPlan.matchingFileCount }} 个</dd>
-              </div>
-              <div>
-                <dt>缺少</dt>
-                <dd>{{ legacyBoxTakeoverPlan.missingFileCount }} 个</dd>
-              </div>
-              <div>
-                <dt>不同</dt>
-                <dd>{{ legacyBoxTakeoverPlan.differentFileCount }} 个</dd>
-              </div>
-            </dl>
-
-            <ul class="takeover-mod-list">
-              <li
-                v-for="mod in legacyBoxTakeoverPlan.selectedMods"
-                :key="mod.moduleId"
-                :class="{ warning: !mod.isReady }"
-              >
-                <strong>{{ mod.name }}</strong>
-                <span>{{ mod.message }}</span>
-              </li>
-            </ul>
-
-            <div v-if="legacyBoxTakeoverPlan.conflictGroups.length" class="takeover-conflicts">
-              <h4>冲突优先级</h4>
-              <p class="hint">最上方的 MOD 最后覆盖。调整后会重新核验游戏目录，不会立即修改文件。</p>
-              <ol class="takeover-conflict-list">
-                <li v-for="group in legacyBoxTakeoverPlan.conflictGroups" :key="group.groupId">
-                  <div class="takeover-conflict-heading">
-                    <strong>{{ group.conflictFileCount }} 个冲突文件</strong>
-                  </div>
-                  <ol class="takeover-participant-list">
-                    <li
-                      v-for="(participant, index) in group.participants"
-                      :key="participant.modId"
-                      class="takeover-participant"
-                    >
-                      <span class="takeover-order">{{ index + 1 }}</span>
-                      <strong>{{ participant.name }}</strong>
-                      <span v-if="participant.isSelectedFromBox" class="takeover-selected">盒子 MOD</span>
-                      <span v-else class="takeover-selected neutral">已有启用 MOD</span>
-                      <div class="takeover-order-actions">
-                        <button
-                          type="button"
-                          class="icon-button takeover-order-button"
-                          title="上移优先级"
-                          aria-label="上移优先级"
-                          :disabled="isPreviewingLegacyBoxTakeover || isApplyingLegacyBoxTakeover || index === 0"
-                          @click="moveLegacyBoxTakeoverParticipant(group.groupId, participant.modId, -1)"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          class="icon-button takeover-order-button"
-                          title="下移优先级"
-                          aria-label="下移优先级"
-                          :disabled="isPreviewingLegacyBoxTakeover || isApplyingLegacyBoxTakeover || index === group.participants.length - 1"
-                          @click="moveLegacyBoxTakeoverParticipant(group.groupId, participant.modId, 1)"
-                        >
-                          ↓
-                        </button>
-                      </div>
-                    </li>
-                  </ol>
-                </li>
-              </ol>
+            <div>
+              <dt>部分被覆盖</dt>
+              <dd>{{ legacyBoxStateSyncResult.partiallyOverriddenModCount }} 个</dd>
             </div>
-
-            <div v-if="legacyBoxTakeoverPlan.mismatches.length" class="takeover-mismatches">
-              <h4>未通过核验的文件</h4>
-              <ul class="takeover-mismatch-list">
-                <li
-                  v-for="mismatch in legacyBoxTakeoverPlan.mismatches"
-                  :key="mismatch.deployRelativePath"
-                >
-                  <strong>{{ mismatch.deployRelativePath }}</strong>
-                  <span>
-                    {{ legacyBoxTakeoverMismatchLabel(mismatch.status) }}，预期来自 {{ mismatch.expectedModName }}
-                  </span>
-                </li>
-              </ul>
-              <p
-                v-if="legacyBoxTakeoverPlan.missingFileCount + legacyBoxTakeoverPlan.differentFileCount > legacyBoxTakeoverPlan.mismatches.length"
-                class="hint"
-              >
-                当前仅显示前 {{ legacyBoxTakeoverPlan.mismatches.length }} 项。
-              </p>
+            <div>
+              <dt>未启用</dt>
+              <dd>{{ legacyBoxStateSyncResult.disabledModCount }} 个</dd>
             </div>
-
-            <ul v-if="legacyBoxTakeoverPlan.warnings.length" class="compact-list">
-              <li v-for="warning in legacyBoxTakeoverPlan.warnings" :key="warning">
-                <span>{{ warning }}</span>
-              </li>
-            </ul>
-
-            <div v-if="legacyBoxTakeoverPlan.canApply" class="section-actions takeover-apply-actions">
-              <button
-                type="button"
-                :disabled="isApplyingLegacyBoxTakeover || isPreviewingLegacyBoxTakeover"
-                @click="confirmLegacyBoxTakeover"
-              >
-                {{ isApplyingLegacyBoxTakeover ? "接管中" : "确认接管" }}
-              </button>
+            <div>
+              <dt>混合覆盖</dt>
+              <dd>{{ legacyBoxStateSyncResult.mixedConflictGroupCount }} 组</dd>
             </div>
-          </template>
-
-          <p v-if="legacyBoxTakeoverResult" class="takeover-summary success">
-            {{ legacyBoxTakeoverResult.message }}
-          </p>
+          </dl>
+          <ul v-if="legacyBoxStateSyncResult.mods.length" class="compact-list">
+            <li v-for="mod in legacyBoxStateSyncResult.mods" :key="mod.modId">
+              <strong>
+                {{ installedModName(mod.modId) }} · {{ mod.enabled ? "已启用" : "未启用" }}
+              </strong>
+              <span>{{ mod.message }}</span>
+            </li>
+          </ul>
+          <ul v-if="legacyBoxStateSyncResult.warnings.length" class="compact-list">
+            <li v-for="warning in legacyBoxStateSyncResult.warnings" :key="warning">
+              <span>{{ warning }}</span>
+            </li>
+          </ul>
         </div>
 
         <div v-if="legacyBoxScan?.warnings.length" class="preview-block">
@@ -3125,158 +2887,6 @@ dd {
   overflow: auto;
 }
 
-.legacy-box-takeover {
-  margin-top: 26px;
-  padding-top: 20px;
-  border-top: 1px solid #dfe8e4;
-}
-
-.takeover-summary {
-  margin: 0;
-  padding: 10px 12px;
-  border-left: 3px solid #d5b269;
-  color: #6e4905;
-  background: #fff9ed;
-  line-height: 1.55;
-}
-
-.takeover-summary.success {
-  border-left-color: #52a576;
-  color: #17613f;
-  background: #eff8f2;
-}
-
-.takeover-facts {
-  margin-top: 0;
-}
-
-.takeover-facts div {
-  grid-template-columns: 112px minmax(0, 1fr);
-}
-
-.takeover-mod-list,
-.takeover-conflict-list,
-.takeover-participant-list,
-.takeover-mismatch-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.takeover-mod-list li {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid #edf1f0;
-  border-radius: 6px;
-  background: #fbfdfc;
-}
-
-.takeover-mod-list li.warning {
-  border-color: #efd39a;
-  background: #fffaf0;
-}
-
-.takeover-mod-list strong,
-.takeover-mismatch-list strong {
-  min-width: 0;
-  color: #17211f;
-  overflow-wrap: anywhere;
-}
-
-.takeover-mod-list span,
-.takeover-mismatch-list span {
-  min-width: 0;
-  color: #52645f;
-  overflow-wrap: anywhere;
-}
-
-.takeover-conflicts,
-.takeover-mismatches {
-  display: grid;
-  gap: 10px;
-}
-
-.takeover-conflicts h4,
-.takeover-mismatches h4 {
-  margin: 0;
-  color: #17211f;
-  font-size: 0.9rem;
-  line-height: 1.35;
-}
-
-.takeover-conflict-list > li {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #dfe8e4;
-  border-radius: 6px;
-  background: #fbfdfc;
-}
-
-.takeover-conflict-heading {
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-}
-
-.takeover-participant-list {
-  gap: 0;
-  border-top: 1px solid #edf1f0;
-}
-
-.takeover-participant {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 44px;
-  padding: 8px 0;
-  border-bottom: 1px solid #edf1f0;
-}
-
-.takeover-participant:last-child {
-  border-bottom: 0;
-}
-
-.takeover-order {
-  color: #61756f;
-  font-size: 0.84rem;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-.takeover-participant strong {
-  min-width: 0;
-  color: #17211f;
-  overflow-wrap: anywhere;
-}
-
-.takeover-selected {
-  padding: 3px 7px;
-  border: 1px solid #b7d9c5;
-  border-radius: 4px;
-  color: #17613f;
-  background: #eff8f2;
-  font-size: 0.76rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.takeover-selected.neutral {
-  border-color: #d2ddda;
-  color: #52645f;
-  background: #f5f8f7;
-}
-
-.takeover-order-actions {
-  display: flex;
-  gap: 6px;
-}
-
 .icon-button {
   display: grid;
   width: 32px;
@@ -3287,29 +2897,6 @@ dd {
   color: #24745b;
   background: #ffffff;
   line-height: 1;
-}
-
-.takeover-order-button {
-  font-size: 1rem;
-}
-
-.takeover-mismatch-list {
-  max-height: 260px;
-  overflow: auto;
-}
-
-.takeover-mismatch-list li {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
-  gap: 12px;
-  padding: 9px 12px;
-  border: 1px solid #f0dfbb;
-  border-radius: 6px;
-  background: #fffaf0;
-}
-
-.takeover-apply-actions {
-  margin-top: 4px;
 }
 
 .model-replacement-list li {
@@ -3845,9 +3432,7 @@ button.danger:hover {
   .notice,
   .file-preview li,
   .compact-list li,
-  .mod-list > li,
-  .takeover-mod-list li,
-  .takeover-mismatch-list li {
+  .mod-list > li {
     grid-template-columns: 1fr;
   }
 
@@ -3877,14 +3462,6 @@ button.danger:hover {
     gap: 4px;
   }
 
-  .takeover-participant {
-    grid-template-columns: 28px minmax(0, 1fr) auto;
-  }
-
-  .takeover-order-actions {
-    grid-column: 2 / -1;
-    justify-content: flex-start;
-  }
 }
 </style>
 

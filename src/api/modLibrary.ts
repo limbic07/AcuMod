@@ -141,55 +141,24 @@ export interface LegacyBoxImportResult {
   importedCount: number;
   alreadyInstalledCount: number;
   failedCount: number;
+  stateSync: ModStateSyncResult;
   message: string;
 }
 
-export interface LegacyBoxTakeoverMod {
-  moduleId: string;
-  name: string;
-  modId: string | null;
-  isReady: boolean;
-  message: string;
-}
-
-export interface LegacyBoxTakeoverParticipant {
+export interface ModStateSyncModResult {
   modId: string;
-  name: string;
-  isSelectedFromBox: boolean;
-  order: number;
-}
-
-export interface LegacyBoxTakeoverConflictGroup {
-  groupId: string;
-  conflictFileCount: number;
-  participants: LegacyBoxTakeoverParticipant[];
-}
-
-export interface LegacyBoxTakeoverMismatch {
-  deployRelativePath: string;
-  expectedModName: string;
-  status: "missing" | "different";
-}
-
-export interface LegacyBoxTakeoverPlan {
-  canApply: boolean;
-  boxGamePath: string | null;
-  acumodGamePath: string;
-  selectedMods: LegacyBoxTakeoverMod[];
-  expectedFileCount: number;
-  matchingFileCount: number;
-  missingFileCount: number;
-  differentFileCount: number;
-  conflictGroups: LegacyBoxTakeoverConflictGroup[];
-  mismatches: LegacyBoxTakeoverMismatch[];
-  warnings: string[];
+  enabled: boolean;
+  partiallyOverridden: boolean;
   message: string;
 }
 
-export interface LegacyBoxTakeoverResult {
-  adoptedModCount: number;
-  recordedFileCount: number;
-  conflictGroupCount: number;
+export interface ModStateSyncResult {
+  enabledModCount: number;
+  partiallyOverriddenModCount: number;
+  disabledModCount: number;
+  mixedConflictGroupCount: number;
+  mods: ModStateSyncModResult[];
+  warnings: string[];
   message: string;
 }
 
@@ -206,6 +175,7 @@ export interface InstalledModSummary {
   fileCount: number;
   files: InstalledModFile[];
   enabled: boolean;
+  partiallyOverridden: boolean;
   deployRoot: string;
   detectionMethod: string;
   installedAtUnixSeconds: number;
@@ -312,6 +282,7 @@ export interface DeployedModFile {
   deployRelativePath: string;
   deployedPath: string;
   deployedAtUnixSeconds: number;
+  deploymentOrigin: "copied" | "observed";
 }
 
 export interface ModDeploymentResult {
@@ -630,29 +601,9 @@ export function importLegacyBoxMods(
   });
 }
 
-// 接管预检和确认接管都会在 Rust 端重新核验，避免前端缓存的文件状态被当成最终依据。
-export function previewLegacyBoxTakeover(
-  boxPath: string,
-  moduleIds: string[],
-  conflictOrders: Record<string, string[]>,
-): Promise<LegacyBoxTakeoverPlan> {
-  return invoke<LegacyBoxTakeoverPlan>("preview_legacy_box_takeover", {
-    boxPath,
-    moduleIds,
-    conflictOrders,
-  });
-}
-
-export function applyLegacyBoxTakeover(
-  boxPath: string,
-  moduleIds: string[],
-  conflictOrders: Record<string, string[]>,
-): Promise<LegacyBoxTakeoverResult> {
-  return invoke<LegacyBoxTakeoverResult>("apply_legacy_box_takeover", {
-    boxPath,
-    moduleIds,
-    conflictOrders,
-  });
+// 状态同步只比较当前游戏目录并写入本地元数据，绝不会部署、覆盖或删除游戏文件。
+export function refreshGameModStates(): Promise<ModStateSyncResult> {
+  return invoke<ModStateSyncResult>("refresh_game_mod_states");
 }
 
 export function previewEnableMod(modId: string): Promise<ModDeploymentPlan> {

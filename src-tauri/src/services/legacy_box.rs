@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::operations::OperationReporter;
 
+use super::mod_state_sync::ModStateSyncResult;
+
 const LEGACY_GAME_SECTION: &str = "582010";
 const LEGACY_MODS_DIRECTORY: &str = "Mods_582010";
 const MHW_EXECUTABLE: &str = "MonsterHunterWorld.exe";
@@ -86,6 +88,7 @@ pub struct LegacyBoxImportResult {
     pub imported_count: usize,
     pub already_installed_count: usize,
     pub failed_count: usize,
+    pub state_sync: ModStateSyncResult,
     pub message: String,
 }
 
@@ -109,15 +112,11 @@ struct LegacyBoxPaths {
 }
 
 pub(crate) struct LegacyBoxImportSource {
+    pub(crate) box_path: PathBuf,
     pub(crate) module_id: String,
     pub(crate) name: String,
     pub(crate) module_path: PathBuf,
     pub(crate) files_path: PathBuf,
-}
-
-pub(crate) struct LegacyBoxTakeoverSources {
-    pub(crate) box_game_path: Option<PathBuf>,
-    pub(crate) sources: Vec<LegacyBoxImportSource>,
 }
 
 struct CollectedLegacyFile {
@@ -209,19 +208,6 @@ pub(crate) fn load_legacy_box_import_sources(
     load_import_sources_from_paths(&paths, module_ids)
 }
 
-/// 读取接管预检需要的盒子游戏目录与已选择模块，不扫描或修改游戏文件。
-pub(crate) fn load_legacy_box_takeover_sources(
-    raw_box_path: &str,
-    module_ids: &[String],
-) -> Result<LegacyBoxTakeoverSources, String> {
-    let paths = resolve_legacy_box_paths(raw_box_path)?;
-    let sources = load_import_sources_from_paths(&paths, module_ids)?;
-    Ok(LegacyBoxTakeoverSources {
-        box_game_path: paths.game_path,
-        sources,
-    })
-}
-
 fn load_import_sources_from_paths(
     paths: &LegacyBoxPaths,
     module_ids: &[String],
@@ -247,6 +233,7 @@ fn load_import_sources_from_paths(
         }
 
         sources.push(LegacyBoxImportSource {
+            box_path: paths.box_path.clone(),
             module_id: module_id.clone(),
             name,
             module_path,
@@ -263,6 +250,10 @@ fn load_import_sources_from_paths(
 
 pub(crate) fn import_source_module_id(source: &LegacyBoxImportSource) -> &str {
     &source.module_id
+}
+
+pub(crate) fn import_source_box_path(source: &LegacyBoxImportSource) -> &Path {
+    &source.box_path
 }
 
 pub(crate) fn import_source_name(source: &LegacyBoxImportSource) -> &str {

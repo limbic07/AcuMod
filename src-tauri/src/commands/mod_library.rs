@@ -2,13 +2,13 @@ use crate::operations::run_blocking_operation;
 use crate::services::legacy_box::{self, LegacyBoxImportResult, LegacyBoxScan};
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
-    LegacyBoxTakeoverPlan, LegacyBoxTakeoverResult, ModArchiveImportOutcome, ModCategory,
-    ModCategoryDeleteResult, ModCategoryList, ModConflictMoveResult, ModConflictReport,
-    ModDeploymentPlan, ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult,
-    ModLibraryStatus, ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult,
-    ModRemapDetails, ModRemapPlan, ModUninstallPlan, ModUninstallResult, ModWorkspaceSnapshot,
-    RestoreAllPlan, RestoreAllResult,
+    ModArchiveImportOutcome, ModCategory, ModCategoryDeleteResult, ModCategoryList,
+    ModConflictMoveResult, ModConflictReport, ModDeploymentPlan, ModDeploymentResult,
+    ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus, ModMetadataPatch,
+    ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan, ModUninstallPlan,
+    ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
 };
+use crate::services::mod_state_sync::ModStateSyncResult;
 
 /// 扫描狩技 MOD 盒子记录与其游戏目录中的实际文件状态。
 #[tauri::command]
@@ -28,7 +28,7 @@ pub async fn scan_legacy_box_mods(
     .await
 }
 
-/// 将狩技 MOD 盒子的所选 MOD 复制到 Acumod 本地库，初始不接管游戏目录。
+/// 将狩技 MOD 盒子的所选 MOD 复制到 Acumod 本地库，并自动检测实际游戏状态。
 #[tauri::command]
 pub async fn import_legacy_box_mods(
     app: tauri::AppHandle,
@@ -52,54 +52,15 @@ pub async fn import_legacy_box_mods(
     .await
 }
 
-/// 预检狩技 MOD 盒子的现有游戏部署，并返回可确认的冲突优先级与文件核验结果。
+/// 重新检测已关联狩技 MOD 盒子模块在当前游戏目录中的实际状态。
 #[tauri::command]
-pub async fn preview_legacy_box_takeover(
-    app: tauri::AppHandle,
-    box_path: String,
-    module_ids: Vec<String>,
-    conflict_orders: std::collections::HashMap<String, Vec<String>>,
-) -> Result<LegacyBoxTakeoverPlan, String> {
+pub async fn refresh_game_mod_states(app: tauri::AppHandle) -> Result<ModStateSyncResult, String> {
     let worker_app = app.clone();
     run_blocking_operation(
         app,
-        "legacyBoxTakeoverPreview",
-        "正在预检狩技 MOD 盒子部署",
-        move |progress| {
-            mod_library::preview_legacy_box_takeover_with_progress(
-                &worker_app,
-                box_path,
-                module_ids,
-                conflict_orders,
-                &progress,
-            )
-        },
-    )
-    .await
-}
-
-/// 在预检通过后接管狩技 MOD 盒子的现有部署，只写入 Acumod 管理状态。
-#[tauri::command]
-pub async fn apply_legacy_box_takeover(
-    app: tauri::AppHandle,
-    box_path: String,
-    module_ids: Vec<String>,
-    conflict_orders: std::collections::HashMap<String, Vec<String>>,
-) -> Result<LegacyBoxTakeoverResult, String> {
-    let worker_app = app.clone();
-    run_blocking_operation(
-        app,
-        "legacyBoxTakeoverApply",
-        "正在接管狩技 MOD 盒子部署",
-        move |progress| {
-            mod_library::apply_legacy_box_takeover_with_progress(
-                &worker_app,
-                box_path,
-                module_ids,
-                conflict_orders,
-                &progress,
-            )
-        },
+        "refreshGameModStates",
+        "正在检测游戏实际 MOD 状态",
+        move |progress| mod_library::refresh_game_mod_states_with_progress(&worker_app, &progress),
     )
     .await
 }

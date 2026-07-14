@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env, fs,
     io::{BufReader, ErrorKind, Read},
     path::{Component, Path, PathBuf},
@@ -18,6 +18,10 @@ use crate::operations::OperationReporter;
 use crate::storage::config;
 
 use super::legacy_box::{self, LegacyBoxImportItem, LegacyBoxImportResult};
+use super::mod_state_sync::{
+    self, ModStateSyncFile, ModStateSyncInput, ModStateSyncPlan, ModStateSyncPriorityEdge,
+    ModStateSyncResult,
+};
 use super::model_recognition::{
     recognize_model_replacements, recognize_model_replacements_with_evam, EvamRecognitionFile,
     ModelReplacement,
@@ -29,7 +33,7 @@ use super::model_remap::{
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 14;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 15;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 13;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
 const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 1;
@@ -134,6 +138,8 @@ pub struct InstalledModSummary {
     pub file_count: usize,
     pub files: Vec<InstalledModFile>,
     pub enabled: bool,
+    /// 已启用时的附加提示，不构成第三种 MOD 状态。
+    pub partially_overridden: bool,
     pub deploy_root: String,
     pub detection_method: String,
     pub installed_at_unix_seconds: u64,
@@ -241,76 +247,25 @@ pub struct DeployedModFile {
     pub deploy_relative_path: String,
     pub deployed_path: String,
     pub deployed_at_unix_seconds: u64,
-    /// 接管而非复制产生的记录需要在删除前重新比对内容，避免删除之后被外部修改的文件。
+    /// `observed` 表示由状态检测记录，删除前必须重新比对游戏目录内容。
     #[serde(default)]
+    pub deployment_origin: DeploymentOrigin,
+    /// 兼容上一版接管原型写出的字段。保存新清单时会迁移为 `deploymentOrigin`。
+    #[serde(default, skip_serializing)]
     pub is_adopted: bool,
 }
 
-/// 接管预检中一项狩技盒子 MOD 与本地库副本的关联状态。
-#[derive(Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LegacyBoxTakeoverMod {
-    pub module_id: String,
-    pub name: String,
-    pub mod_id: Option<String>,
-    pub is_ready: bool,
-    pub message: String,
+pub enum DeploymentOrigin {
+    Copied,
+    Observed,
 }
 
-/// 接管预检中可确认的一个冲突优先级参与者。
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyBoxTakeoverParticipant {
-    pub mod_id: String,
-    pub name: String,
-    pub is_selected_from_box: bool,
-    pub order: usize,
-}
-
-/// 接管预检中与所选盒子 MOD 有关的一组冲突顺序。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyBoxTakeoverConflictGroup {
-    pub group_id: String,
-    pub conflict_file_count: usize,
-    pub participants: Vec<LegacyBoxTakeoverParticipant>,
-}
-
-/// 一个不符合接管预期的游戏目录文件；只返回有限样本避免把大文件列表重复传回前端。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyBoxTakeoverMismatch {
-    pub deploy_relative_path: String,
-    pub expected_mod_name: String,
-    pub status: String,
-}
-
-/// 接管已部署文件前的完整预检结果。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyBoxTakeoverPlan {
-    pub can_apply: bool,
-    pub box_game_path: Option<String>,
-    pub acumod_game_path: String,
-    pub selected_mods: Vec<LegacyBoxTakeoverMod>,
-    pub expected_file_count: usize,
-    pub matching_file_count: usize,
-    pub missing_file_count: usize,
-    pub different_file_count: usize,
-    pub conflict_groups: Vec<LegacyBoxTakeoverConflictGroup>,
-    pub mismatches: Vec<LegacyBoxTakeoverMismatch>,
-    pub warnings: Vec<String>,
-    pub message: String,
-}
-
-/// 接管成功后写入的 Acumod 管理状态摘要。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyBoxTakeoverResult {
-    pub adopted_mod_count: usize,
-    pub recorded_file_count: usize,
-    pub conflict_group_count: usize,
-    pub message: String,
+impl Default for DeploymentOrigin {
+    fn default() -> Self {
+        Self::Copied
+    }
 }
 
 #[derive(Serialize)]
@@ -527,11 +482,17 @@ struct InstalledModManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     category_override: Option<String>,
     source_path: String,
+    /// 第三方盒子模块的稳定来源别名，不参与用户可见名称或普通同名判断。
+    #[serde(default)]
+    legacy_sources: Vec<LegacyBoxSourceRef>,
     content_root_path: String,
     detection_method: String,
     deploy_root: String,
     installed_at_unix_seconds: u64,
     enabled: bool,
+    /// 已启用 MOD 的辅助提示；仅由游戏目录状态同步维护。
+    #[serde(default)]
+    partially_overridden: bool,
     file_count: usize,
     files: Vec<InstalledModFile>,
     #[serde(default)]
@@ -540,6 +501,13 @@ struct InstalledModManifest {
     model_remaps: Vec<ModelRemapSelection>,
     #[serde(default)]
     deployed_files: Vec<DeployedModFile>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LegacyBoxSourceRef {
+    box_path: String,
+    module_id: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -888,7 +856,7 @@ pub fn install_mod_from_candidate_with_progress(
     }
 }
 
-/// 将狩技 MOD 盒子中的所选模块复制到 Acumod 本地库，不修改游戏目录或盒子目录。
+/// 将狩技 MOD 盒子中的所选模块复制到 Acumod 本地库，并自动检测游戏目录实际状态。
 pub fn import_legacy_box_mods_with_progress(
     app: &tauri::AppHandle,
     box_path: String,
@@ -912,38 +880,70 @@ pub fn import_legacy_box_mods_with_progress(
         );
         let module_id = legacy_box::import_source_module_id(&source).to_string();
         let name = legacy_box::import_source_name(&source).to_string();
-        // 仍复用普通文件夹导入：它会重新识别 nativePC、生成模型识别与初始分类。
-        let result = install_mod_from_folder_into_with_options_and_progress(
-            path_to_string(legacy_box::import_source_files_path(&source)),
-            false,
-            &paths.installed_path,
-            Some(name.clone()),
-            Some(path_to_string(legacy_box::import_source_module_path(
-                &source,
-            ))),
-            progress,
-        );
+        let source_ref = LegacyBoxSourceRef {
+            box_path: path_to_string(legacy_box::import_source_box_path(&source)),
+            module_id: module_id.clone(),
+        };
+        // 盒子模块先按已保存来源、再按完整内容关联。这样同名但内容不同的 MOD 不会被误吞掉。
+        let existing =
+            match find_installed_mod_by_legacy_source(&paths.installed_path, &source_ref)? {
+                Some(existing) => Some(existing),
+                None => find_installed_mod_by_content(
+                    &paths.installed_path,
+                    legacy_box::import_source_files_path(&source),
+                    progress,
+                )?,
+            };
+        let result = match existing {
+            Some(result) => Ok(result),
+            None => install_mod_from_folder_into_with_options_and_progress_allow_same_name(
+                path_to_string(legacy_box::import_source_files_path(&source)),
+                false,
+                &paths.installed_path,
+                Some(name.clone()),
+                Some(path_to_string(legacy_box::import_source_module_path(
+                    &source,
+                ))),
+                progress,
+            ),
+        };
 
         match result {
-            Ok(result) if result.already_installed => {
-                already_installed_count += 1;
-                items.push(LegacyBoxImportItem {
-                    module_id,
-                    name,
-                    status: "alreadyInstalled".to_string(),
-                    mod_id: Some(result.mod_id),
-                    message: "本地 MOD 库中已有同名 MOD，未重复导入。".to_string(),
-                });
-            }
             Ok(result) => {
-                imported_count += 1;
-                items.push(LegacyBoxImportItem {
-                    module_id,
-                    name,
-                    status: "imported".to_string(),
-                    mod_id: Some(result.mod_id),
-                    message: "已复制到 Acumod 本地 MOD 库，初始保持未启用。".to_string(),
-                });
+                if let Err(error) =
+                    associate_legacy_box_source(&paths.installed_path, &result.mod_id, source_ref)
+                {
+                    items.push(LegacyBoxImportItem {
+                        module_id,
+                        name,
+                        status: "failed".to_string(),
+                        mod_id: Some(result.mod_id),
+                        message: format!("本地副本已存在，但无法保存盒子来源关联：{error}"),
+                    });
+                    progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
+                    continue;
+                }
+
+                if result.already_installed {
+                    already_installed_count += 1;
+                    items.push(LegacyBoxImportItem {
+                        module_id,
+                        name,
+                        status: "alreadyInstalled".to_string(),
+                        mod_id: Some(result.mod_id),
+                        message: "已关联到内容相同的本地 MOD，未重复保存文件。".to_string(),
+                    });
+                } else {
+                    imported_count += 1;
+                    items.push(LegacyBoxImportItem {
+                        module_id,
+                        name,
+                        status: "imported".to_string(),
+                        mod_id: Some(result.mod_id),
+                        message: "已复制到 Acumod 本地 MOD 库，正在检测游戏目录中的实际状态。"
+                            .to_string(),
+                    });
+                }
             }
             Err(error) => items.push(LegacyBoxImportItem {
                 module_id,
@@ -956,469 +956,387 @@ pub fn import_legacy_box_mods_with_progress(
         progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
     }
 
+    let state_sync = match resolve_game_root(app) {
+        Ok(game_root) => match synchronize_legacy_mod_states_with_progress(
+            &paths.installed_path,
+            &game_root,
+            progress,
+        ) {
+            Ok(result) => result,
+            // 本地副本已经完成时，不应因只读状态检测失败而把整个导入判为失败。
+            // 用户仍可在修复游戏目录或本地数据后手动重新检测。
+            Err(error) => ModStateSyncResult::unavailable(format!(
+                "MOD 已导入本地库，但状态同步未完成：{error}"
+            )),
+        },
+        Err(error) => ModStateSyncResult::unavailable(format!(
+            "MOD 已导入本地库，但尚未检测游戏状态：{error}"
+        )),
+    };
+
     let failed_count = items.iter().filter(|item| item.status == "failed").count();
     let message = format!(
-        "狩技 MOD 盒子导入完成：新增 {imported_count} 个，已存在 {already_installed_count} 个，失败 {failed_count} 个。"
+        "狩技 MOD 盒子导入完成：新增 {imported_count} 个，已关联 {already_installed_count} 个，失败 {failed_count} 个。{}",
+        state_sync.message
     );
     Ok(LegacyBoxImportResult {
         items,
         imported_count,
         already_installed_count,
         failed_count,
+        state_sync,
         message,
     })
 }
 
-/// 预检狩技 MOD 盒子的现有游戏部署，生成接管所需的最终文件与冲突顺序。
-pub fn preview_legacy_box_takeover_with_progress(
+/// 重新比较已关联狩技 MOD 盒子的本地 MOD 与当前游戏目录；不会写入游戏文件。
+pub fn refresh_game_mod_states_with_progress(
     app: &tauri::AppHandle,
-    box_path: String,
-    module_ids: Vec<String>,
-    conflict_orders: HashMap<String, Vec<String>>,
     progress: &OperationReporter,
-) -> Result<LegacyBoxTakeoverPlan, String> {
+) -> Result<ModStateSyncResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    let prepared = prepare_legacy_box_takeover(
-        &paths.installed_path,
-        &game_root,
-        &box_path,
-        &module_ids,
-        &conflict_orders,
-        progress,
-    )?;
-    Ok(prepared.plan)
+    synchronize_legacy_mod_states_with_progress(&paths.installed_path, &game_root, progress)
 }
 
-/// 接管已核验的狩技 MOD 盒子部署，只写入 Acumod 管理记录，不复制或删除游戏文件。
-pub fn apply_legacy_box_takeover_with_progress(
-    app: &tauri::AppHandle,
-    box_path: String,
-    module_ids: Vec<String>,
-    conflict_orders: HashMap<String, Vec<String>>,
+fn synchronize_legacy_mod_states_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
     progress: &OperationReporter,
-) -> Result<LegacyBoxTakeoverResult, String> {
-    let paths = library_paths(app)?;
-    ensure_library_directories(&paths)?;
-    let game_root = resolve_game_root(app)?;
-    let mut prepared = prepare_legacy_box_takeover(
-        &paths.installed_path,
-        &game_root,
-        &box_path,
-        &module_ids,
-        &conflict_orders,
-        progress,
-    )?;
+) -> Result<ModStateSyncResult, String> {
+    progress.report("正在读取可检测的 MOD", 0, None, None);
+    let mut contexts = load_all_installed_manifests_with_progress(installed_root, progress)?;
+    let mut warnings = Vec::new();
+    let mut inputs = Vec::new();
 
-    if !prepared.plan.can_apply {
-        return Err(format!("当前部署不能接管：{}", prepared.plan.message));
-    }
+    for context in &contexts {
+        let is_trusted_enabled = context.manifest.enabled
+            && context
+                .manifest
+                .deployed_files
+                .iter()
+                .any(is_copied_deployment_file);
+        let is_candidate = !context.manifest.legacy_sources.is_empty() && !is_trusted_enabled;
+        if !is_trusted_enabled && !is_candidate {
+            continue;
+        }
 
-    let deployed_at = unix_seconds_now()?;
-    for context in prepared
-        .contexts
-        .iter_mut()
-        .filter(|context| context.manifest.enabled)
-    {
-        context.manifest.deployed_files.clear();
-    }
-    for expected in &prepared.expected_files {
-        let context = prepared
-            .contexts
-            .get_mut(expected.context_index)
-            .ok_or_else(|| "接管记录缺少对应 MOD。".to_string())?;
-        let target_path = game_root.join(relative_string_to_path(&expected.deploy_relative_path)?);
-        context.manifest.deployed_files.push(DeployedModFile {
-            deploy_relative_path: expected.deploy_relative_path.clone(),
-            deployed_path: path_to_string(&target_path),
-            deployed_at_unix_seconds: deployed_at,
-            // 接管不重新复制游戏文件；后续删除前必须确认目标仍是本地库中的预期版本。
-            is_adopted: true,
+        let effective_files = match effective_installed_files_for_context(context) {
+            Ok(files) => files,
+            Err(error) => {
+                warnings.push(format!(
+                    "无法读取 {} 的有效部署文件，状态保持未启用：{error}",
+                    manifest_display_name(&context.manifest)
+                ));
+                Vec::new()
+            }
+        };
+        let mut files = Vec::new();
+        let mut seen_path_keys = HashSet::new();
+
+        for effective_file in effective_files {
+            let path_key = conflict_path_key(&effective_file.deploy_relative_path);
+            if !seen_path_keys.insert(path_key.clone()) {
+                warnings.push(format!(
+                    "{} 的有效部署路径重复，状态检测只保留第一个：{}",
+                    manifest_display_name(&context.manifest),
+                    effective_file.deploy_relative_path
+                ));
+                continue;
+            }
+            let matches_game_directory =
+                match relative_string_to_path(&effective_file.deploy_relative_path) {
+                    Ok(relative_path) => {
+                        let target_path = game_root.join(relative_path);
+                        if !target_path.is_file() {
+                            false
+                        } else {
+                            match effective_file_matches_target(
+                                context,
+                                &effective_file,
+                                &target_path,
+                            ) {
+                                Ok(matches) => matches,
+                                Err(error) => {
+                                    warnings.push(format!(
+                                        "无法比较 {} 的游戏文件 {}：{error}",
+                                        manifest_display_name(&context.manifest),
+                                        target_path.display()
+                                    ));
+                                    false
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        warnings.push(format!(
+                            "{} 的部署路径无效，无法检测：{error}",
+                            manifest_display_name(&context.manifest)
+                        ));
+                        false
+                    }
+                };
+            let has_existing_record = context
+                .manifest
+                .deployed_files
+                .iter()
+                .any(|record| conflict_path_key(&record.deploy_relative_path) == path_key);
+            files.push(ModStateSyncFile {
+                path_key,
+                matches_game_directory,
+                has_existing_record,
+            });
+        }
+
+        if is_trusted_enabled && files.iter().any(|file| !file.matches_game_directory) {
+            // 主动部署状态不在这里被降级，但内容已经漂移时不能用它解释不一致路径。
+            // 记录警告让用户知道后续应通过正常启停或冲突应用重新部署。
+            warnings.push(format!(
+                "{} 的部分主动部署记录与游戏目录不一致，已保留当前状态，但不会作为不一致文件的覆盖依据。",
+                manifest_display_name(&context.manifest)
+            ));
+        }
+
+        inputs.push(ModStateSyncInput {
+            mod_id: context.manifest.id.clone(),
+            is_candidate,
+            is_trusted_enabled,
+            files,
         });
     }
 
-    progress.report("正在保存接管的冲突顺序", 0, Some(1), None);
-    save_conflict_order_store(&paths.installed_path, &prepared.conflict_store)?;
-    progress.report("正在保存接管的冲突顺序", 1, Some(1), None);
+    progress.report("正在分析实际覆盖关系", 0, None, None);
+    let plan = mod_state_sync::analyze_mod_states(&inputs);
+    for group in &plan.mixed_conflict_groups {
+        warnings.push(format!(
+            "检测到无法还原为整体优先级的混合覆盖：{}。相关 MOD 已保持未启用。",
+            group.join("、")
+        ));
+    }
 
-    let contexts_to_save = prepared
-        .contexts
+    apply_mod_state_sync_plan(installed_root, game_root, &mut contexts, &plan, progress)?;
+    Ok(plan.to_result(warnings))
+}
+
+fn apply_mod_state_sync_plan(
+    installed_root: &Path,
+    game_root: &Path,
+    contexts: &mut [InstalledManifestContext],
+    plan: &ModStateSyncPlan,
+    progress: &OperationReporter,
+) -> Result<(), String> {
+    if plan.mod_states.is_empty() {
+        return Ok(());
+    }
+
+    let states_by_mod_id = plan
+        .mod_states
         .iter()
-        .filter(|context| context.manifest.enabled)
-        .collect::<Vec<_>>();
-    let contexts_to_save_count = contexts_to_save.len();
-    progress.report("正在保存接管记录", 0, Some(contexts_to_save_count), None);
-    for (index, context) in contexts_to_save.into_iter().enumerate() {
-        save_manifest(&context.manifest_path, &context.manifest)?;
+        .map(|state| (state.mod_id.as_str(), state))
+        .collect::<HashMap<_, _>>();
+    let deployed_at = unix_seconds_now()?;
+    let mut changed_context_ids = HashSet::new();
+
+    progress.report(
+        "正在整理检测到的部署记录",
+        0,
+        Some(plan.mod_states.len()),
+        None,
+    );
+    let mut processed_state_count = 0;
+    for context in contexts.iter_mut() {
+        let Some(state) = states_by_mod_id.get(context.manifest.id.as_str()) else {
+            continue;
+        };
+
+        // 同步只管理观察所得记录。主动复制留下的记录永远不在这里被猜测或删除。
+        context
+            .manifest
+            .deployed_files
+            .retain(is_copied_deployment_file);
+        context.manifest.enabled = state.enabled;
+        context.manifest.partially_overridden = state.enabled && state.partially_overridden;
+
+        if state.enabled {
+            let effective_files = effective_installed_files_for_context(context)?;
+            let files_by_path = effective_files
+                .into_iter()
+                .map(|file| (conflict_path_key(&file.deploy_relative_path), file))
+                .collect::<HashMap<_, _>>();
+            for path_key in &state.observed_path_keys {
+                let file = files_by_path
+                    .get(path_key)
+                    .ok_or_else(|| format!("状态同步记录缺少有效部署文件：{path_key}"))?;
+                let target_path =
+                    game_root.join(relative_string_to_path(&file.deploy_relative_path)?);
+                context.manifest.deployed_files.push(DeployedModFile {
+                    deploy_relative_path: file.deploy_relative_path.clone(),
+                    deployed_path: path_to_string(&target_path),
+                    deployed_at_unix_seconds: deployed_at,
+                    deployment_origin: DeploymentOrigin::Observed,
+                    is_adopted: false,
+                });
+            }
+        }
+
+        context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+        changed_context_ids.insert(context.manifest.id.clone());
+        processed_state_count += 1;
         progress.report(
-            "正在保存接管记录",
-            index + 1,
-            Some(contexts_to_save_count),
+            "正在整理检测到的部署记录",
+            processed_state_count,
+            Some(plan.mod_states.len()),
             Some(manifest_display_name(&context.manifest)),
         );
     }
 
-    Ok(LegacyBoxTakeoverResult {
-        adopted_mod_count: prepared.selected_mod_ids.len(),
-        recorded_file_count: prepared.expected_files.len(),
-        conflict_group_count: prepared.plan.conflict_groups.len(),
-        message: "已接管当前游戏目录中的已核验文件；游戏文件未被复制、覆盖或删除。".to_string(),
-    })
-}
-
-const TAKEOVER_MISMATCH_LIMIT: usize = 120;
-
-struct ExpectedTakeoverFile {
-    context_index: usize,
-    deploy_relative_path: String,
-    effective_file: EffectiveInstalledModFile,
-}
-
-struct PreparedLegacyBoxTakeover {
-    plan: LegacyBoxTakeoverPlan,
-    contexts: Vec<InstalledManifestContext>,
-    conflict_store: ConflictOrderStore,
-    expected_files: Vec<ExpectedTakeoverFile>,
-    selected_mod_ids: HashSet<String>,
-}
-
-fn prepare_legacy_box_takeover(
-    installed_root: &Path,
-    game_root: &Path,
-    box_path: &str,
-    module_ids: &[String],
-    requested_conflict_orders: &HashMap<String, Vec<String>>,
-    progress: &OperationReporter,
-) -> Result<PreparedLegacyBoxTakeover, String> {
-    progress.report("正在读取狩技 MOD 盒子", 0, None, None);
-    let takeover_sources = legacy_box::load_legacy_box_takeover_sources(box_path, module_ids)?;
-    let box_game_path = takeover_sources.box_game_path;
-    let mut contexts = load_all_installed_manifests_with_progress(installed_root, progress)?;
-    let mut selected_mods = Vec::new();
-    let mut selected_mod_ids = HashSet::new();
-    let mut warnings = Vec::new();
-    let mut used_context_ids = HashSet::new();
-
-    for source in &takeover_sources.sources {
-        let matching_context = contexts.iter().find(|context| {
-            !used_context_ids.contains(&context.manifest.id)
-                && manifest_source_matches_legacy_module(context, &source.module_path)
-        });
-        let Some(context) = matching_context else {
-            selected_mods.push(LegacyBoxTakeoverMod {
-                module_id: source.module_id.clone(),
-                name: source.name.clone(),
-                mod_id: None,
-                is_ready: false,
-                message: "尚未通过狩技 MOD 盒子导入到 Acumod 本地库。".to_string(),
-            });
-            continue;
-        };
-
-        used_context_ids.insert(context.manifest.id.clone());
-        selected_mod_ids.insert(context.manifest.id.clone());
-        selected_mods.push(LegacyBoxTakeoverMod {
-            module_id: source.module_id.clone(),
-            name: source.name.clone(),
-            mod_id: Some(context.manifest.id.clone()),
-            is_ready: true,
-            message: if context.manifest.enabled {
-                "已由 Acumod 启用，会重新核验其最终文件。".to_string()
-            } else {
-                "已找到对应的 Acumod 本地库副本。".to_string()
-            },
-        });
-    }
-
-    let acumod_game_path = path_to_string(game_root);
-    let box_game_path_label = box_game_path.as_ref().map(|path| path_to_string(path));
-    let box_game_path_is_valid = box_game_path
-        .as_deref()
-        .is_some_and(|path| path.is_dir() && path.join("MonsterHunterWorld.exe").is_file());
-    let game_paths_match = box_game_path
-        .as_deref()
-        .is_some_and(|path| same_path(path, game_root));
-    let imports_are_ready = selected_mods.iter().all(|mod_entry| mod_entry.is_ready);
-
-    if !box_game_path_is_valid {
-        warnings.push("狩技 MOD 盒子没有记录可用的 MHW 游戏目录。".to_string());
-    }
-    if box_game_path_is_valid && !game_paths_match {
-        warnings.push("狩技 MOD 盒子与 Acumod 当前设置的游戏目录不同，不能接管。".to_string());
-    }
-    if !imports_are_ready {
-        warnings.push("请先将所有选中的盒子 MOD 导入 Acumod 本地库。".to_string());
-    }
-
-    if !box_game_path_is_valid || !game_paths_match || !imports_are_ready {
-        let message = "需要先解决目录或本地库副本问题，暂不能接管。".to_string();
-        return Ok(PreparedLegacyBoxTakeover {
-            plan: LegacyBoxTakeoverPlan {
-                can_apply: false,
-                box_game_path: box_game_path_label,
-                acumod_game_path,
-                selected_mods,
-                expected_file_count: 0,
-                matching_file_count: 0,
-                missing_file_count: 0,
-                different_file_count: 0,
-                conflict_groups: Vec::new(),
-                mismatches: Vec::new(),
-                warnings,
-                message,
-            },
-            contexts,
-            conflict_store: read_conflict_order_store(installed_root)?,
-            expected_files: Vec::new(),
-            selected_mod_ids,
-        });
-    }
-
-    for context in &mut contexts {
-        if selected_mod_ids.contains(&context.manifest.id) {
-            context.manifest.enabled = true;
-        }
-    }
-
     let mut conflict_store = read_conflict_order_store(installed_root)?;
-    let initial_report = build_mod_conflict_report(&contexts, &conflict_store)?;
-    persist_requested_takeover_orders(
-        &mut conflict_store,
-        &initial_report,
-        &selected_mod_ids,
-        requested_conflict_orders,
-    )?;
-    let conflict_report = build_mod_conflict_report(&contexts, &conflict_store)?;
-    let conflict_groups = takeover_conflict_groups(&conflict_report, &selected_mod_ids);
-    let expected_files = expected_takeover_files(&contexts, &conflict_report)?;
+    update_conflict_orders_from_state_sync(&mut conflict_store, contexts, plan)?;
 
-    let mut matching_file_count = 0;
-    let mut missing_file_count = 0;
-    let mut different_file_count = 0;
-    let mut mismatches = Vec::new();
-    progress.report("正在核验接管文件", 0, Some(expected_files.len()), None);
-    for (index, expected) in expected_files.iter().enumerate() {
-        let context = &contexts[expected.context_index];
-        let target_path = game_root.join(relative_string_to_path(&expected.deploy_relative_path)?);
-        let status = if !target_path.is_file() {
-            missing_file_count += 1;
-            "missing"
-        } else if effective_file_matches_target(context, &expected.effective_file, &target_path)? {
-            matching_file_count += 1;
-            "matching"
-        } else {
-            different_file_count += 1;
-            "different"
-        };
-        if status != "matching" && mismatches.len() < TAKEOVER_MISMATCH_LIMIT {
-            mismatches.push(LegacyBoxTakeoverMismatch {
-                deploy_relative_path: expected.deploy_relative_path.clone(),
-                expected_mod_name: manifest_display_name(&context.manifest),
-                status: status.to_string(),
-            });
+    progress.report("正在保存游戏状态", 0, Some(changed_context_ids.len()), None);
+    let mut saved_count = 0;
+    for context in contexts.iter() {
+        if !changed_context_ids.contains(&context.manifest.id) {
+            continue;
         }
+        save_manifest(&context.manifest_path, &context.manifest)?;
+        saved_count += 1;
         progress.report(
-            "正在核验接管文件",
-            index + 1,
-            Some(expected_files.len()),
-            Some(expected.deploy_relative_path.clone()),
+            "正在保存游戏状态",
+            saved_count,
+            Some(changed_context_ids.len()),
+            Some(manifest_display_name(&context.manifest)),
         );
     }
-
-    let can_apply =
-        !expected_files.is_empty() && missing_file_count == 0 && different_file_count == 0;
-    let message = if can_apply {
-        "游戏目录与当前优先级下的所有最终文件一致，可以接管。".to_string()
-    } else {
-        "游戏目录尚未完全符合当前优先级，不能直接接管。请调整冲突顺序或按 Acumod 方案重新部署。"
-            .to_string()
-    };
-
-    Ok(PreparedLegacyBoxTakeover {
-        plan: LegacyBoxTakeoverPlan {
-            can_apply,
-            box_game_path: box_game_path_label,
-            acumod_game_path,
-            selected_mods,
-            expected_file_count: expected_files.len(),
-            matching_file_count,
-            missing_file_count,
-            different_file_count,
-            conflict_groups,
-            mismatches,
-            warnings,
-            message,
-        },
-        contexts,
-        conflict_store,
-        expected_files,
-        selected_mod_ids,
-    })
+    save_conflict_order_store(installed_root, &conflict_store)?;
+    Ok(())
 }
 
-fn manifest_source_matches_legacy_module(
-    context: &InstalledManifestContext,
-    module_path: &Path,
-) -> bool {
-    let source_path = PathBuf::from(&context.manifest.source_path);
-    same_path(&source_path, module_path)
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
-    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
-    if cfg!(windows) {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy())
-    } else {
-        left == right
-    }
-}
-
-fn persist_requested_takeover_orders(
+fn update_conflict_orders_from_state_sync(
     store: &mut ConflictOrderStore,
-    report: &ModConflictReport,
-    selected_mod_ids: &HashSet<String>,
-    requested_orders: &HashMap<String, Vec<String>>,
+    contexts: &[InstalledManifestContext],
+    plan: &ModStateSyncPlan,
 ) -> Result<(), String> {
-    let relevant_groups = report
-        .groups
+    let observed_enabled_ids = plan
+        .mod_states
         .iter()
-        .filter(|group| {
-            group
-                .participants
-                .iter()
-                .any(|participant| selected_mod_ids.contains(&participant.mod_id))
-        })
-        .collect::<Vec<_>>();
-    let known_group_ids = relevant_groups
-        .iter()
-        .map(|group| group.group_id.as_str())
+        .filter(|state| state.enabled)
+        .map(|state| state.mod_id.as_str())
         .collect::<HashSet<_>>();
-    if let Some(unknown_group_id) = requested_orders
-        .keys()
-        .find(|group_id| !known_group_ids.contains(group_id.as_str()))
-    {
-        return Err(format!(
-            "接管冲突顺序已过期，请重新预检：{unknown_group_id}"
-        ));
+    if observed_enabled_ids.is_empty() {
+        return Ok(());
     }
 
-    for group in relevant_groups {
+    let report = build_mod_conflict_report(contexts, store)?;
+    for group in report.groups {
         let participant_ids = group
             .participants
             .iter()
             .map(|participant| participant.mod_id.clone())
             .collect::<Vec<_>>();
-        let order = requested_orders
-            .get(&group.group_id)
-            .cloned()
-            .unwrap_or_else(|| participant_ids.clone());
-        let order_ids = order.iter().cloned().collect::<HashSet<_>>();
-        let participant_id_set = participant_ids.iter().cloned().collect::<HashSet<_>>();
-        if order.len() != participant_ids.len() || order_ids != participant_id_set {
-            return Err(format!("冲突组 {} 的优先级内容无效。", group.group_id));
+        if !participant_ids
+            .iter()
+            .any(|mod_id| observed_enabled_ids.contains(mod_id.as_str()))
+        {
+            continue;
         }
-        store.orders.insert(group.group_id.clone(), order);
+        let participant_set = participant_ids.iter().cloned().collect::<HashSet<_>>();
+        let edges = plan
+            .priority_edges
+            .iter()
+            .filter(|edge| {
+                participant_set.contains(&edge.winner_mod_id)
+                    && participant_set.contains(&edge.covered_mod_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let existing_order = store.orders.get(&group.group_id);
+        let order = stable_priority_order(&participant_ids, existing_order, &edges)?;
+        store.orders.insert(group.group_id, order);
     }
     Ok(())
 }
 
-fn takeover_conflict_groups(
-    report: &ModConflictReport,
-    selected_mod_ids: &HashSet<String>,
-) -> Vec<LegacyBoxTakeoverConflictGroup> {
-    report
-        .groups
+fn stable_priority_order(
+    participant_ids: &[String],
+    existing_order: Option<&Vec<String>>,
+    edges: &[ModStateSyncPriorityEdge],
+) -> Result<Vec<String>, String> {
+    let participant_set = participant_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut rank_by_id = HashMap::new();
+    if let Some(existing_order) = existing_order {
+        for (index, mod_id) in existing_order.iter().enumerate() {
+            if participant_set.contains(mod_id) {
+                rank_by_id.insert(mod_id.clone(), index);
+            }
+        }
+    }
+    let fallback_rank = rank_by_id.len();
+    let mut indegree = participant_ids
         .iter()
-        .filter(|group| {
-            group
-                .participants
-                .iter()
-                .any(|participant| selected_mod_ids.contains(&participant.mod_id))
-        })
-        .map(|group| LegacyBoxTakeoverConflictGroup {
-            group_id: group.group_id.clone(),
-            conflict_file_count: group.conflict_file_count,
-            participants: group
-                .participants
-                .iter()
-                .map(|participant| LegacyBoxTakeoverParticipant {
-                    mod_id: participant.mod_id.clone(),
-                    name: participant.name.clone(),
-                    is_selected_from_box: selected_mod_ids.contains(&participant.mod_id),
-                    order: participant.order,
-                })
-                .collect(),
-        })
-        .collect()
-}
-
-fn expected_takeover_files(
-    contexts: &[InstalledManifestContext],
-    report: &ModConflictReport,
-) -> Result<Vec<ExpectedTakeoverFile>, String> {
-    let mut providers_by_path =
-        BTreeMap::<String, (String, Vec<(usize, EffectiveInstalledModFile)>)>::new();
-    for (context_index, context) in contexts.iter().enumerate() {
-        if !context.manifest.enabled {
+        .map(|mod_id| (mod_id.clone(), 0usize))
+        .collect::<HashMap<_, _>>();
+    let mut targets_by_winner = HashMap::<String, BTreeSet<String>>::new();
+    for edge in edges {
+        if edge.winner_mod_id == edge.covered_mod_id
+            || !participant_set.contains(&edge.winner_mod_id)
+            || !participant_set.contains(&edge.covered_mod_id)
+        {
             continue;
         }
-        for file in effective_installed_files_for_context(context)? {
-            let key = conflict_path_key(&file.deploy_relative_path);
-            let entry = providers_by_path
-                .entry(key)
-                .or_insert_with(|| (file.deploy_relative_path.clone(), Vec::new()));
-            entry.1.push((context_index, file));
+        if targets_by_winner
+            .entry(edge.winner_mod_id.clone())
+            .or_default()
+            .insert(edge.covered_mod_id.clone())
+        {
+            *indegree
+                .get_mut(&edge.covered_mod_id)
+                .expect("participant indegree must exist") += 1;
         }
     }
 
-    let mut expected_files = Vec::new();
-    for (deploy_relative_path, providers) in providers_by_path.into_values() {
-        let (context_index, effective_file) = if providers.len() == 1 {
-            providers.into_iter().next().unwrap()
-        } else {
-            let provider_ids = providers
-                .iter()
-                .map(|(index, _)| contexts[*index].manifest.id.clone())
-                .collect::<HashSet<_>>();
-            let group = report
-                .groups
-                .iter()
-                .find(|group| {
-                    provider_ids.iter().all(|provider_id| {
-                        group
-                            .participants
-                            .iter()
-                            .any(|participant| participant.mod_id == *provider_id)
-                    })
-                })
-                .ok_or_else(|| format!("无法确定冲突文件的优先级：{deploy_relative_path}"))?;
-            let winner_id = group
-                .participants
-                .iter()
-                .find(|participant| provider_ids.contains(&participant.mod_id))
-                .map(|participant| participant.mod_id.as_str())
-                .ok_or_else(|| format!("冲突文件没有可用赢家：{deploy_relative_path}"))?;
-            providers
-                .into_iter()
-                .find(|(index, _)| contexts[*index].manifest.id == winner_id)
-                .ok_or_else(|| format!("冲突赢家缺少文件：{deploy_relative_path}"))?
-        };
-        expected_files.push(ExpectedTakeoverFile {
-            context_index,
-            deploy_relative_path,
-            effective_file,
+    let mut available = indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(mod_id, _)| mod_id.clone())
+        .collect::<Vec<_>>();
+    let mut order = Vec::with_capacity(participant_ids.len());
+    while !available.is_empty() {
+        available.sort_by(|left, right| {
+            rank_by_id
+                .get(left)
+                .copied()
+                .unwrap_or(fallback_rank)
+                .cmp(&rank_by_id.get(right).copied().unwrap_or(fallback_rank))
+                .then_with(|| left.cmp(right))
         });
+        let current = available.remove(0);
+        order.push(current.clone());
+        if let Some(targets) = targets_by_winner.get(&current) {
+            for target in targets {
+                let degree = indegree
+                    .get_mut(target)
+                    .expect("participant indegree must exist");
+                *degree -= 1;
+                if *degree == 0 {
+                    available.push(target.clone());
+                }
+            }
+        }
     }
-    expected_files.sort_by(|left, right| {
-        conflict_path_key(&left.deploy_relative_path)
-            .cmp(&conflict_path_key(&right.deploy_relative_path))
-    });
-    Ok(expected_files)
+
+    if order.len() != participant_ids.len() {
+        return Err("状态同步得到的覆盖关系存在循环，未写入冲突顺序。".to_string());
+    }
+    Ok(order)
 }
 
+fn is_copied_deployment_file(file: &DeployedModFile) -> bool {
+    file.deployment_origin == DeploymentOrigin::Copied && !file.is_adopted
+}
+
+/// 测试时通过固定安装根目录执行候选分支导入，避免依赖应用目录。
 #[cfg(test)]
 fn install_mod_from_candidate_into(
     source_path: String,
@@ -1915,6 +1833,46 @@ fn install_mod_from_folder_into_with_options_and_progress(
     original_source_path: Option<String>,
     progress: &OperationReporter,
 ) -> Result<ModInstallResult, String> {
+    install_mod_from_folder_into_with_duplicate_name_check(
+        raw_path,
+        allow_game_root,
+        installed_root,
+        preferred_name,
+        original_source_path,
+        true,
+        progress,
+    )
+}
+
+/// 盒子导入以内容关联为准，因此同名但内容不同的模块需要允许独立保存。
+fn install_mod_from_folder_into_with_options_and_progress_allow_same_name(
+    raw_path: String,
+    allow_game_root: bool,
+    installed_root: &Path,
+    preferred_name: Option<String>,
+    original_source_path: Option<String>,
+    progress: &OperationReporter,
+) -> Result<ModInstallResult, String> {
+    install_mod_from_folder_into_with_duplicate_name_check(
+        raw_path,
+        allow_game_root,
+        installed_root,
+        preferred_name,
+        original_source_path,
+        false,
+        progress,
+    )
+}
+
+fn install_mod_from_folder_into_with_duplicate_name_check(
+    raw_path: String,
+    allow_game_root: bool,
+    installed_root: &Path,
+    preferred_name: Option<String>,
+    original_source_path: Option<String>,
+    check_name_duplicate: bool,
+    progress: &OperationReporter,
+) -> Result<ModInstallResult, String> {
     let preview = preview_mod_import_with_progress(raw_path, allow_game_root, progress)?;
 
     if preview.status != "ready" {
@@ -1939,8 +1897,10 @@ fn install_mod_from_folder_into_with_options_and_progress(
     let source_path = PathBuf::from(&preview.source_path);
     let mod_name = preferred_name.unwrap_or_else(|| derive_mod_name(&source_path));
 
-    if let Some(existing) = find_installed_mod_by_name(installed_root, &mod_name)? {
-        return Ok(existing);
+    if check_name_duplicate {
+        if let Some(existing) = find_installed_mod_by_name(installed_root, &mod_name)? {
+            return Ok(existing);
+        }
     }
 
     let mod_id = unique_mod_id(&mod_name)?;
@@ -2030,11 +1990,13 @@ fn install_mod_from_folder_into_with_options_and_progress(
             category_ids,
             category_override: None,
             source_path: original_source_path.unwrap_or_else(|| preview.source_path.clone()),
+            legacy_sources: Vec::new(),
             content_root_path,
             detection_method: preview.detection_method.clone(),
             deploy_root: preview.deploy_root.clone(),
             installed_at_unix_seconds: unix_seconds_now()?,
             enabled: false,
+            partially_overridden: false,
             file_count: installed_files.len(),
             files: installed_files.clone(),
             model_replacements: model_replacements.clone(),
@@ -2103,24 +2065,169 @@ fn find_installed_mod_by_name(
     let Some(context) = existing else {
         return Ok(None);
     };
+    Ok(Some(existing_mod_install_result(context)?))
+}
+
+fn find_installed_mod_by_legacy_source(
+    installed_root: &Path,
+    source_ref: &LegacyBoxSourceRef,
+) -> Result<Option<ModInstallResult>, String> {
+    let context = load_all_installed_manifests(installed_root)?
+        .into_iter()
+        .find(|context| {
+            context
+                .manifest
+                .legacy_sources
+                .iter()
+                .any(|stored| legacy_box_source_matches(stored, source_ref))
+        });
+
+    context.map(existing_mod_install_result).transpose()
+}
+
+fn find_installed_mod_by_content(
+    installed_root: &Path,
+    source_path: &Path,
+    progress: &OperationReporter,
+) -> Result<Option<ModInstallResult>, String> {
+    let preview = preview_mod_import_with_progress(path_to_string(source_path), false, progress)?;
+    if preview.status != "ready" {
+        return Err(format!(
+            "狩技 MOD 盒子的文件结构无法导入：{}",
+            preview.message
+        ));
+    }
+    let content_root = preview
+        .content_root_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法确定狩技 MOD 盒子的内容根目录。".to_string())?;
+    let deploy_root = deploy_root_from_preview(&preview, &content_root)?;
+    let source_files = build_file_previews(&content_root, &deploy_root, progress)?;
+    let source_files_by_path = file_previews_by_deploy_path(&source_files)?;
+
+    for context in load_all_installed_manifests_with_progress(installed_root, progress)? {
+        if context.manifest.files.len() != source_files_by_path.len() {
+            continue;
+        }
+        let installed_files_by_path = installed_files_by_deploy_path(&context.manifest.files)?;
+        if installed_files_by_path.len() != source_files_by_path.len()
+            || !installed_files_by_path
+                .keys()
+                .all(|path_key| source_files_by_path.contains_key(path_key))
+        {
+            continue;
+        }
+
+        let mut same_content = true;
+        for (path_key, source_file) in &source_files_by_path {
+            let Some(installed_file) = installed_files_by_path.get(path_key) else {
+                same_content = false;
+                break;
+            };
+            let installed_path = source_path_for_installed_file(&context, installed_file)?;
+            if !regular_files_are_equal(Path::new(&source_file.source_path), &installed_path)? {
+                same_content = false;
+                break;
+            }
+        }
+
+        if same_content {
+            return Ok(Some(existing_mod_install_result(context)?));
+        }
+    }
+
+    Ok(None)
+}
+
+fn existing_mod_install_result(
+    context: InstalledManifestContext,
+) -> Result<ModInstallResult, String> {
     let model_replacements =
         model_replacements_for_manifest(&context.manifest, &context.content_path)?;
-
     let display_name = manifest_display_name(&context.manifest);
-
-    Ok(Some(ModInstallResult {
-        mod_id: context.manifest.id,
+    Ok(ModInstallResult {
+        mod_id: context.manifest.id.clone(),
         name: display_name,
         already_installed: true,
         mod_path: path_to_string(&context.mod_path),
         content_path: path_to_string(&context.content_path),
         manifest_path: path_to_string(&context.manifest_path),
         file_count: context.manifest.file_count,
-        files: context.manifest.files,
+        files: context.manifest.files.clone(),
         model_replacements,
-        message: "A MOD with the same name is already installed. The existing MOD was kept."
-            .to_string(),
-    }))
+        message: "已关联到本地 MOD 库中的相同内容。".to_string(),
+    })
+}
+
+fn file_previews_by_deploy_path<'a>(
+    files: &'a [ModImportFilePreview],
+) -> Result<BTreeMap<String, &'a ModImportFilePreview>, String> {
+    let mut files_by_path = BTreeMap::new();
+    for file in files {
+        let path_key = conflict_path_key(&file.deploy_relative_path);
+        if files_by_path.insert(path_key, file).is_some() {
+            return Err(format!(
+                "导入来源包含重复的部署路径：{}",
+                file.deploy_relative_path
+            ));
+        }
+    }
+    Ok(files_by_path)
+}
+
+fn installed_files_by_deploy_path<'a>(
+    files: &'a [InstalledModFile],
+) -> Result<BTreeMap<String, &'a InstalledModFile>, String> {
+    let mut files_by_path = BTreeMap::new();
+    for file in files {
+        let path_key = conflict_path_key(&file.deploy_relative_path);
+        if files_by_path.insert(path_key, file).is_some() {
+            return Err(format!(
+                "本地 MOD 清单包含重复的部署路径：{}",
+                file.deploy_relative_path
+            ));
+        }
+    }
+    Ok(files_by_path)
+}
+
+fn associate_legacy_box_source(
+    installed_root: &Path,
+    mod_id: &str,
+    source_ref: LegacyBoxSourceRef,
+) -> Result<(), String> {
+    let mut context = load_installed_manifest(installed_root, mod_id)?;
+    if !context
+        .manifest
+        .legacy_sources
+        .iter()
+        .any(|stored| legacy_box_source_matches(stored, &source_ref))
+    {
+        context.manifest.legacy_sources.push(source_ref);
+        context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+        save_manifest(&context.manifest_path, &context.manifest)?;
+    }
+    Ok(())
+}
+
+fn legacy_box_source_matches(left: &LegacyBoxSourceRef, right: &LegacyBoxSourceRef) -> bool {
+    left.module_id == right.module_id && same_normalized_path(&left.box_path, &right.box_path)
+}
+
+fn same_normalized_path(left: &str, right: &str) -> bool {
+    let left = PathBuf::from(left)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(left));
+    let right = PathBuf::from(right)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(right));
+    if cfg!(windows) {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 fn preview_from_candidates(
@@ -2602,6 +2709,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             file_count: manifest.file_count,
             files: manifest.files,
             enabled: manifest.enabled,
+            partially_overridden: manifest.partially_overridden,
             deploy_root: manifest.deploy_root,
             detection_method: manifest.detection_method,
             installed_at_unix_seconds: manifest.installed_at_unix_seconds,
@@ -2686,6 +2794,7 @@ fn installed_mod_list_from_contexts(
             file_count: manifest.file_count,
             files: manifest.files.clone(),
             enabled: manifest.enabled,
+            partially_overridden: manifest.partially_overridden,
             deploy_root: manifest.deploy_root.clone(),
             detection_method: manifest.detection_method.clone(),
             installed_at_unix_seconds: manifest.installed_at_unix_seconds,
@@ -3524,6 +3633,7 @@ fn enable_mod_from_with_progress(
             deploy_relative_path: file.deploy_relative_path.clone(),
             deployed_path: path_to_string(&target_path),
             deployed_at_unix_seconds: deployed_at,
+            deployment_origin: DeploymentOrigin::Copied,
             is_adopted: false,
         });
         progress.report(
@@ -3535,6 +3645,7 @@ fn enable_mod_from_with_progress(
     }
 
     context.manifest.enabled = true;
+    context.manifest.partially_overridden = false;
     context.manifest.deployed_files = deployed_files.clone();
     progress.report("正在保存部署记录", 0, Some(1), None);
     save_manifest(&context.manifest_path, &context.manifest)?;
@@ -3586,6 +3697,7 @@ fn disable_mod_from_with_progress(
     let deployed_files = context.manifest.deployed_files.clone();
     let mut warnings = Vec::new();
     let disabled_file_paths = remove_deployed_files_with_progress(
+        installed_root,
         game_root,
         &deployed_files,
         Some(&context),
@@ -3596,6 +3708,7 @@ fn disable_mod_from_with_progress(
     let removed_count = disabled_file_paths.len();
 
     context.manifest.enabled = false;
+    context.manifest.partially_overridden = false;
     context.manifest.deployed_files = Vec::new();
     progress.report("正在保存部署记录", 0, Some(1), None);
     save_manifest(&context.manifest_path, &context.manifest)?;
@@ -3685,6 +3798,7 @@ fn uninstall_mod_from_with_progress(
         disable_result.affected_file_count
     } else {
         remove_deployed_files_with_progress(
+            installed_root,
             game_root,
             &context.manifest.deployed_files,
             Some(&context),
@@ -3767,6 +3881,7 @@ fn restore_all_mods_from_with_progress(
 
         let deployed_files = context.manifest.deployed_files.clone();
         removed_deployed_file_count += remove_deployed_files_with_progress(
+            installed_root,
             game_root,
             &deployed_files,
             Some(&context),
@@ -3776,6 +3891,7 @@ fn restore_all_mods_from_with_progress(
         )?
         .len();
         context.manifest.enabled = false;
+        context.manifest.partially_overridden = false;
         context.manifest.deployed_files = Vec::new();
         save_manifest(&context.manifest_path, &context.manifest)?;
         completed_mod_count += 1;
@@ -4016,6 +4132,7 @@ fn apply_conflict_order_from_with_progress(
                     deploy_relative_path: conflict_path.deploy_relative_path.clone(),
                     deployed_path: path_to_string(&target_path),
                     deployed_at_unix_seconds: deployed_at,
+                    deployment_origin: DeploymentOrigin::Copied,
                     is_adopted: false,
                 });
             }
@@ -4573,6 +4690,7 @@ fn restore_enabled_versions_for_paths_with_progress(
                     deploy_relative_path: deploy_relative_path.clone(),
                     deployed_path: path_to_string(&target_path),
                     deployed_at_unix_seconds: deployed_at,
+                    deployment_origin: DeploymentOrigin::Copied,
                     is_adopted: false,
                 });
             }
@@ -4598,6 +4716,7 @@ fn restore_enabled_versions_for_paths_with_progress(
 }
 
 fn remove_deployed_files_with_progress(
+    installed_root: &Path,
     game_root: &Path,
     deployed_files: &[DeployedModFile],
     context: Option<&InstalledManifestContext>,
@@ -4634,7 +4753,7 @@ fn remove_deployed_files_with_progress(
             ));
         }
 
-        if deployed_file.is_adopted {
+        if is_observed_deployment_file(deployed_file) {
             let matches_expected = context
                 .map(|context| {
                     effective_deployed_file_matches_target(context, deployed_file, &target_path)
@@ -4652,6 +4771,26 @@ fn remove_deployed_files_with_progress(
                     Some(deployed_file.deploy_relative_path.clone()),
                 );
                 continue;
+            }
+            if let Some(context) = context {
+                if has_other_enabled_equivalent_provider(
+                    installed_root,
+                    &context.manifest.id,
+                    &deployed_file.deploy_relative_path,
+                    &target_path,
+                )? {
+                    warnings.push(format!(
+                        "已保留观察文件：仍有其它已启用 MOD 提供相同内容：{}",
+                        target_path.display()
+                    ));
+                    progress.report(
+                        phase,
+                        index + 1,
+                        Some(file_total),
+                        Some(deployed_file.deploy_relative_path.clone()),
+                    );
+                    continue;
+                }
             }
         }
 
@@ -4672,6 +4811,37 @@ fn remove_deployed_files_with_progress(
     }
 
     Ok(removed_paths)
+}
+
+fn is_observed_deployment_file(file: &DeployedModFile) -> bool {
+    file.deployment_origin == DeploymentOrigin::Observed || file.is_adopted
+}
+
+fn has_other_enabled_equivalent_provider(
+    installed_root: &Path,
+    current_mod_id: &str,
+    deploy_relative_path: &str,
+    target_path: &Path,
+) -> Result<bool, String> {
+    for context in load_all_installed_manifests(installed_root)? {
+        if !context.manifest.enabled || context.manifest.id == current_mod_id {
+            continue;
+        }
+        let has_equivalent_file = effective_installed_files_for_context(&context)?
+            .into_iter()
+            .filter(|file| {
+                conflict_path_key(&file.deploy_relative_path)
+                    == conflict_path_key(deploy_relative_path)
+            })
+            .map(|file| effective_file_matches_target(&context, &file, target_path))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|matches| matches);
+        if has_equivalent_file {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn effective_deployed_file_matches_target(
@@ -5209,12 +5379,7 @@ fn save_conflict_order_store(
     let store_json = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Could not serialize conflict order store: {error}"))?;
 
-    fs::write(&store_path, store_json).map_err(|error| {
-        format!(
-            "Could not save conflict order store {}: {error}",
-            store_path.display()
-        )
-    })
+    write_text_atomically(&store_path, &store_json, "冲突顺序文件")
 }
 
 fn read_manifest(manifest_path: &Path) -> Result<InstalledModManifest, String> {
@@ -5225,24 +5390,59 @@ fn read_manifest(manifest_path: &Path) -> Result<InstalledModManifest, String> {
         )
     })?;
 
-    serde_json::from_str::<InstalledModManifest>(&manifest_json).map_err(|error| {
-        format!(
-            "Could not parse MOD manifest {}: {error}",
-            manifest_path.display()
-        )
-    })
+    let mut manifest =
+        serde_json::from_str::<InstalledModManifest>(&manifest_json).map_err(|error| {
+            format!(
+                "Could not parse MOD manifest {}: {error}",
+                manifest_path.display()
+            )
+        })?;
+    for deployed_file in &mut manifest.deployed_files {
+        if deployed_file.is_adopted {
+            // 上一版原型的 isAdopted 与新字段 observed 语义相同，读取时立即按更严格的
+            // 删除保护处理，下一次保存会完成字段迁移。
+            deployed_file.deployment_origin = DeploymentOrigin::Observed;
+        }
+    }
+    Ok(manifest)
 }
 
 fn save_manifest(manifest_path: &Path, manifest: &InstalledModManifest) -> Result<(), String> {
-    let manifest_json = serde_json::to_string_pretty(manifest)
+    let mut manifest_to_save = manifest.clone();
+    manifest_to_save.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+    for deployed_file in &mut manifest_to_save.deployed_files {
+        if deployed_file.is_adopted {
+            deployed_file.deployment_origin = DeploymentOrigin::Observed;
+            deployed_file.is_adopted = false;
+        }
+    }
+    let manifest_json = serde_json::to_string_pretty(&manifest_to_save)
         .map_err(|error| format!("Could not serialize MOD manifest: {error}"))?;
+    write_text_atomically(manifest_path, &manifest_json, "MOD 清单")
+}
 
-    fs::write(manifest_path, manifest_json).map_err(|error| {
+fn write_text_atomically(path: &Path, contents: &str, label: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("无法确定{label}的父目录：{}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("无法确定{label}文件名：{}", path.display()))?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("无法生成{label}临时文件名：{error}"))?
+        .as_nanos();
+    let temporary_path = parent.join(format!(".{file_name}.{stamp}.tmp"));
+
+    fs::write(&temporary_path, contents).map_err(|error| {
         format!(
-            "Could not write MOD manifest {}: {error}",
-            manifest_path.display()
+            "无法写入{label}临时文件 {}：{error}",
+            temporary_path.display()
         )
-    })
+    })?;
+    fs::rename(&temporary_path, path)
+        .map_err(|error| format!("无法原子替换{label} {}：{error}", path.display()))
 }
 
 fn source_path_for_installed_file(

@@ -194,9 +194,9 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 ## 狩技 MOD 盒子导入与自动状态同步
 
-只读扫描和批量导入已经实现；当前显式接管原型将在下一切片移除。本节是已确认的替代方案。用户可见状态保持为“已启用”和“未启用”，已启用 MOD 只增加一个可选的“部分被冲突覆盖”提示。
+只读扫描、批量导入、重复内容关联和自动状态同步已经实现；显式接管原型及其 UI、IPC 和 command 已移除。用户可见状态保持为“已启用”和“未启用”，已启用 MOD 只增加一个可选的“部分被冲突覆盖”提示。
 
-目标链路：
+当前链路：
 
 ```text
 导入页输入盒子目录
@@ -230,13 +230,13 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 1. 优先使用已经保存的盒子模块来源关联。
 2. 尚无来源关联时，比较部署相对路径集合与文件大小结构；只有结构完全相同的候选才继续逐文件流式比较。
 3. 全部路径和内容一致时，将盒子模块作为现有本地 MOD 的来源别名，不再创建第二份本地内容，也不覆盖现有 Acumod 启用状态。
-4. 名称相同但内容不同不视为重复；后续实现需要替换当前单纯同名去重的限制。
+4. 名称相同但内容不同不视为重复，会作为独立 MOD 导入本地库。
 
 这一过程使用现有分块读取和完整字节比较，不依赖文件名猜测，也不需要新增内容哈希依赖。
 
 ### 文件提供者索引
 
-`mod_state_sync` 读取所有 manifest，并通过现有有效部署文件生成器应用模型改绑、MRL3 路径修正和 EVAM 绑定修正。随后建立：
+`mod_library` 读取所有 manifest，并通过现有有效部署文件生成器应用模型改绑、MRL3 路径修正和 EVAM 绑定修正，再完成与游戏目录的内容比较。纯内存的 `mod_state_sync` 接收这些比对事实，随后建立：
 
 ```text
 规范化部署路径
@@ -274,7 +274,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 - 未启用 MOD：`enabled = false`，不建立观察所得部署记录。
 - 同路径、同内容的多个已启用提供者只选择一个规范记录者：优先沿用已有 Acumod 记录，否则使用稳定 MOD ID；其它等价提供者保持已启用但不重复占有该路径。
 - 可确定的冲突顺序一次写入 `conflict-orders.json`。
-- 观察游戏目录得到的部署记录与 Acumod 主动复制产生的记录必须保留内部来源差异。目标 manifest schema 使用 `deploymentOrigin: "copied" | "observed"`；旧记录默认迁移为 `copied`。
+- 观察游戏目录得到的部署记录与 Acumod 主动复制产生的记录必须保留内部来源差异。schema 15 的每条 `deployedFiles[]` 使用 `deploymentOrigin: "copied" | "observed"`；未带该字段的旧记录按 `copied` 读取，上一版原型留下的 `isAdopted` 记录会迁移为 `observed`。
 - 盒子来源别名保存为可选的 `legacySources[]`，至少包含规范化盒子路径与模块 ID；它不参与用户显示名称和同名判断。
 
 写入前不修改游戏目录，也不需要用户确认。实现时先写同目录临时 JSON，再原子替换正式 manifest；任一元数据写入失败时不得继续报告状态同步成功。
@@ -350,7 +350,7 @@ MOD 文件列表
 
 当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型必须命中头盔、铠甲、护手、腰甲和护腿五个标准部位才合并为一个套装 DTO，只有部分部位时继续返回独立 DTO。UI 遇到套装 DTO 时从官方分部位名称提取套装级名称，不得用第一条部位名称作为摘要。
 
-新导入 MOD 使用 manifest schema 14 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注和 `categoryIds[]`。schema 1 至 12 的旧 manifest 会先结合本地库路径和 `.evam` 内容重算识别结果；schema 13 及更早版本的 `categoryOverride` 会与识别得到的初始分类合并后写入 `categoryIds[]`，schema 10 以后已保存的改绑选择仍会保留。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。
+新导入 MOD 使用 manifest schema 15 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]` 和状态同步元数据。schema 1 至 12 的旧 manifest 会先结合本地库路径和 `.evam` 内容重算识别结果；schema 13 及更早版本的 `categoryOverride` 会与识别得到的初始分类合并后写入 `categoryIds[]`，schema 10 以后已保存的改绑选择仍会保留。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。
 
 投射器/飞翔爪接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录。已核对条目来自原始 MOD 页面；其它规范目录只返回 `pathPattern` 底层 ID，不按防具同号猜测。普通文件名不参与投射器识别，也不识别 `Assets/gm/gm000` 下的投射器弹药。
 
@@ -551,7 +551,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 14 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
+4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 15 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容；Slice 14 的受控改绑建立在该识别结果上。

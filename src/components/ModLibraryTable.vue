@@ -566,6 +566,14 @@ watch(
                   {{ mod.name }}
                 </button>
                 <span
+                  v-if="mod.partiallyOverridden"
+                  class="conflict-indicator partial-override-indicator"
+                  title="已启用，部分文件被更高优先级 MOD 覆盖"
+                  aria-label="已启用，部分文件被更高优先级 MOD 覆盖"
+                >
+                  !
+                </span>
+                <span
                   v-if="props.conflictingModIds.has(mod.id)"
                   class="conflict-indicator"
                   :title="conflictPartnerSummary(mod)"
@@ -740,7 +748,15 @@ watch(
                 </section>
                 <section>
                   <h4>冲突状态</h4>
-                  <p>{{ props.conflictingModIds.has(mod.id) ? conflictPartnerSummary(mod) : "当前没有启用冲突" }}</p>
+                  <p>
+                    {{
+                      mod.partiallyOverridden
+                        ? "已启用，部分文件被更高优先级 MOD 覆盖"
+                        : props.conflictingModIds.has(mod.id)
+                          ? conflictPartnerSummary(mod)
+                          : "当前没有启用冲突"
+                    }}
+                  </p>
                 </section>
               </div>
 
@@ -1233,6 +1249,12 @@ watch(
   font-size: 0.7rem;
   font-weight: 800;
   line-height: 1;
+}
+
+.partial-override-indicator {
+  border-color: #d19a45;
+  color: #8a5a13;
+  background: #fff8eb;
 }
 
 .metadata-error {

@@ -1,10 +1,11 @@
+use crate::operations::run_blocking_operation;
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModCategory, ModCategoryDeleteResult, ModCategoryList,
     ModConflictMoveResult, ModConflictReport, ModDeploymentPlan, ModDeploymentResult,
     ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus, ModMetadataPatch,
     ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan, ModUninstallPlan,
-    ModUninstallResult, RestoreAllPlan, RestoreAllResult,
+    ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
 };
 
 #[tauri::command]
@@ -13,46 +14,112 @@ pub fn get_mod_library_status(app: tauri::AppHandle) -> Result<ModLibraryStatus,
 }
 
 #[tauri::command]
-pub fn preview_mod_import(path: String, allow_game_root: bool) -> Result<ModImportPreview, String> {
-    mod_library::preview_mod_import(path, allow_game_root)
+pub async fn preview_mod_import(
+    app: tauri::AppHandle,
+    path: String,
+    allow_game_root: bool,
+) -> Result<ModImportPreview, String> {
+    run_blocking_operation(app, "importPreview", "正在识别 MOD", move |progress| {
+        mod_library::preview_mod_import_with_progress(path, allow_game_root, &progress)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn install_mod_from_folder(
+pub async fn install_mod_from_folder(
     app: tauri::AppHandle,
     path: String,
     allow_game_root: bool,
 ) -> Result<ModInstallResult, String> {
-    mod_library::install_mod_from_folder(&app, path, allow_game_root)
+    let worker_app = app.clone();
+    run_blocking_operation(app, "importFolder", "正在导入 MOD", move |progress| {
+        mod_library::install_mod_from_folder_with_progress(
+            &worker_app,
+            path,
+            allow_game_root,
+            &progress,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn install_mod_from_archive(
+pub async fn install_mod_from_archive(
     app: tauri::AppHandle,
     path: String,
     allow_game_root: bool,
 ) -> Result<ModArchiveImportOutcome, String> {
-    mod_library::install_mod_from_archive(&app, path, allow_game_root)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "importArchive",
+        "正在解包并导入 MOD",
+        move |progress| {
+            mod_library::install_mod_from_archive_with_progress(
+                &worker_app,
+                path,
+                allow_game_root,
+                &progress,
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn install_mod_from_candidate(
+pub async fn install_mod_from_candidate(
     app: tauri::AppHandle,
     source_path: String,
     candidate_root_path: String,
     original_archive_path: Option<String>,
 ) -> Result<ModInstallResult, String> {
-    mod_library::install_mod_from_candidate(
-        &app,
-        source_path,
-        candidate_root_path,
-        original_archive_path,
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "importCandidate",
+        "正在导入所选 MOD",
+        move |progress| {
+            mod_library::install_mod_from_candidate_with_progress(
+                &worker_app,
+                source_path,
+                candidate_root_path,
+                original_archive_path,
+                &progress,
+            )
+        },
     )
+    .await
 }
 
 #[tauri::command]
-pub fn list_installed_mods(app: tauri::AppHandle) -> Result<InstalledModList, String> {
-    mod_library::list_installed_mods(&app)
+pub async fn list_installed_mods(app: tauri::AppHandle) -> Result<InstalledModList, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "refreshLibrary",
+        "正在刷新 MOD 库",
+        move |progress| {
+            progress.report("正在读取 MOD 清单", 0, None, None);
+            mod_library::list_installed_mods(&worker_app)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_mod_workspace_snapshot(
+    app: tauri::AppHandle,
+) -> Result<ModWorkspaceSnapshot, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "refreshWorkspace",
+        "正在刷新 MOD 库",
+        move |progress| {
+            mod_library::get_mod_workspace_snapshot_with_progress(&worker_app, &progress)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -70,8 +137,22 @@ pub fn list_mod_categories(app: tauri::AppHandle) -> Result<ModCategoryList, Str
 }
 
 #[tauri::command]
-pub fn create_mod_category(app: tauri::AppHandle, name: String) -> Result<ModCategory, String> {
-    mod_library::create_mod_category(&app, name)
+pub fn create_mod_category(
+    app: tauri::AppHandle,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<ModCategory, String> {
+    mod_library::create_mod_category(&app, name, parent_id)
+}
+
+#[tauri::command]
+pub fn move_mod_library_item(
+    app: tauri::AppHandle,
+    mod_id: String,
+    target_mod_id: String,
+    place_after: bool,
+) -> Result<(), String> {
+    mod_library::move_mod_library_item(&app, mod_id, target_mod_id, place_after)
 }
 
 #[tauri::command]
@@ -97,53 +178,109 @@ pub fn open_installed_mod_folder(app: tauri::AppHandle, mod_id: String) -> Resul
 }
 
 #[tauri::command]
-pub fn get_mod_remap_details(
+pub async fn get_mod_remap_details(
     app: tauri::AppHandle,
     mod_id: String,
 ) -> Result<ModRemapDetails, String> {
-    mod_library::get_mod_remap_details(&app, mod_id)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "remapDetails",
+        "正在读取模型替换信息",
+        move |progress| {
+            progress.report("正在读取 MOD 文件", 0, None, None);
+            mod_library::get_mod_remap_details(&worker_app, mod_id)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn preview_mod_remap(
+pub async fn preview_mod_remap(
     app: tauri::AppHandle,
     mod_id: String,
     group_key: String,
     target_id: Option<String>,
 ) -> Result<ModRemapPlan, String> {
-    mod_library::preview_mod_remap(&app, mod_id, group_key, target_id)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "remapPreview",
+        "正在检查模型替换",
+        move |progress| {
+            progress.report("正在检查模型文件", 0, None, None);
+            mod_library::preview_mod_remap(&worker_app, mod_id, group_key, target_id)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn apply_mod_remap(
+pub async fn apply_mod_remap(
     app: tauri::AppHandle,
     mod_id: String,
     group_key: String,
     target_id: Option<String>,
 ) -> Result<ModRemapApplyResult, String> {
-    mod_library::apply_mod_remap(&app, mod_id, group_key, target_id)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "remapApply",
+        "正在保存模型替换",
+        move |progress| {
+            mod_library::apply_mod_remap_with_progress(
+                &worker_app,
+                mod_id,
+                group_key,
+                target_id,
+                &progress,
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn preview_enable_mod(
+pub async fn preview_enable_mod(
     app: tauri::AppHandle,
     mod_id: String,
 ) -> Result<ModDeploymentPlan, String> {
-    mod_library::preview_enable_mod(&app, mod_id)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "enablePreview",
+        "正在检查启用方案",
+        move |progress| {
+            progress.report("正在检查部署文件", 0, None, None);
+            mod_library::preview_enable_mod(&worker_app, mod_id)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enable_mod(
+pub async fn enable_mod(
     app: tauri::AppHandle,
     mod_id: String,
     confirm_overwrite: bool,
 ) -> Result<ModDeploymentResult, String> {
-    mod_library::enable_mod(&app, mod_id, confirm_overwrite)
+    let worker_app = app.clone();
+    run_blocking_operation(app, "enableMod", "正在启用 MOD", move |progress| {
+        mod_library::enable_mod_with_progress(&worker_app, mod_id, confirm_overwrite, &progress)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn disable_mod(app: tauri::AppHandle, mod_id: String) -> Result<ModDeploymentResult, String> {
-    mod_library::disable_mod(&app, mod_id)
+pub async fn disable_mod(
+    app: tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModDeploymentResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(app, "disableMod", "正在禁用 MOD", move |progress| {
+        mod_library::disable_mod_with_progress(&worker_app, mod_id, &progress)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -163,8 +300,15 @@ pub fn preview_uninstall_mod(
 }
 
 #[tauri::command]
-pub fn uninstall_mod(app: tauri::AppHandle, mod_id: String) -> Result<ModUninstallResult, String> {
-    mod_library::uninstall_mod(&app, mod_id)
+pub async fn uninstall_mod(
+    app: tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModUninstallResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(app, "uninstallMod", "正在卸载 MOD", move |progress| {
+        mod_library::uninstall_mod_with_progress(&worker_app, mod_id, &progress)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -173,13 +317,30 @@ pub fn preview_restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllPlan,
 }
 
 #[tauri::command]
-pub fn restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllResult, String> {
-    mod_library::restore_all_mods(&app)
+pub async fn restore_all_mods(app: tauri::AppHandle) -> Result<RestoreAllResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "restoreAll",
+        "正在还原游戏目录",
+        move |progress| mod_library::restore_all_mods_with_progress(&worker_app, &progress),
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn get_mod_conflict_report(app: tauri::AppHandle) -> Result<ModConflictReport, String> {
-    mod_library::get_mod_conflict_report(&app)
+pub async fn get_mod_conflict_report(app: tauri::AppHandle) -> Result<ModConflictReport, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "refreshConflicts",
+        "正在读取冲突信息",
+        move |progress| {
+            progress.report("正在分析启用中的 MOD", 0, None, None);
+            mod_library::get_mod_conflict_report(&worker_app)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -193,18 +354,42 @@ pub fn move_conflict_participant(
 }
 
 #[tauri::command]
-pub fn preview_apply_conflict_order(
+pub async fn preview_apply_conflict_order(
     app: tauri::AppHandle,
     group_id: String,
 ) -> Result<ApplyConflictOrderPlan, String> {
-    mod_library::preview_apply_conflict_order(&app, group_id)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "conflictPreview",
+        "正在检查冲突优先级",
+        move |progress| {
+            progress.report("正在分析冲突文件", 0, None, None);
+            mod_library::preview_apply_conflict_order(&worker_app, group_id)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn apply_conflict_order(
+pub async fn apply_conflict_order(
     app: tauri::AppHandle,
     group_id: String,
     confirm_overwrite: bool,
 ) -> Result<ApplyConflictOrderResult, String> {
-    mod_library::apply_conflict_order(&app, group_id, confirm_overwrite)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "conflictApply",
+        "正在应用冲突优先级",
+        move |progress| {
+            mod_library::apply_conflict_order_with_progress(
+                &worker_app,
+                group_id,
+                confirm_overwrite,
+                &progress,
+            )
+        },
+    )
+    .await
 }

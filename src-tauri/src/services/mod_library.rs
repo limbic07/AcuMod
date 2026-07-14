@@ -2,10 +2,11 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashMap, HashSet},
     env, fs,
-    io::ErrorKind,
+    io::{ErrorKind, Read},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::OnceLock,
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
+use crate::operations::OperationReporter;
 use crate::storage::config;
 
 use super::model_recognition::{
@@ -20,15 +22,16 @@ use super::model_recognition::{
     ModelReplacement,
 };
 use super::model_remap::{
-    build_effective_remap_files, build_model_remap_groups, rewrite_evam_slinger_id,
-    rewrite_mrl3_texture_paths, EffectiveRemapFile, EvamSlingerIdRewrite, ModelRemapGroup,
-    ModelRemapSelection,
+    build_effective_remap_files, build_model_remap_groups, is_armor_epv_deploy_path,
+    rewrite_evam_slinger_id, rewrite_mrl3_texture_paths, EffectiveRemapFile, EvamSlingerIdRewrite,
+    ModelRemapGroup, ModelRemapSelection,
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
 const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 14;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 13;
-const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 2;
+const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
+const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 1;
 const MOD_CATEGORY_NAME_LIMIT: usize = 40;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
@@ -198,6 +201,14 @@ pub struct InstalledModList {
     pub message: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModWorkspaceSnapshot {
+    pub installed_mods: InstalledModList,
+    pub categories: ModCategoryList,
+    pub conflict_report: ModConflictReport,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModDeploymentPlanFile {
@@ -333,6 +344,7 @@ pub struct ModConflictGroup {
     pub group_id: String,
     pub participant_count: usize,
     pub conflict_file_count: usize,
+    pub conflict_files: Vec<String>,
     pub enabled_participant_count: usize,
     pub participants: Vec<ModConflictParticipant>,
     pub shared_model_targets: Vec<SharedModelTarget>,
@@ -397,6 +409,7 @@ pub struct ModMetadataUpdateResult {
 pub struct ModCategory {
     pub id: String,
     pub name: String,
+    pub parent_id: Option<String>,
     pub created_at_unix_seconds: u64,
 }
 
@@ -484,6 +497,8 @@ impl Default for ModCategoryStore {
 struct StoredModCategory {
     id: String,
     name: String,
+    #[serde(default)]
+    parent_id: Option<String>,
     created_at_unix_seconds: u64,
     #[serde(default)]
     recognition_keys: Vec<String>,
@@ -494,6 +509,7 @@ impl From<&StoredModCategory> for ModCategory {
         Self {
             id: category.id.clone(),
             name: category.name.clone(),
+            parent_id: category.parent_id.clone(),
             created_at_unix_seconds: category.created_at_unix_seconds,
         }
     }
@@ -508,13 +524,26 @@ struct ConflictOrderStore {
     orders: HashMap<String, Vec<String>>,
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModLibraryOrderStore {
+    #[serde(default = "default_mod_library_order_store_schema_version")]
+    schema_version: u32,
+    #[serde(default)]
+    mod_ids: Vec<String>,
+}
+
 struct ConflictPathGroup {
     deploy_relative_path: String,
     participant_ids: Vec<String>,
 }
 
 fn default_conflict_order_schema_version() -> u32 {
-    1
+    2
+}
+
+fn default_mod_library_order_store_schema_version() -> u32 {
+    MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION
 }
 
 fn default_mod_category_store_schema_version() -> u32 {
@@ -573,10 +602,20 @@ pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus
     })
 }
 
+#[cfg(test)]
 pub fn preview_mod_import(
     raw_path: String,
     allow_game_root: bool,
 ) -> Result<ModImportPreview, String> {
+    preview_mod_import_with_progress(raw_path, allow_game_root, &OperationReporter::default())
+}
+
+pub fn preview_mod_import_with_progress(
+    raw_path: String,
+    allow_game_root: bool,
+    progress: &OperationReporter,
+) -> Result<ModImportPreview, String> {
+    progress.report("正在扫描目录", 0, None, None);
     let source_path = normalize_user_path(&raw_path);
 
     if source_path.as_os_str().is_empty() {
@@ -606,34 +645,45 @@ pub fn preview_mod_import(
             source_path.display()
         )
     })?;
-    let scan = scan_directories(&source_path)?;
+    let scan = scan_directories(&source_path, progress)?;
     let candidates = detect_candidates(&source_path, &scan.directories);
 
-    if let Some(preview) = preview_from_candidates(&source_path, candidates, scan.warnings.clone())?
+    if let Some(preview) =
+        preview_from_candidates(&source_path, candidates, scan.warnings.clone(), progress)?
     {
         return Ok(preview);
     }
 
-    preview_game_root_fallback(&source_path, allow_game_root, scan.warnings)
+    preview_game_root_fallback(&source_path, allow_game_root, scan.warnings, progress)
 }
 
-pub fn install_mod_from_folder(
+pub fn install_mod_from_folder_with_progress(
     app: &tauri::AppHandle,
     raw_path: String,
     allow_game_root: bool,
+    progress: &OperationReporter,
 ) -> Result<ModInstallResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    install_mod_from_folder_into(raw_path, allow_game_root, &paths.installed_path)
+    install_mod_from_folder_into_with_options_and_progress(
+        raw_path,
+        allow_game_root,
+        &paths.installed_path,
+        None,
+        None,
+        progress,
+    )
 }
 
-pub fn install_mod_from_archive(
+pub fn install_mod_from_archive_with_progress(
     app: &tauri::AppHandle,
     raw_path: String,
     allow_game_root: bool,
+    progress: &OperationReporter,
 ) -> Result<ModArchiveImportOutcome, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
+    progress.report("正在准备解包", 0, None, None);
     initialize_import_staging(&paths)?;
     clear_import_staging(&paths.import_staging_path)?;
     let archive_path = normalize_user_path(&raw_path);
@@ -662,11 +712,14 @@ pub fn install_mod_from_archive(
         )
     })?;
 
-    if let Err(error) = extract_archive_with_bundled_7zip(app, &archive_path, &staging_path) {
+    if let Err(error) =
+        extract_archive_with_bundled_7zip(app, &archive_path, &staging_path, progress)
+    {
         let _ = fs::remove_dir_all(&staging_path);
         return Err(error);
     }
-    let preview = preview_mod_import(path_to_string(&staging_path), allow_game_root)?;
+    let preview =
+        preview_mod_import_with_progress(path_to_string(&staging_path), allow_game_root, progress)?;
 
     if preview.status == "ambiguous" {
         return Ok(ModArchiveImportOutcome {
@@ -679,12 +732,13 @@ pub fn install_mod_from_archive(
         });
     }
 
-    let result = install_mod_from_folder_into_with_options(
+    let result = install_mod_from_folder_into_with_options_and_progress(
         path_to_string(&staging_path),
         allow_game_root,
         &paths.installed_path,
         Some(archive_name),
         Some(path_to_string(&archive_path)),
+        progress,
     );
 
     match result {
@@ -717,11 +771,12 @@ pub fn install_mod_from_archive(
     }
 }
 
-pub fn install_mod_from_candidate(
+pub fn install_mod_from_candidate_with_progress(
     app: &tauri::AppHandle,
     source_path: String,
     candidate_root_path: String,
     original_archive_path: Option<String>,
+    progress: &OperationReporter,
 ) -> Result<ModInstallResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
@@ -733,11 +788,12 @@ pub fn install_mod_from_candidate(
             .zip(paths.import_staging_path.canonicalize().ok())
             .map(|(source, staging_root)| source.starts_with(staging_root))
             .unwrap_or(false);
-    let result = install_mod_from_candidate_into(
+    let result = install_mod_from_candidate_into_with_progress(
         source_path,
         candidate_root_path,
         original_archive_path,
         &paths.installed_path,
+        progress,
     );
 
     match result {
@@ -761,18 +817,35 @@ pub fn install_mod_from_candidate(
     }
 }
 
+#[cfg(test)]
 fn install_mod_from_candidate_into(
     source_path: String,
     candidate_root_path: String,
     original_archive_path: Option<String>,
     installed_root: &Path,
 ) -> Result<ModInstallResult, String> {
+    install_mod_from_candidate_into_with_progress(
+        source_path,
+        candidate_root_path,
+        original_archive_path,
+        installed_root,
+        &OperationReporter::default(),
+    )
+}
+
+fn install_mod_from_candidate_into_with_progress(
+    source_path: String,
+    candidate_root_path: String,
+    original_archive_path: Option<String>,
+    installed_root: &Path,
+    progress: &OperationReporter,
+) -> Result<ModInstallResult, String> {
     let source = canonical_directory(&normalize_user_path(&source_path), "candidate source")?;
     let candidate = canonical_directory(
         &normalize_user_path(&candidate_root_path),
         "candidate content root",
     )?;
-    let preview = preview_mod_import(path_to_string(&source), false)?;
+    let preview = preview_mod_import_with_progress(path_to_string(&source), false, progress)?;
     let selected = preview.candidates.iter().any(|entry| {
         PathBuf::from(&entry.root_path)
             .canonicalize()
@@ -791,12 +864,13 @@ fn install_mod_from_candidate_into(
         .map(normalize_user_path)
         .unwrap_or_else(|| source.clone());
     let preferred_name = derive_mod_name(&original_source);
-    install_mod_from_folder_into_with_options(
+    install_mod_from_folder_into_with_options_and_progress(
         path_to_string(&candidate),
         false,
         installed_root,
         Some(preferred_name),
         Some(path_to_string(&original_source)),
+        progress,
     )
 }
 
@@ -804,6 +878,49 @@ pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, S
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     list_installed_mods_from(&paths.installed_path)
+}
+
+pub fn get_mod_workspace_snapshot_with_progress(
+    app: &tauri::AppHandle,
+    progress: &OperationReporter,
+) -> Result<ModWorkspaceSnapshot, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+
+    progress.report("正在读取 MOD 分类", 0, None, None);
+    let category_store = load_or_initialize_mod_category_store(&paths)?;
+    progress.report("正在读取 MOD 清单", 0, None, None);
+    let contexts = load_all_installed_manifests_with_progress(&paths.installed_path, progress)?;
+    let installed_mods = installed_mod_list_from_contexts(
+        &paths.installed_path,
+        &contexts,
+        &category_store,
+        progress,
+    )?;
+    progress.report("正在分析冲突信息", 0, None, None);
+    let conflict_store = read_conflict_order_store(&paths.installed_path)?;
+    let conflict_report = build_mod_conflict_report(&contexts, &conflict_store)?;
+    let categories = sorted_mod_categories(&category_store.categories);
+
+    Ok(ModWorkspaceSnapshot {
+        installed_mods,
+        categories: ModCategoryList {
+            message: format!("共有 {} 个分类。", categories.len()),
+            categories,
+        },
+        conflict_report,
+    })
+}
+
+pub fn move_mod_library_item(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    target_mod_id: String,
+    place_after: bool,
+) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    move_mod_library_item_from(&paths.installed_path, &mod_id, &target_mod_id, place_after)
 }
 
 pub fn update_mod_metadata(
@@ -868,16 +985,22 @@ pub fn list_mod_categories(app: &tauri::AppHandle) -> Result<ModCategoryList, St
     })
 }
 
-pub fn create_mod_category(app: &tauri::AppHandle, name: String) -> Result<ModCategory, String> {
+pub fn create_mod_category(
+    app: &tauri::AppHandle,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<ModCategory, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let mut store = load_or_initialize_mod_category_store(&paths)?;
     let name = validate_mod_category_name(&name)?;
+    let parent_id = resolve_category_parent_id(&store, parent_id.as_deref())?;
 
-    ensure_mod_category_name_is_available(&store.categories, &name, None)?;
+    ensure_mod_category_name_is_available(&store.categories, &name, parent_id.as_deref(), None)?;
     let category = StoredModCategory {
         id: unique_mod_category_id(&store.categories, &name)?,
         name,
+        parent_id,
         created_at_unix_seconds: unix_seconds_now()?,
         recognition_keys: Vec::new(),
     };
@@ -898,7 +1021,17 @@ pub fn rename_mod_category(
     let mut store = load_or_initialize_mod_category_store(&paths)?;
     let name = validate_mod_category_name(&name)?;
 
-    ensure_mod_category_name_is_available(&store.categories, &name, Some(&category_id))?;
+    let existing_category = store
+        .categories
+        .iter()
+        .find(|category| category.id == category_id)
+        .ok_or_else(|| format!("未找到分类：{category_id}"))?;
+    ensure_mod_category_name_is_available(
+        &store.categories,
+        &name,
+        existing_category.parent_id.as_deref(),
+        Some(&category_id),
+    )?;
     let category = store
         .categories
         .iter_mut()
@@ -926,6 +1059,11 @@ pub fn delete_mod_category(
         .ok_or_else(|| format!("未找到分类：{category_id}"))?;
 
     let removed_category = store.categories.remove(category_index);
+    for category in &mut store.categories {
+        if category.parent_id.as_deref() == Some(&category_id) {
+            category.parent_id = None;
+        }
+    }
     for recognition_key in removed_category.recognition_keys {
         if !store.suppressed_recognition_keys.contains(&recognition_key) {
             store.suppressed_recognition_keys.push(recognition_key);
@@ -992,15 +1130,22 @@ pub fn preview_mod_remap(
     preview_mod_remap_from(&paths.installed_path, &mod_id, &group_key, target_id)
 }
 
-pub fn apply_mod_remap(
+pub fn apply_mod_remap_with_progress(
     app: &tauri::AppHandle,
     mod_id: String,
     group_key: String,
     target_id: Option<String>,
+    progress: &OperationReporter,
 ) -> Result<ModRemapApplyResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    apply_mod_remap_from(&paths.installed_path, &mod_id, &group_key, target_id)
+    apply_mod_remap_from_with_progress(
+        &paths.installed_path,
+        &mod_id,
+        &group_key,
+        target_id,
+        progress,
+    )
 }
 
 pub fn preview_enable_mod(
@@ -1013,27 +1158,33 @@ pub fn preview_enable_mod(
     preview_enable_mod_from(&paths.installed_path, &game_root, &mod_id)
 }
 
-pub fn enable_mod(
+pub fn enable_mod_with_progress(
     app: &tauri::AppHandle,
     mod_id: String,
     confirm_overwrite: bool,
+    progress: &OperationReporter,
 ) -> Result<ModDeploymentResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    enable_mod_from(
+    enable_mod_from_with_progress(
         &paths.installed_path,
         &game_root,
         &mod_id,
         confirm_overwrite,
+        progress,
     )
 }
 
-pub fn disable_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModDeploymentResult, String> {
+pub fn disable_mod_with_progress(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    progress: &OperationReporter,
+) -> Result<ModDeploymentResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    disable_mod_from(&paths.installed_path, &game_root, &mod_id)
+    disable_mod_from_with_progress(&paths.installed_path, &game_root, &mod_id, progress)
 }
 
 pub fn preview_disable_mod(
@@ -1054,14 +1205,24 @@ pub fn preview_uninstall_mod(
     preview_uninstall_mod_from(&paths.installed_path, &mod_id)
 }
 
-pub fn uninstall_mod(app: &tauri::AppHandle, mod_id: String) -> Result<ModUninstallResult, String> {
+pub fn uninstall_mod_with_progress(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    progress: &OperationReporter,
+) -> Result<ModUninstallResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    let mut result = uninstall_mod_from(&paths.installed_path, &game_root, &mod_id)?;
+    let mut result =
+        uninstall_mod_from_with_progress(&paths.installed_path, &game_root, &mod_id, progress)?;
     if let Err(error) = remove_mod_from_conflict_orders(&paths.installed_path, &mod_id) {
         result.warnings.push(format!(
             "MOD was uninstalled, but conflict order entries could not be cleaned: {error}"
+        ));
+    }
+    if let Err(error) = remove_mod_from_library_order(&paths.installed_path, &mod_id) {
+        result.warnings.push(format!(
+            "MOD was uninstalled, but library order entries could not be cleaned: {error}"
         ));
     }
     Ok(result)
@@ -1073,11 +1234,14 @@ pub fn preview_restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllPlan
     preview_restore_all_mods_from(&paths.installed_path)
 }
 
-pub fn restore_all_mods(app: &tauri::AppHandle) -> Result<RestoreAllResult, String> {
+pub fn restore_all_mods_with_progress(
+    app: &tauri::AppHandle,
+    progress: &OperationReporter,
+) -> Result<RestoreAllResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    restore_all_mods_from(&paths.installed_path, &game_root)
+    restore_all_mods_from_with_progress(&paths.installed_path, &game_root, progress)
 }
 
 pub fn get_mod_conflict_report(app: &tauri::AppHandle) -> Result<ModConflictReport, String> {
@@ -1107,38 +1271,49 @@ pub fn preview_apply_conflict_order(
     preview_apply_conflict_order_from(&paths.installed_path, &game_root, &group_id)
 }
 
-pub fn apply_conflict_order(
+pub fn apply_conflict_order_with_progress(
     app: &tauri::AppHandle,
     group_id: String,
     confirm_overwrite: bool,
+    progress: &OperationReporter,
 ) -> Result<ApplyConflictOrderResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    apply_conflict_order_from(
+    apply_conflict_order_from_with_progress(
         &paths.installed_path,
         &game_root,
         &group_id,
         confirm_overwrite,
+        progress,
     )
 }
 
+#[cfg(test)]
 fn install_mod_from_folder_into(
     raw_path: String,
     allow_game_root: bool,
     installed_root: &Path,
 ) -> Result<ModInstallResult, String> {
-    install_mod_from_folder_into_with_options(raw_path, allow_game_root, installed_root, None, None)
+    install_mod_from_folder_into_with_options_and_progress(
+        raw_path,
+        allow_game_root,
+        installed_root,
+        None,
+        None,
+        &OperationReporter::default(),
+    )
 }
 
-fn install_mod_from_folder_into_with_options(
+fn install_mod_from_folder_into_with_options_and_progress(
     raw_path: String,
     allow_game_root: bool,
     installed_root: &Path,
     preferred_name: Option<String>,
     original_source_path: Option<String>,
+    progress: &OperationReporter,
 ) -> Result<ModInstallResult, String> {
-    let preview = preview_mod_import(raw_path, allow_game_root)?;
+    let preview = preview_mod_import_with_progress(raw_path, allow_game_root, progress)?;
 
     if preview.status != "ready" {
         return Err(format!(
@@ -1153,7 +1328,7 @@ fn install_mod_from_folder_into_with_options(
         .ok_or_else(|| "MOD content root was not resolved.".to_string())?;
     let source_root = PathBuf::from(&content_root_path);
     let deploy_root = deploy_root_from_preview(&preview, &source_root)?;
-    let files = build_file_previews(&source_root, &deploy_root)?;
+    let files = build_file_previews(&source_root, &deploy_root, progress)?;
 
     if files.is_empty() {
         return Err("MOD import has no files to copy.".to_string());
@@ -1196,7 +1371,8 @@ fn install_mod_from_folder_into_with_options(
 
         let mut installed_files = Vec::new();
 
-        for file in &files {
+        progress.report("正在复制到本地 MOD 库", 0, Some(files.len()), None);
+        for (index, file) in files.iter().enumerate() {
             let destination_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
             let destination_path = content_path.join(&destination_relative_path);
 
@@ -1222,8 +1398,15 @@ fn install_mod_from_folder_into_with_options(
                 deploy_relative_path: file.deploy_relative_path.clone(),
                 library_relative_path: format!("content/{}", file.deploy_relative_path),
             });
+            progress.report(
+                "正在复制到本地 MOD 库",
+                index + 1,
+                Some(files.len()),
+                Some(file.deploy_relative_path.clone()),
+            );
         }
 
+        progress.report("正在识别 MOD 内容", 0, None, None);
         let model_replacements =
             recognize_model_replacements_for_library_files(&installed_files, &content_path)?;
         let mut category_store =
@@ -1279,6 +1462,7 @@ fn install_mod_from_folder_into_with_options(
                 final_mod_path.display()
             )
         })?;
+        progress.report("正在完成导入", files.len(), Some(files.len()), None);
 
         Ok(ModInstallResult {
             mod_id,
@@ -1341,6 +1525,7 @@ fn preview_from_candidates(
     source_path: &Path,
     candidates: Vec<Candidate>,
     warnings: Vec<String>,
+    progress: &OperationReporter,
 ) -> Result<Option<ModImportPreview>, String> {
     if candidates.is_empty() {
         return Ok(None);
@@ -1352,7 +1537,7 @@ fn preview_from_candidates(
     shallowest.retain(|candidate| candidate.depth == selected_depth);
 
     if shallowest.len() > 1 {
-        let candidate_dtos = build_candidate_dtos(source_path, &shallowest)?;
+        let candidate_dtos = build_candidate_dtos(source_path, &shallowest, progress)?;
 
         return Ok(Some(ModImportPreview {
             source_path: path_to_string(source_path),
@@ -1374,7 +1559,7 @@ fn preview_from_candidates(
         .into_iter()
         .next()
         .ok_or_else(|| "Could not select MOD import candidate.".to_string())?;
-    let files = build_file_previews(&candidate.root_path, &candidate.deploy_root)?;
+    let files = build_file_previews(&candidate.root_path, &candidate.deploy_root, progress)?;
     let file_count = files.len();
     let mut preview_files = files;
 
@@ -1401,8 +1586,9 @@ fn preview_game_root_fallback(
     source_path: &Path,
     allow_game_root: bool,
     warnings: Vec<String>,
+    progress: &OperationReporter,
 ) -> Result<ModImportPreview, String> {
-    let files = build_file_previews(source_path, &DeployRoot::GameRoot)?;
+    let files = build_file_previews(source_path, &DeployRoot::GameRoot, progress)?;
     let file_count = files.len();
 
     if file_count == 0 {
@@ -1512,12 +1698,20 @@ fn detect_candidates(source_path: &Path, directories: &[PathBuf]) -> Vec<Candida
         .collect()
 }
 
-fn scan_directories(root: &Path) -> Result<ScanResult, String> {
+fn scan_directories(root: &Path, progress: &OperationReporter) -> Result<ScanResult, String> {
     let mut directories = vec![root.to_path_buf()];
     let mut warnings = Vec::new();
     let mut stack = vec![root.to_path_buf()];
 
     while let Some(directory) = stack.pop() {
+        progress.report(
+            "正在扫描目录",
+            directories.len(),
+            None,
+            directory
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string()),
+        );
         let entries = fs::read_dir(&directory).map_err(|error| {
             format!("Could not read directory {}: {error}", directory.display())
         })?;
@@ -1556,6 +1750,7 @@ fn scan_directories(root: &Path) -> Result<ScanResult, String> {
 fn build_candidate_dtos(
     source_path: &Path,
     candidates: &[Candidate],
+    progress: &OperationReporter,
 ) -> Result<Vec<ModImportCandidate>, String> {
     let mut dtos = Vec::new();
 
@@ -1569,7 +1764,12 @@ fn build_candidate_dtos(
                 .unwrap_or_else(|_| path_to_string(&candidate.root_path)),
             detection_method: candidate.detection_method.to_string(),
             deploy_root: deploy_root_label(&candidate.deploy_root).to_string(),
-            file_count: build_file_previews(&candidate.root_path, &candidate.deploy_root)?.len(),
+            file_count: build_file_previews(
+                &candidate.root_path,
+                &candidate.deploy_root,
+                progress,
+            )?
+            .len(),
         });
     }
 
@@ -1581,10 +1781,12 @@ fn build_candidate_dtos(
 fn build_file_previews(
     root: &Path,
     deploy_root: &DeployRoot,
+    progress: &OperationReporter,
 ) -> Result<Vec<ModImportFilePreview>, String> {
     let mut files = Vec::new();
-    collect_file_previews(root, root, deploy_root, &mut files)?;
+    collect_file_previews(root, root, deploy_root, &mut files, progress)?;
     files.sort_by_key(|file| file.deploy_relative_path.to_lowercase());
+    progress.report("正在整理文件清单", files.len(), Some(files.len()), None);
     Ok(files)
 }
 
@@ -1593,6 +1795,7 @@ fn collect_file_previews(
     directory: &Path,
     deploy_root: &DeployRoot,
     files: &mut Vec<ModImportFilePreview>,
+    progress: &OperationReporter,
 ) -> Result<(), String> {
     let entries = fs::read_dir(directory)
         .map_err(|error| format!("Could not read directory {}: {error}", directory.display()))?;
@@ -1613,7 +1816,7 @@ fn collect_file_previews(
         }
 
         if metadata.is_dir() {
-            collect_file_previews(root, &path, deploy_root, files)?;
+            collect_file_previews(root, &path, deploy_root, files, progress)?;
             continue;
         }
 
@@ -1642,6 +1845,13 @@ fn collect_file_previews(
             source_relative_path,
             deploy_relative_path,
         });
+        progress.report(
+            "正在读取 MOD 文件",
+            files.len(),
+            None,
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string()),
+        );
     }
 
     Ok(())
@@ -1805,6 +2015,97 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             .cmp(&left.installed_at_unix_seconds)
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
+    apply_mod_library_order(installed_root, &mut mods)?;
+
+    let message = if mods.is_empty() {
+        "本地 MOD 库为空。".to_string()
+    } else {
+        format!("本地 MOD 库共有 {} 个 MOD。", mods.len())
+    };
+
+    Ok(InstalledModList {
+        mods,
+        warnings,
+        message,
+    })
+}
+
+fn installed_mod_list_from_contexts(
+    installed_root: &Path,
+    contexts: &[InstalledManifestContext],
+    category_store: &ModCategoryStore,
+    progress: &OperationReporter,
+) -> Result<InstalledModList, String> {
+    let mut mods = Vec::new();
+    let mut warnings = Vec::new();
+    let total = contexts.len();
+
+    for (index, context) in contexts.iter().enumerate() {
+        let manifest = &context.manifest;
+        let original_model_replacements =
+            match model_replacements_for_manifest(manifest, &context.content_path) {
+                Ok(model_replacements) => model_replacements,
+                Err(_error) => {
+                    warnings.push(format!(
+                        "无法识别 {} 的模型替换信息，请检查 MOD 文件结构。",
+                        manifest.name
+                    ));
+                    Vec::new()
+                }
+            };
+        let model_replacements =
+            match effective_model_replacements_for_manifest(manifest, &original_model_replacements)
+            {
+                Ok(model_replacements) => model_replacements,
+                Err(_error) => {
+                    warnings.push(format!(
+                        "无法应用 {} 已保存的模型修改，请重新设置替换模型。",
+                        manifest.name
+                    ));
+                    original_model_replacements.clone()
+                }
+            };
+        let categories = resolve_mod_categories(category_store, &manifest.category_ids);
+        let category_ids = categories
+            .iter()
+            .map(|category| category.id.clone())
+            .collect();
+
+        mods.push(InstalledModSummary {
+            id: manifest.id.clone(),
+            name: manifest_display_name(manifest),
+            original_name: manifest.name.clone(),
+            note: manifest.note.clone(),
+            category_ids,
+            categories,
+            mod_path: path_to_string(&context.mod_path),
+            content_path: path_to_string(&context.content_path),
+            manifest_path: path_to_string(&context.manifest_path),
+            file_count: manifest.file_count,
+            files: manifest.files.clone(),
+            enabled: manifest.enabled,
+            deploy_root: manifest.deploy_root.clone(),
+            detection_method: manifest.detection_method.clone(),
+            installed_at_unix_seconds: manifest.installed_at_unix_seconds,
+            model_replacements,
+            original_model_replacements,
+            model_remap_count: manifest.model_remaps.len(),
+        });
+        progress.report(
+            "正在整理 MOD 列表",
+            index + 1,
+            Some(total),
+            Some(manifest_display_name(manifest)),
+        );
+    }
+
+    mods.sort_by(|left, right| {
+        right
+            .installed_at_unix_seconds
+            .cmp(&left.installed_at_unix_seconds)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    apply_mod_library_order(installed_root, &mut mods)?;
 
     let message = if mods.is_empty() {
         "本地 MOD 库为空。".to_string()
@@ -2067,12 +2368,26 @@ fn preview_mod_remap_from(
 
     let mut preview_manifest = context.manifest.clone();
     preview_manifest.model_remaps = selections;
+    let current_effective_files =
+        effective_installed_files_for_manifest(&context.manifest, &replacements)?;
     let effective_files = effective_installed_files_for_manifest(&preview_manifest, &replacements)?;
     let mut files = Vec::new();
     let mut total_mrl3_rewrite_count = 0;
     let mut total_evam_rewrite_count = 0;
+    let mut changed_armor_epv_file_count = 0;
 
-    for effective_file in &effective_files {
+    for (current_effective_file, effective_file) in
+        current_effective_files.iter().zip(&effective_files)
+    {
+        if !current_effective_file
+            .deploy_relative_path
+            .eq_ignore_ascii_case(&effective_file.deploy_relative_path)
+            && (is_armor_epv_deploy_path(&current_effective_file.deploy_relative_path)
+                || is_armor_epv_deploy_path(&effective_file.deploy_relative_path))
+        {
+            changed_armor_epv_file_count += 1;
+        }
+
         let source_path = source_path_for_installed_file(&context, &effective_file.installed_file)?;
         let mrl3_rewrite_count = preview_mrl3_rewrite_count(&source_path, effective_file)?;
         let evam_rewrite_count = preview_evam_rewrite_count(&source_path, effective_file)?;
@@ -2098,6 +2413,11 @@ fn preview_mod_remap_from(
 
     if files.is_empty() {
         warnings.push("当前选择不会改变原始部署路径。".to_string());
+    }
+    if changed_armor_epv_file_count > 0 {
+        warnings.push(format!(
+            "检测到 {changed_armor_epv_file_count} 个防具特效触发文件。改绑后会同步调整其部署位置；启用后请在游戏中确认装备特效是否正常。"
+        ));
     }
     let target_label = normalized_target_id
         .as_deref()
@@ -2125,13 +2445,32 @@ fn preview_mod_remap_from(
     })
 }
 
+#[cfg(test)]
 fn apply_mod_remap_from(
     installed_root: &Path,
     mod_id: &str,
     group_key: &str,
     target_id: Option<String>,
 ) -> Result<ModRemapApplyResult, String> {
+    apply_mod_remap_from_with_progress(
+        installed_root,
+        mod_id,
+        group_key,
+        target_id,
+        &OperationReporter::default(),
+    )
+}
+
+fn apply_mod_remap_from_with_progress(
+    installed_root: &Path,
+    mod_id: &str,
+    group_key: &str,
+    target_id: Option<String>,
+    progress: &OperationReporter,
+) -> Result<ModRemapApplyResult, String> {
+    progress.report("正在检查模型替换", 0, None, None);
     let plan = preview_mod_remap_from(installed_root, mod_id, group_key, target_id.clone())?;
+    progress.report("正在保存模型替换设置", 0, Some(1), None);
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     ensure_manifest_can_remap(&context.manifest)?;
     refresh_manifest_model_replacements(&mut context)?;
@@ -2149,6 +2488,7 @@ fn apply_mod_remap_from(
     );
     context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
     save_manifest(&context.manifest_path, &context.manifest)?;
+    progress.report("正在保存模型替换设置", 1, Some(1), None);
 
     Ok(ModRemapApplyResult {
         mod_id: context.manifest.id.clone(),
@@ -2439,12 +2779,30 @@ fn preview_disable_mod_from(installed_root: &Path, mod_id: &str) -> Result<ModDi
     })
 }
 
+#[cfg(test)]
 fn enable_mod_from(
     installed_root: &Path,
     game_root: &Path,
     mod_id: &str,
     confirm_overwrite: bool,
 ) -> Result<ModDeploymentResult, String> {
+    enable_mod_from_with_progress(
+        installed_root,
+        game_root,
+        mod_id,
+        confirm_overwrite,
+        &OperationReporter::default(),
+    )
+}
+
+fn enable_mod_from_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+    confirm_overwrite: bool,
+    progress: &OperationReporter,
+) -> Result<ModDeploymentResult, String> {
+    progress.report("正在检查部署文件", 0, None, None);
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     let plan = build_deployment_plan(installed_root, game_root, &context)?;
 
@@ -2459,7 +2817,9 @@ fn enable_mod_from(
     let mut deployed_files = Vec::new();
 
     let effective_files = effective_installed_files_for_context(&context)?;
-    for file in &effective_files {
+    let file_total = effective_files.len();
+    progress.report("正在部署 MOD 文件", 0, Some(file_total), None);
+    for (index, file) in effective_files.iter().enumerate() {
         let target_relative_path = relative_string_to_path(&file.deploy_relative_path)?;
         let target_path = game_root.join(target_relative_path);
 
@@ -2479,19 +2839,29 @@ fn enable_mod_from(
             deployed_path: path_to_string(&target_path),
             deployed_at_unix_seconds: deployed_at,
         });
+        progress.report(
+            "正在部署 MOD 文件",
+            index + 1,
+            Some(file_total),
+            Some(file.deploy_relative_path.clone()),
+        );
     }
 
     context.manifest.enabled = true;
     context.manifest.deployed_files = deployed_files.clone();
+    progress.report("正在保存部署记录", 0, Some(1), None);
     save_manifest(&context.manifest_path, &context.manifest)?;
     let mut warnings = plan.warnings;
+    progress.report("正在记录冲突优先级", 0, None, None);
     record_enabled_mod_conflict_order(installed_root, &context.manifest.id)?;
-    reapply_conflict_groups_for_mod(
+    reapply_conflict_groups_for_mod_with_progress(
         installed_root,
         game_root,
         &context.manifest.id,
         &mut warnings,
+        progress,
     )?;
+    progress.report("正在保存部署记录", 1, Some(1), None);
 
     let name = manifest_display_name(&context.manifest);
     Ok(ModDeploymentResult {
@@ -2505,10 +2875,25 @@ fn enable_mod_from(
     })
 }
 
+#[cfg(test)]
 fn disable_mod_from(
     installed_root: &Path,
     game_root: &Path,
     mod_id: &str,
+) -> Result<ModDeploymentResult, String> {
+    disable_mod_from_with_progress(
+        installed_root,
+        game_root,
+        mod_id,
+        &OperationReporter::default(),
+    )
+}
+
+fn disable_mod_from_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+    progress: &OperationReporter,
 ) -> Result<ModDeploymentResult, String> {
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     let deployed_files = context.manifest.deployed_files.clone();
@@ -2517,18 +2902,27 @@ fn disable_mod_from(
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
     let mut warnings = Vec::new();
-    let removed_count = remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
+    let removed_count = remove_deployed_files_with_progress(
+        game_root,
+        &deployed_files,
+        &mut warnings,
+        progress,
+        "正在清理游戏文件",
+    )?;
 
     context.manifest.enabled = false;
     context.manifest.deployed_files = Vec::new();
+    progress.report("正在保存部署记录", 0, Some(1), None);
     save_manifest(&context.manifest_path, &context.manifest)?;
 
-    restore_enabled_versions_for_paths(
+    restore_enabled_versions_for_paths_with_progress(
         installed_root,
         game_root,
         &disabled_file_paths,
         &mut warnings,
+        progress,
     )?;
+    progress.report("正在保存部署记录", 1, Some(1), None);
 
     let message = if deployed_files.is_empty() {
         "MOD was already disabled; no deployment records were found.".to_string()
@@ -2576,30 +2970,54 @@ fn preview_uninstall_mod_from(
     })
 }
 
+#[cfg(test)]
 fn uninstall_mod_from(
     installed_root: &Path,
     game_root: &Path,
     mod_id: &str,
 ) -> Result<ModUninstallResult, String> {
+    uninstall_mod_from_with_progress(
+        installed_root,
+        game_root,
+        mod_id,
+        &OperationReporter::default(),
+    )
+}
+
+fn uninstall_mod_from_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+    progress: &OperationReporter,
+) -> Result<ModUninstallResult, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
     let removed_library_file_count = context.manifest.files.len();
     let mut warnings = Vec::new();
     let removed_deployed_file_count = if context.manifest.enabled {
-        let disable_result = disable_mod_from(installed_root, game_root, mod_id)?;
+        let disable_result =
+            disable_mod_from_with_progress(installed_root, game_root, mod_id, progress)?;
         warnings.extend(disable_result.warnings);
         disable_result.affected_file_count
     } else {
-        remove_deployed_files(game_root, &context.manifest.deployed_files, &mut warnings)?
+        remove_deployed_files_with_progress(
+            game_root,
+            &context.manifest.deployed_files,
+            &mut warnings,
+            progress,
+            "正在清理游戏文件",
+        )?
     };
     let name = manifest_display_name(&context.manifest);
     let mod_id = context.manifest.id;
 
+    progress.report("正在删除本地 MOD", 0, Some(1), Some(name.clone()));
     fs::remove_dir_all(&context.mod_path).map_err(|error| {
         format!(
             "Could not remove installed MOD directory {}: {error}",
             context.mod_path.display()
         )
     })?;
+    progress.report("正在删除本地 MOD", 1, Some(1), Some(name.clone()));
 
     Ok(ModUninstallResult {
         mod_id,
@@ -2634,14 +3052,26 @@ fn preview_restore_all_mods_from(installed_root: &Path) -> Result<RestoreAllPlan
     })
 }
 
+#[cfg(test)]
 fn restore_all_mods_from(
     installed_root: &Path,
     game_root: &Path,
 ) -> Result<RestoreAllResult, String> {
+    restore_all_mods_from_with_progress(installed_root, game_root, &OperationReporter::default())
+}
+
+fn restore_all_mods_from_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    progress: &OperationReporter,
+) -> Result<RestoreAllResult, String> {
+    progress.report("正在读取已部署 MOD", 0, None, None);
     let contexts = load_all_installed_manifests(installed_root)?;
     let plan_mods = restore_plan_items(&contexts);
     let mut warnings = Vec::new();
     let mut removed_deployed_file_count = 0;
+    let affected_mod_count = plan_mods.len();
+    let mut completed_mod_count = 0;
 
     for mut context in contexts {
         if !context.manifest.enabled && context.manifest.deployed_files.is_empty() {
@@ -2649,11 +3079,23 @@ fn restore_all_mods_from(
         }
 
         let deployed_files = context.manifest.deployed_files.clone();
-        removed_deployed_file_count +=
-            remove_deployed_files(game_root, &deployed_files, &mut warnings)?;
+        removed_deployed_file_count += remove_deployed_files_with_progress(
+            game_root,
+            &deployed_files,
+            &mut warnings,
+            progress,
+            "正在清理游戏文件",
+        )?;
         context.manifest.enabled = false;
         context.manifest.deployed_files = Vec::new();
         save_manifest(&context.manifest_path, &context.manifest)?;
+        completed_mod_count += 1;
+        progress.report(
+            "正在还原 MOD",
+            completed_mod_count,
+            Some(affected_mod_count),
+            Some(manifest_display_name(&context.manifest)),
+        );
     }
 
     let message = if plan_mods.is_empty() {
@@ -2796,12 +3238,30 @@ fn preview_apply_conflict_order_from(
     })
 }
 
+#[cfg(test)]
 fn apply_conflict_order_from(
     installed_root: &Path,
     game_root: &Path,
     group_id: &str,
     confirm_overwrite: bool,
 ) -> Result<ApplyConflictOrderResult, String> {
+    apply_conflict_order_from_with_progress(
+        installed_root,
+        game_root,
+        group_id,
+        confirm_overwrite,
+        &OperationReporter::default(),
+    )
+}
+
+fn apply_conflict_order_from_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    group_id: &str,
+    confirm_overwrite: bool,
+    progress: &OperationReporter,
+) -> Result<ApplyConflictOrderResult, String> {
+    progress.report("正在分析冲突文件", 0, None, None);
     let plan = preview_apply_conflict_order_from(installed_root, game_root, group_id)?;
 
     if plan.requires_overwrite_confirmation && !confirm_overwrite {
@@ -2819,6 +3279,12 @@ fn apply_conflict_order_from(
     let conflict_paths = conflict_paths_for_group(&contexts, group)?;
     let deployed_at = unix_seconds_now()?;
     let mut applied_file_count = 0;
+    progress.report(
+        "正在应用冲突优先级",
+        0,
+        Some(plan.applicable_file_count),
+        None,
+    );
 
     for conflict_path in &conflict_paths {
         let Some(winner_mod_id) = winner_for_conflict_path(group, conflict_path) else {
@@ -2866,10 +3332,23 @@ fn apply_conflict_order_from(
         }
 
         applied_file_count += 1;
+        progress.report(
+            "正在应用冲突优先级",
+            applied_file_count,
+            Some(plan.applicable_file_count),
+            Some(conflict_path.deploy_relative_path.clone()),
+        );
     }
 
-    for context in &contexts {
+    progress.report("正在保存冲突部署记录", 0, Some(contexts.len()), None);
+    for (index, context) in contexts.iter().enumerate() {
         save_manifest(&context.manifest_path, &context.manifest)?;
+        progress.report(
+            "正在保存冲突部署记录",
+            index + 1,
+            Some(contexts.len()),
+            Some(manifest_display_name(&context.manifest)),
+        );
     }
 
     Ok(ApplyConflictOrderResult {
@@ -2954,11 +3433,21 @@ fn build_mod_conflict_report(
                     .any(|participant_id| participant_id_set.contains(participant_id))
             })
             .count();
+        let conflict_files = conflict_paths
+            .iter()
+            .filter(|path| {
+                path.participant_ids
+                    .iter()
+                    .any(|participant_id| participant_id_set.contains(participant_id))
+            })
+            .map(|path| path.deploy_relative_path.clone())
+            .collect::<Vec<_>>();
 
         groups.push(ModConflictGroup {
             group_id,
             participant_count: participants.len(),
             conflict_file_count,
+            conflict_files,
             enabled_participant_count,
             participants,
             shared_model_targets: shared_model_targets_for_group(contexts, &participant_id_set)?,
@@ -3168,19 +3657,20 @@ fn winner_for_conflict_path<'a>(
     group
         .participants
         .iter()
-        .rev()
         .find(|participant| {
             participant.enabled && conflict_path.participant_ids.contains(&participant.mod_id)
         })
         .map(|participant| participant.mod_id.as_str())
 }
 
-fn reapply_conflict_groups_for_mod(
+fn reapply_conflict_groups_for_mod_with_progress(
     installed_root: &Path,
     game_root: &Path,
     mod_id: &str,
     warnings: &mut Vec<String>,
+    progress: &OperationReporter,
 ) -> Result<(), String> {
+    progress.report("正在同步关联冲突", 0, None, None);
     let report = get_mod_conflict_report_from(installed_root)?;
 
     for group in report.groups {
@@ -3193,9 +3683,13 @@ fn reapply_conflict_groups_for_mod(
             continue;
         }
 
-        if let Err(error) =
-            apply_conflict_order_from(installed_root, game_root, &group.group_id, false)
-        {
+        if let Err(error) = apply_conflict_order_from_with_progress(
+            installed_root,
+            game_root,
+            &group.group_id,
+            false,
+            progress,
+        ) {
             warnings.push(format!(
                 "Could not reapply conflict group {}: {error}",
                 group.group_id
@@ -3230,7 +3724,7 @@ fn record_enabled_mod_conflict_order(
             .map(|participant| participant.mod_id.clone())
             .collect::<Vec<_>>();
         order.retain(|mod_id| mod_id != enabled_mod_id);
-        order.push(enabled_mod_id.to_string());
+        order.insert(0, enabled_mod_id.to_string());
         store.orders.insert(group.group_id, order);
         changed = true;
     }
@@ -3242,12 +3736,19 @@ fn record_enabled_mod_conflict_order(
     Ok(())
 }
 
-fn restore_enabled_versions_for_paths(
+fn restore_enabled_versions_for_paths_with_progress(
     installed_root: &Path,
     game_root: &Path,
     deploy_relative_paths: &[String],
     warnings: &mut Vec<String>,
+    progress: &OperationReporter,
 ) -> Result<(), String> {
+    progress.report(
+        "正在恢复仍启用的 MOD",
+        0,
+        Some(deploy_relative_paths.len()),
+        None,
+    );
     let mut contexts = load_all_installed_manifests(installed_root)?;
     let store = read_conflict_order_store(installed_root)?;
     let deployed_at = unix_seconds_now()?;
@@ -3263,10 +3764,18 @@ fn restore_enabled_versions_for_paths(
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
+    let mut completed_path_count = 0;
     for deploy_relative_path in deploy_relative_paths {
         let path_key = conflict_path_key(deploy_relative_path);
 
         if !seen_paths.insert(path_key.clone()) {
+            completed_path_count += 1;
+            progress.report(
+                "正在恢复仍启用的 MOD",
+                completed_path_count,
+                Some(deploy_relative_paths.len()),
+                Some(deploy_relative_path.clone()),
+            );
             continue;
         }
 
@@ -3289,6 +3798,13 @@ fn restore_enabled_versions_for_paths(
             .collect::<Vec<_>>();
 
         if participants.is_empty() {
+            completed_path_count += 1;
+            progress.report(
+                "正在恢复仍启用的 MOD",
+                completed_path_count,
+                Some(deploy_relative_paths.len()),
+                Some(deploy_relative_path.clone()),
+            );
             continue;
         }
 
@@ -3299,11 +3815,18 @@ fn restore_enabled_versions_for_paths(
         participant_ids.sort();
         let stored_order = find_best_stored_order(&store, &participant_ids);
         sort_participants_by_conflict_order(&mut participants, stored_order);
-        let winner_mod_id = participants.last().unwrap().mod_id.clone();
+        let winner_mod_id = participants.first().unwrap().mod_id.clone();
         let Some(winner_index) = contexts
             .iter()
             .position(|context| context.manifest.id == winner_mod_id)
         else {
+            completed_path_count += 1;
+            progress.report(
+                "正在恢复仍启用的 MOD",
+                completed_path_count,
+                Some(deploy_relative_paths.len()),
+                Some(deploy_relative_path.clone()),
+            );
             continue;
         };
         let Some(source_file) = effective_files_by_mod
@@ -3313,6 +3836,13 @@ fn restore_enabled_versions_for_paths(
             .find(|file| conflict_path_key(&file.deploy_relative_path) == path_key)
             .cloned()
         else {
+            completed_path_count += 1;
+            progress.report(
+                "正在恢复仍启用的 MOD",
+                completed_path_count,
+                Some(deploy_relative_paths.len()),
+                Some(deploy_relative_path.clone()),
+            );
             continue;
         };
         let target_path = game_root.join(relative_string_to_path(deploy_relative_path)?);
@@ -3332,6 +3862,13 @@ fn restore_enabled_versions_for_paths(
 
         if let Err(error) = copy_result {
             warnings.push(error);
+            completed_path_count += 1;
+            progress.report(
+                "正在恢复仍启用的 MOD",
+                completed_path_count,
+                Some(deploy_relative_paths.len()),
+                Some(deploy_relative_path.clone()),
+            );
             continue;
         }
 
@@ -3351,6 +3888,13 @@ fn restore_enabled_versions_for_paths(
         }
 
         changed = true;
+        completed_path_count += 1;
+        progress.report(
+            "正在恢复仍启用的 MOD",
+            completed_path_count,
+            Some(deploy_relative_paths.len()),
+            Some(deploy_relative_path.clone()),
+        );
     }
 
     if changed {
@@ -3362,14 +3906,18 @@ fn restore_enabled_versions_for_paths(
     Ok(())
 }
 
-fn remove_deployed_files(
+fn remove_deployed_files_with_progress(
     game_root: &Path,
     deployed_files: &[DeployedModFile],
     warnings: &mut Vec<String>,
+    progress: &OperationReporter,
+    phase: &str,
 ) -> Result<usize, String> {
     let mut removed_count = 0;
+    let file_total = deployed_files.len();
+    progress.report(phase, 0, Some(file_total), None);
 
-    for deployed_file in deployed_files {
+    for (index, deployed_file) in deployed_files.iter().enumerate() {
         let target_relative_path = relative_string_to_path(&deployed_file.deploy_relative_path)?;
         let target_path = game_root.join(target_relative_path);
 
@@ -3378,6 +3926,12 @@ fn remove_deployed_files(
                 "Deployment target was already missing: {}",
                 target_path.display()
             ));
+            progress.report(
+                phase,
+                index + 1,
+                Some(file_total),
+                Some(deployed_file.deploy_relative_path.clone()),
+            );
             continue;
         }
 
@@ -3396,6 +3950,12 @@ fn remove_deployed_files(
         })?;
         removed_count += 1;
         cleanup_empty_parent_directories(&target_path, game_root, warnings);
+        progress.report(
+            phase,
+            index + 1,
+            Some(file_total),
+            Some(deployed_file.deploy_relative_path.clone()),
+        );
     }
 
     Ok(removed_count)
@@ -3566,10 +4126,17 @@ fn load_installed_manifest(
 fn load_all_installed_manifests(
     installed_root: &Path,
 ) -> Result<Vec<InstalledManifestContext>, String> {
-    let mut contexts = Vec::new();
+    load_all_installed_manifests_with_progress(installed_root, &OperationReporter::default())
+}
+
+fn load_all_installed_manifests_with_progress(
+    installed_root: &Path,
+    progress: &OperationReporter,
+) -> Result<Vec<InstalledManifestContext>, String> {
+    let mut mod_ids = Vec::new();
 
     if !installed_root.exists() {
-        return Ok(contexts);
+        return Ok(Vec::new());
     }
 
     for entry in fs::read_dir(installed_root).map_err(|error| {
@@ -3604,7 +4171,20 @@ fn load_all_installed_manifests(
             continue;
         }
 
-        contexts.push(load_installed_manifest(installed_root, mod_id)?);
+        mod_ids.push(mod_id.to_string());
+    }
+
+    let total = mod_ids.len();
+    let mut contexts = Vec::with_capacity(total);
+    for (index, mod_id) in mod_ids.into_iter().enumerate() {
+        let context = load_installed_manifest(installed_root, &mod_id)?;
+        progress.report(
+            "正在读取 MOD 清单",
+            index + 1,
+            Some(total),
+            Some(manifest_display_name(&context.manifest)),
+        );
+        contexts.push(context);
     }
 
     sort_contexts_by_installation(&mut contexts);
@@ -3657,6 +4237,192 @@ fn sort_participants_by_conflict_order(
     }
 }
 
+fn mod_library_order_store_path(installed_root: &Path) -> PathBuf {
+    let is_standard_installed_root = installed_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("installed"))
+        .unwrap_or(false);
+
+    if is_standard_installed_root {
+        return installed_root
+            .parent()
+            .map(|mods_path| mods_path.join("mod-library-order.json"))
+            .unwrap_or_else(|| installed_root.join(".mod-library-order.json"));
+    }
+
+    installed_root.join(".mod-library-order.json")
+}
+
+fn read_mod_library_order_store(installed_root: &Path) -> Result<ModLibraryOrderStore, String> {
+    let store_path = mod_library_order_store_path(installed_root);
+    if !store_path.exists() {
+        return Ok(ModLibraryOrderStore {
+            schema_version: default_mod_library_order_store_schema_version(),
+            mod_ids: Vec::new(),
+        });
+    }
+
+    let store_json = fs::read_to_string(&store_path).map_err(|error| {
+        format!(
+            "Could not read MOD library order store {}: {error}",
+            store_path.display()
+        )
+    })?;
+    let mut store = serde_json::from_str::<ModLibraryOrderStore>(&store_json).map_err(|error| {
+        format!(
+            "Could not parse MOD library order store {}: {error}",
+            store_path.display()
+        )
+    })?;
+    store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
+    Ok(store)
+}
+
+fn save_mod_library_order_store(
+    installed_root: &Path,
+    store: &ModLibraryOrderStore,
+) -> Result<(), String> {
+    let store_path = mod_library_order_store_path(installed_root);
+    if let Some(parent) = store_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create MOD library order directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let store_json = serde_json::to_string_pretty(store)
+        .map_err(|error| format!("Could not serialize MOD library order store: {error}"))?;
+    fs::write(&store_path, store_json).map_err(|error| {
+        format!(
+            "Could not save MOD library order store {}: {error}",
+            store_path.display()
+        )
+    })
+}
+
+fn normalized_mod_library_order(
+    store: &ModLibraryOrderStore,
+    mods: &[InstalledModSummary],
+) -> Vec<String> {
+    let known_mod_ids = mods
+        .iter()
+        .map(|installed_mod| installed_mod.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut order = Vec::new();
+
+    for mod_id in &store.mod_ids {
+        if known_mod_ids.contains(mod_id.as_str()) && seen.insert(mod_id.as_str()) {
+            order.push(mod_id.clone());
+        }
+    }
+    for installed_mod in mods {
+        if seen.insert(installed_mod.id.as_str()) {
+            order.push(installed_mod.id.clone());
+        }
+    }
+
+    order
+}
+
+fn apply_mod_library_order(
+    installed_root: &Path,
+    mods: &mut Vec<InstalledModSummary>,
+) -> Result<(), String> {
+    let mut store = read_mod_library_order_store(installed_root)?;
+    let order = normalized_mod_library_order(&store, mods);
+    if store.mod_ids != order {
+        store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
+        store.mod_ids = order.clone();
+        save_mod_library_order_store(installed_root, &store)?;
+    }
+    let order_index = order
+        .iter()
+        .enumerate()
+        .map(|(index, mod_id)| (mod_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+
+    mods.sort_by(|left, right| {
+        order_index
+            .get(left.id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(
+                &order_index
+                    .get(right.id.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX),
+            )
+    });
+    Ok(())
+}
+
+fn move_mod_library_item_from(
+    installed_root: &Path,
+    mod_id: &str,
+    target_mod_id: &str,
+    place_after: bool,
+) -> Result<(), String> {
+    validate_mod_id(mod_id)?;
+    validate_mod_id(target_mod_id)?;
+    if mod_id == target_mod_id {
+        return Ok(());
+    }
+
+    let mut store = read_mod_library_order_store(installed_root)?;
+    let has_source_and_target = store.mod_ids.iter().any(|current_id| current_id == mod_id)
+        && store
+            .mod_ids
+            .iter()
+            .any(|current_id| current_id == target_mod_id);
+    let mut order = if has_source_and_target {
+        // The list view persists a complete order. Reuse it so one drag does not
+        // rescan every installed MOD and its model-recognition data.
+        store.mod_ids.clone()
+    } else {
+        let installed_mods = list_installed_mods_from(installed_root)?.mods;
+        normalized_mod_library_order(&store, &installed_mods)
+    };
+    load_installed_manifest(installed_root, mod_id)?;
+    load_installed_manifest(installed_root, target_mod_id)?;
+    let source_index = order
+        .iter()
+        .position(|current_id| current_id == mod_id)
+        .ok_or_else(|| format!("未找到需要排序的 MOD：{mod_id}"))?;
+    let target_index = order
+        .iter()
+        .position(|current_id| current_id == target_mod_id)
+        .ok_or_else(|| format!("未找到排序目标 MOD：{target_mod_id}"))?;
+
+    let moved_mod_id = order.remove(source_index);
+    let adjusted_target_index = if source_index < target_index {
+        target_index - 1
+    } else {
+        target_index
+    };
+    let insert_index = if place_after {
+        adjusted_target_index + 1
+    } else {
+        adjusted_target_index
+    };
+    order.insert(insert_index, moved_mod_id);
+    store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
+    store.mod_ids = order;
+    save_mod_library_order_store(installed_root, &store)
+}
+
+fn remove_mod_from_library_order(installed_root: &Path, mod_id: &str) -> Result<(), String> {
+    let mut store = read_mod_library_order_store(installed_root)?;
+    let original_count = store.mod_ids.len();
+    store.mod_ids.retain(|current_id| current_id != mod_id);
+    if store.mod_ids.len() != original_count {
+        save_mod_library_order_store(installed_root, &store)?;
+    }
+    Ok(())
+}
+
 fn conflict_order_store_path(installed_root: &Path) -> PathBuf {
     installed_root.join("conflict-orders.json")
 }
@@ -3682,12 +4448,24 @@ fn read_conflict_order_store(installed_root: &Path) -> Result<ConflictOrderStore
         )
     })?;
 
-    serde_json::from_str(&store_json).map_err(|error| {
+    let mut store = serde_json::from_str::<ConflictOrderStore>(&store_json).map_err(|error| {
         format!(
             "Could not parse conflict order store {}: {error}",
             store_path.display()
         )
-    })
+    })?;
+
+    // Schema 1 used the last entry as the winner. Reverse it once so existing
+    // deployments retain the same winner under the top-first priority rule.
+    if store.schema_version < default_conflict_order_schema_version() {
+        for order in store.orders.values_mut() {
+            order.reverse();
+        }
+        store.schema_version = default_conflict_order_schema_version();
+        save_conflict_order_store(installed_root, &store)?;
+    }
+
+    Ok(store)
 }
 
 fn save_conflict_order_store(
@@ -3942,16 +4720,22 @@ fn extract_archive_with_bundled_7zip(
     app: &tauri::AppHandle,
     archive_path: &Path,
     destination: &Path,
+    progress: &OperationReporter,
 ) -> Result<(), String> {
     let seven_zip = bundled_7zip_executable(app).ok_or_else(|| {
         "Bundled 7-Zip unpacker is missing. Expected resources/unpackers/7zip/7z.exe and 7z.dll in the Acumod application resources.".to_string()
     })?;
-    let output = Command::new(&seven_zip)
+    progress.report("正在解包压缩包", 0, Some(100), None);
+    let mut child = Command::new(&seven_zip)
         .arg("x")
         .arg("-y")
+        .arg("-bsp1")
+        .arg("-bb1")
         .arg(format!("-o{}", destination.display()))
         .arg(archive_path)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             format!(
                 "Could not run bundled unpacker {}: {error}",
@@ -3959,19 +4743,76 @@ fn extract_archive_with_bundled_7zip(
             )
         })?;
 
-    if output.status.success() {
-        return Ok(());
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取内置解包器输出。".to_string())?;
+    let stderr = child.stderr.take();
+    let stderr_reader = thread::spawn(move || {
+        let mut output = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_string(&mut output);
+        }
+        output
+    });
+    let mut stdout_buffer = [0_u8; 1024];
+    let mut stdout_text = String::new();
+
+    loop {
+        let read_count = stdout
+            .read(&mut stdout_buffer)
+            .map_err(|error| format!("无法读取内置解包器进度：{error}"))?;
+        if read_count == 0 {
+            break;
+        }
+
+        let chunk = String::from_utf8_lossy(&stdout_buffer[..read_count]);
+        stdout_text.push_str(&chunk);
+        if let Some(percent) = latest_7zip_progress_percent(&stdout_text) {
+            progress.report("正在解包压缩包", percent, Some(100), None);
+        }
+        if stdout_text.len() > 8_192 {
+            let retained = stdout_text.split_off(stdout_text.len() - 1_024);
+            stdout_text = retained;
+        }
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = child
+        .wait()
+        .map_err(|error| format!("无法等待内置解包器结束：{error}"))?;
+    let stderr = stderr_reader.join().unwrap_or_default();
+
+    if status.success() {
+        progress.report("正在解包压缩包", 100, Some(100), None);
+        return Ok(());
+    }
 
     Err(format!(
         "Bundled 7-Zip could not extract archive {}.\nstdout: {}\nstderr: {}",
         archive_path.display(),
-        stdout.trim(),
+        stdout_text.trim(),
         stderr.trim()
     ))
+}
+
+fn latest_7zip_progress_percent(output: &str) -> Option<usize> {
+    let percent_index = output.rfind('%')?;
+    let digits = output[..percent_index]
+        .chars()
+        .rev()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+
+    digits
+        .chars()
+        .rev()
+        .collect::<String>()
+        .parse::<usize>()
+        .ok()
+        .filter(|percent| *percent <= 100)
 }
 
 fn bundled_7zip_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -4230,13 +5071,15 @@ fn load_or_initialize_mod_category_store_from(
     let store_exists = categories_path.is_file();
     let mut store = load_mod_category_store(categories_path)?;
     let mut changed = !store_exists;
+    let requires_hierarchy_migration = store.schema_version < MOD_CATEGORY_STORE_SCHEMA_VERSION;
 
     if store.schema_version != MOD_CATEGORY_STORE_SCHEMA_VERSION {
         store.schema_version = MOD_CATEGORY_STORE_SCHEMA_VERSION;
         changed = true;
     }
 
-    changed |= migrate_installed_mod_categories(installed_root, &mut store)?;
+    changed |=
+        migrate_installed_mod_categories(installed_root, &mut store, requires_hierarchy_migration)?;
 
     if changed {
         save_mod_category_store(categories_path, &store)?;
@@ -4277,11 +5120,13 @@ fn save_mod_category_store(categories_path: &Path, store: &ModCategoryStore) -> 
 fn migrate_installed_mod_categories(
     installed_root: &Path,
     store: &mut ModCategoryStore,
+    requires_hierarchy_migration: bool,
 ) -> Result<bool, String> {
     let mut store_changed = false;
 
     for mut context in load_all_installed_manifests(installed_root)? {
-        if context.manifest.schema_version >= CURRENT_MOD_MANIFEST_SCHEMA_VERSION
+        if !requires_hierarchy_migration
+            && context.manifest.schema_version >= CURRENT_MOD_MANIFEST_SCHEMA_VERSION
             && context.manifest.category_override.is_none()
         {
             continue;
@@ -4312,8 +5157,7 @@ fn migrate_installed_mod_categories(
                 .iter()
                 .any(|category| category.id == *category_id)
         });
-        category_ids.sort();
-        category_ids.dedup();
+        category_ids = resolve_category_ids(store, &category_ids)?;
 
         context.manifest.category_ids = category_ids;
         context.manifest.category_override = None;
@@ -4324,76 +5168,161 @@ fn migrate_installed_mod_categories(
     Ok(store_changed)
 }
 
+#[derive(Clone)]
+struct RecognitionCategorySpec {
+    recognition_key: String,
+    name: String,
+    parent_recognition_key: Option<String>,
+    assign_to_mod: bool,
+}
+
 fn ensure_recognition_categories(
     store: &mut ModCategoryStore,
     model_replacements: &[ModelReplacement],
 ) -> Result<(Vec<String>, bool), String> {
-    let mut recognition_keys = model_replacements
-        .iter()
-        .map(|replacement| replacement.model_kind.clone())
-        .filter(|model_kind| model_kind_label(model_kind) != "未识别")
-        .collect::<Vec<_>>();
-    recognition_keys.sort();
-    recognition_keys.dedup();
+    let mut specs = BTreeMap::<String, RecognitionCategorySpec>::new();
 
-    let mut category_ids = Vec::new();
-    let mut changed = false;
-
-    for recognition_key in recognition_keys {
-        if store.suppressed_recognition_keys.contains(&recognition_key) {
+    for replacement in model_replacements {
+        let model_kind = replacement.model_kind.trim();
+        if model_kind_label(model_kind) == "未识别" {
             continue;
         }
 
+        if model_kind == "weapon" {
+            let parent =
+                specs
+                    .entry("weapon".to_string())
+                    .or_insert_with(|| RecognitionCategorySpec {
+                        recognition_key: "weapon".to_string(),
+                        name: "武器".to_string(),
+                        parent_recognition_key: None,
+                        assign_to_mod: false,
+                    });
+            let weapon_type = replacement.sub_kind.trim();
+            if weapon_type.is_empty() {
+                parent.assign_to_mod = true;
+                continue;
+            }
+
+            let recognition_key = format!("weapon:{weapon_type}");
+            specs
+                .entry(recognition_key.clone())
+                .or_insert_with(|| RecognitionCategorySpec {
+                    recognition_key,
+                    name: weapon_type.to_string(),
+                    parent_recognition_key: Some("weapon".to_string()),
+                    assign_to_mod: true,
+                });
+            continue;
+        }
+
+        specs
+            .entry(model_kind.to_string())
+            .or_insert_with(|| RecognitionCategorySpec {
+                recognition_key: model_kind.to_string(),
+                name: model_kind_label(model_kind).to_string(),
+                parent_recognition_key: None,
+                assign_to_mod: true,
+            });
+    }
+
+    let mut category_ids = Vec::new();
+    let mut changed = false;
+    let mut category_ids_by_recognition_key = HashMap::new();
+
+    for spec in specs.into_values() {
+        if store
+            .suppressed_recognition_keys
+            .contains(&spec.recognition_key)
+        {
+            continue;
+        }
+
+        let parent_id = spec
+            .parent_recognition_key
+            .as_deref()
+            .and_then(|key| category_ids_by_recognition_key.get(key))
+            .cloned();
         let category_index = store
             .categories
             .iter()
-            .position(|category| category.recognition_keys.contains(&recognition_key))
+            .position(|category| category.recognition_keys.contains(&spec.recognition_key))
             .or_else(|| {
-                let expected_name = model_kind_label(&recognition_key);
-                store
-                    .categories
-                    .iter()
-                    .position(|category| category.name == expected_name)
+                store.categories.iter().position(|category| {
+                    category.name == spec.name && category.parent_id == parent_id
+                })
             });
 
         let category_id = if let Some(category_index) = category_index {
             let category = &mut store.categories[category_index];
-            if !category.recognition_keys.contains(&recognition_key) {
-                category.recognition_keys.push(recognition_key.clone());
+            if !category.recognition_keys.contains(&spec.recognition_key) {
+                category.recognition_keys.push(spec.recognition_key.clone());
                 category.recognition_keys.sort();
+                changed = true;
+            }
+            if category.parent_id != parent_id {
+                category.parent_id = parent_id.clone();
                 changed = true;
             }
             category.id.clone()
         } else {
-            let base_id = format!("category-recognition-{}", slugify(&recognition_key));
+            let base_id = format!("category-recognition-{}", slugify(&spec.recognition_key));
             let category_id = unique_mod_category_id_from_base(&store.categories, &base_id);
             store.categories.push(StoredModCategory {
                 id: category_id.clone(),
-                name: model_kind_label(&recognition_key).to_string(),
+                name: spec.name,
+                parent_id,
                 created_at_unix_seconds: unix_seconds_now()?,
-                recognition_keys: vec![recognition_key],
+                recognition_keys: vec![spec.recognition_key.clone()],
             });
             changed = true;
             category_id
         };
 
-        category_ids.push(category_id);
+        category_ids_by_recognition_key.insert(spec.recognition_key, category_id.clone());
+        if spec.assign_to_mod {
+            category_ids.push(category_id);
+        }
     }
 
-    category_ids.sort();
-    category_ids.dedup();
-    Ok((category_ids, changed))
+    Ok((resolve_category_ids(store, &category_ids)?, changed))
 }
 
 fn sorted_mod_categories(categories: &[StoredModCategory]) -> Vec<ModCategory> {
-    let mut categories = categories.iter().map(ModCategory::from).collect::<Vec<_>>();
-    categories.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    categories
+    let mut categories_by_parent = HashMap::<Option<&str>, Vec<&StoredModCategory>>::new();
+    let category_ids = categories
+        .iter()
+        .map(|category| category.id.as_str())
+        .collect::<HashSet<_>>();
+
+    for category in categories {
+        let parent_id = category
+            .parent_id
+            .as_deref()
+            .filter(|parent_id| category_ids.contains(parent_id));
+        categories_by_parent
+            .entry(parent_id)
+            .or_default()
+            .push(category);
+    }
+
+    for entries in categories_by_parent.values_mut() {
+        entries.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+
+    let mut output = Vec::new();
+    for parent in categories_by_parent.get(&None).into_iter().flatten() {
+        output.push(ModCategory::from(*parent));
+        if let Some(children) = categories_by_parent.get(&Some(parent.id.as_str())) {
+            output.extend(children.iter().map(|child| ModCategory::from(*child)));
+        }
+    }
+    output
 }
 
 fn resolve_mod_categories(store: &ModCategoryStore, category_ids: &[String]) -> Vec<ModCategory> {
@@ -4428,23 +5357,56 @@ fn resolve_category_ids(
         }
     }
 
+    let selected_parent_ids = category_ids
+        .iter()
+        .filter_map(|category_id| {
+            store
+                .categories
+                .iter()
+                .find(|category| category.id == *category_id)
+                .and_then(|category| category.parent_id.clone())
+        })
+        .collect::<HashSet<_>>();
+    category_ids.retain(|category_id| !selected_parent_ids.contains(category_id));
+
     Ok(category_ids)
 }
 
 fn ensure_mod_category_name_is_available(
     categories: &[StoredModCategory],
     name: &str,
+    parent_id: Option<&str>,
     excluded_category_id: Option<&str>,
 ) -> Result<(), String> {
     let normalized_name = name.to_lowercase();
     if categories.iter().any(|category| {
         Some(category.id.as_str()) != excluded_category_id
+            && category.parent_id.as_deref() == parent_id
             && category.name.trim().to_lowercase() == normalized_name
     }) {
         return Err(format!("分类已存在：{name}"));
     }
 
     Ok(())
+}
+
+fn resolve_category_parent_id(
+    store: &ModCategoryStore,
+    raw_parent_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(parent_id) = raw_parent_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    validate_mod_category_id(parent_id)?;
+    let parent = store
+        .categories
+        .iter()
+        .find(|category| category.id == parent_id)
+        .ok_or_else(|| format!("未找到父分类：{parent_id}"))?;
+    if parent.parent_id.is_some() {
+        return Err("子分类只能创建在顶级分类下。".to_string());
+    }
+    Ok(Some(parent.id.clone()))
 }
 
 fn unique_mod_category_id(categories: &[StoredModCategory], name: &str) -> Result<String, String> {
@@ -4596,7 +5558,8 @@ mod tests {
         apply_conflict_order_from, apply_mod_remap_from, armor_set_label, clear_import_staging,
         disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
         install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
-        list_installed_mods_from, move_conflict_participant_from, preview_disable_mod_from,
+        list_installed_mods_from, load_or_initialize_mod_category_store_for_installed_root,
+        move_conflict_participant_from, move_mod_library_item_from, preview_disable_mod_from,
         preview_enable_mod_from, preview_mod_import, preview_mod_remap_from,
         preview_restore_all_mods_from, preview_uninstall_mod_from, read_conflict_order_store,
         remove_category_from_manifests, remove_mod_from_conflict_orders, restore_all_mods_from,
@@ -5459,15 +6422,19 @@ mod tests {
 
         let initial_report = get_mod_conflict_report_from(&installed_root).unwrap();
         let group_id = initial_report.groups[0].group_id.clone();
-        move_conflict_participant_from(&installed_root, &group_id, &second.mod_id, "down").unwrap();
+        move_conflict_participant_from(&installed_root, &group_id, &first.mod_id, "down").unwrap();
         let moved_report = get_mod_conflict_report_from(&installed_root).unwrap();
 
         assert_eq!(
-            initial_report.groups[0].participants.last().unwrap().mod_id,
+            initial_report.groups[0]
+                .participants
+                .first()
+                .unwrap()
+                .mod_id,
             first.mod_id
         );
         assert_eq!(
-            moved_report.groups[0].participants.last().unwrap().mod_id,
+            moved_report.groups[0].participants.first().unwrap().mod_id,
             second.mod_id
         );
 
@@ -5632,7 +6599,7 @@ mod tests {
         let report = get_mod_conflict_report_from(&installed_root).unwrap();
         let group_id = report.groups[0].group_id.clone();
         assert_eq!(report.groups[0].conflict_file_count, 2);
-        move_conflict_participant_from(&installed_root, &group_id, &first.mod_id, "down").unwrap();
+        move_conflict_participant_from(&installed_root, &group_id, &second.mod_id, "down").unwrap();
         let result =
             apply_conflict_order_from(&installed_root, &game_root, &group_id, false).unwrap();
 
@@ -5685,7 +6652,6 @@ mod tests {
         let winner = report.groups[0]
             .participants
             .iter()
-            .rev()
             .find(|participant| participant.enabled)
             .unwrap()
             .mod_id
@@ -5740,6 +6706,82 @@ mod tests {
     }
 
     #[test]
+    fn persists_manual_mod_library_order_separately_from_installation_order() {
+        let first_source = temp_root("manual_order_first_source");
+        let second_source = temp_root("manual_order_second_source");
+        let installed_root = temp_root("manual_order_installed");
+        write_file(
+            &first_source
+                .join("nativePC")
+                .join("weapon")
+                .join("first.mod3"),
+        );
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("weapon")
+                .join("second.mod3"),
+        );
+
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+
+        // A normal library read creates the persisted order used by later drag sorting.
+        list_installed_mods_from(&installed_root).unwrap();
+        move_mod_library_item_from(&installed_root, &first.mod_id, &second.mod_id, false).unwrap();
+        let ordered = list_installed_mods_from(&installed_root).unwrap();
+        let ordered_ids = ordered
+            .mods
+            .iter()
+            .map(|installed_mod| installed_mod.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_ids,
+            vec![first.mod_id.as_str(), second.mod_id.as_str()]
+        );
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn assigns_recognized_weapon_to_its_weapon_subcategory() {
+        let source_root = temp_root("weapon_subcategory_source");
+        let installed_root = temp_root("weapon_subcategory_installed");
+        write_file(
+            &source_root
+                .join("nativePC")
+                .join("wp")
+                .join("swo")
+                .join("bs_swo001")
+                .join("mod")
+                .join("bs_swo001.mod3"),
+        );
+
+        install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root).unwrap();
+        let mut installed_mod_list = list_installed_mods_from(&installed_root).unwrap();
+        let listed_mod = installed_mod_list.mods.pop().unwrap();
+
+        assert_eq!(listed_mod.categories.len(), 1);
+        assert_eq!(listed_mod.categories[0].name, "太刀");
+        let parent_id = listed_mod.categories[0].parent_id.as_deref().unwrap();
+        let category_store =
+            load_or_initialize_mod_category_store_for_installed_root(&installed_root).unwrap();
+        assert!(category_store
+            .categories
+            .iter()
+            .any(|category| category.id == parent_id && category.name == "武器"));
+
+        cleanup(source_root);
+        cleanup(installed_root);
+    }
+
+    #[test]
     fn migrates_legacy_category_override_into_unified_categories() {
         let source_root = temp_root("legacy_category_source");
         let mods_root = temp_root("legacy_category_mods");
@@ -5757,6 +6799,7 @@ mod tests {
         let category = StoredModCategory {
             id: "category-visual".to_string(),
             name: "外观收藏".to_string(),
+            parent_id: None,
             created_at_unix_seconds: 1,
             recognition_keys: Vec::new(),
         };
@@ -5985,6 +7028,48 @@ mod tests {
         cleanup(source_root);
         cleanup(installed_root);
         cleanup(game_root);
+    }
+
+    #[test]
+    fn warns_when_armor_remap_moves_epv_effect_triggers() {
+        let source_root = temp_root("armor_epv_remap_warning_source");
+        let installed_root = temp_root("armor_epv_remap_warning_installed");
+        let source_file =
+            source_root.join("nativePC/pl/f_equip/pl105_0000/body/epv/f_body105.epv3");
+        write_file(&source_file);
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let remapped_plan = preview_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl001_0000".to_string()),
+        )
+        .unwrap();
+        assert!(remapped_plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("装备特效")));
+
+        apply_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl001_0000".to_string()),
+        )
+        .unwrap();
+        let restore_plan =
+            preview_mod_remap_from(&installed_root, &installed.mod_id, "armor:pl105_0000", None)
+                .unwrap();
+        assert!(restore_plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("装备特效")));
+
+        cleanup(source_root);
+        cleanup(installed_root);
     }
 
     #[test]

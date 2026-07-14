@@ -7,7 +7,9 @@ import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
 import ModCategoryManager from "./components/ModCategoryManager.vue";
 import ModLibraryTable from "./components/ModLibraryTable.vue";
 import ModLibraryToolbar from "./components/ModLibraryToolbar.vue";
+import OperationStatusBar from "./components/OperationStatusBar.vue";
 import { getAppInfo, type AppInfo } from "./api/app";
+import { listenOperationProgress, type OperationProgress } from "./api/operations";
 import {
   detectGameDirectory,
   getGameDirectoryStatus,
@@ -24,12 +26,14 @@ import {
   getModConflictReport,
   getModLibraryStatus,
   getModRemapDetails,
+  getModWorkspaceSnapshot,
   installModFromArchive,
   installModFromCandidate,
   installModFromFolder,
   listInstalledMods,
   listModCategories,
   moveConflictParticipant,
+  moveModLibraryItem,
   openInstalledModFolder,
   previewApplyConflictOrder,
   previewDisableMod,
@@ -87,6 +91,7 @@ const deploymentError = ref("");
 const isLoadingApp = ref(false);
 const isLoadingGame = ref(false);
 const isLoadingModLibrary = ref(false);
+const isRefreshingModViews = ref(false);
 const isPreviewingImport = ref(false);
 const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
@@ -113,8 +118,12 @@ const modSearchQuery = ref("");
 const modCategoryFilter = ref("all");
 const modStatusFilter = ref("all");
 const modConflictFilter = ref("all");
-const modSort = ref<"installation" | "name" | "category" | "replacement">("installation");
+const modSort = ref<"manual" | "installation" | "name" | "category" | "replacement">("manual");
+const reorderingModId = ref("");
 let stopDragListener: (() => void) | undefined;
+let stopOperationProgressListener: (() => void) | undefined;
+let clearOperationStatusTimer: ReturnType<typeof setTimeout> | undefined;
+const activeOperation = ref<OperationProgress | null>(null);
 
 function userFacingError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -235,25 +244,50 @@ function deployRootLabel(deployRoot: string) {
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
+const isOperationInProgress = computed(
+  () => activeOperation.value !== null && !activeOperation.value.terminal,
+);
+
+function categoryLabel(category: ModCategory) {
+  const parent = category.parentId
+    ? modCategories.value.find((candidate) => candidate.id === category.parentId)
+    : null;
+  return parent ? `${parent.name}·${category.name}` : category.name;
+}
+
 function visibleModCategories(mod: InstalledModSummary) {
   return mod.categories.length
-    ? mod.categories.map((category) => category.name)
+    ? mod.categories.map((category) => categoryLabel(category))
     : ["未分类"];
 }
 
 const availableModCategories = computed(() =>
-  [...new Set(installedMods.value.flatMap((installedMod) => visibleModCategories(installedMod)))].sort(
-    (left, right) => left.localeCompare(right, "zh-Hans-CN"),
-  ),
+  modCategories.value.map((category) => ({
+    id: category.id,
+    label: categoryLabel(category),
+  })),
 );
+
+function matchesCategoryFilter(mod: InstalledModSummary) {
+  if (modCategoryFilter.value === "all") {
+    return true;
+  }
+
+  const selectedCategoryId = modCategoryFilter.value;
+  const selectedCategoryAndChildren = new Set([
+    selectedCategoryId,
+    ...modCategories.value
+      .filter((category) => category.parentId === selectedCategoryId)
+      .map((category) => category.id),
+  ]);
+  return mod.categoryIds.some((categoryId) => selectedCategoryAndChildren.has(categoryId));
+}
+
 const filteredInstalledMods = computed(() => {
   const searchText = modSearchQuery.value.trim().toLocaleLowerCase();
 
   return installedMods.value.filter((installedMod) => {
-    if (
-      modCategoryFilter.value !== "all" &&
-      !visibleModCategories(installedMod).includes(modCategoryFilter.value)
-    ) {
+    if (!matchesCategoryFilter(installedMod)) {
       return false;
     }
 
@@ -304,6 +338,10 @@ const displayedInstalledMods = computed(() => {
   const mods = [...filteredInstalledMods.value];
 
   mods.sort((left, right) => {
+    if (modSort.value === "manual") {
+      return 0;
+    }
+
     if (modSort.value === "name") {
       return left.name.localeCompare(right.name, "zh-Hans-CN");
     }
@@ -577,9 +615,21 @@ async function loadConflictReport() {
 }
 
 async function refreshModViews() {
-  // MOD 列表首次读取可能迁移旧分类；迁移完成后再并行读取其余视图，避免同时写分类文件。
-  await loadInstalledMods();
-  await Promise.all([loadConflictReport(), loadModCategories()]);
+  isRefreshingModViews.value = true;
+
+  try {
+    const snapshot = await getModWorkspaceSnapshot();
+    installedModList.value = snapshot.installedMods;
+    modCategories.value = snapshot.categories.categories;
+    conflictReport.value = snapshot.conflictReport;
+    modLibraryError.value = "";
+    categoryError.value = "";
+    syncCategoryFilter();
+  } catch (error) {
+    modLibraryError.value = userFacingError(error);
+  } finally {
+    isRefreshingModViews.value = false;
+  }
 }
 
 async function refreshCurrentWorkspace() {
@@ -593,18 +643,31 @@ async function refreshCurrentWorkspace() {
     return;
   }
 
-  if (activeView.value === "conflicts") {
-    await loadConflictReport();
+  await refreshModViews();
+}
+
+function updateOperationStatus(progress: OperationProgress) {
+  activeOperation.value = progress;
+
+  if (!progress.terminal) {
+    if (clearOperationStatusTimer) {
+      clearTimeout(clearOperationStatusTimer);
+      clearOperationStatusTimer = undefined;
+    }
     return;
   }
 
-  await refreshModViews();
+  clearOperationStatusTimer = setTimeout(() => {
+    if (activeOperation.value?.operationId === progress.operationId) {
+      activeOperation.value = null;
+    }
+  }, 900);
 }
 
 function syncCategoryFilter() {
   if (
     modCategoryFilter.value !== "all" &&
-    !availableModCategories.value.includes(modCategoryFilter.value)
+    !availableModCategories.value.some((category) => category.id === modCategoryFilter.value)
   ) {
     modCategoryFilter.value = "all";
   }
@@ -648,13 +711,13 @@ function closeCategoryManager() {
   categoryError.value = "";
 }
 
-async function createCategory(name: string) {
+async function createCategory(name: string, parentId: string | null) {
   isCategoryAction.value = true;
   categoryError.value = "";
   let shouldCloseDialog = false;
 
   try {
-    const category = await createModCategory(name);
+    const category = await createModCategory(name, parentId);
     await loadModCategories();
     const targetMod = installedMods.value.find((mod) => mod.id === pendingCategoryModId.value);
 
@@ -693,8 +756,11 @@ async function renameCategory(categoryId: string, name: string) {
 }
 
 async function deleteCategory(category: ModCategory) {
+  const hasChildren = modCategories.value.some((candidate) => candidate.parentId === category.id);
   const shouldDelete = window.confirm(
-    `删除分类“${category.name}”后，使用它的 MOD 将移除此分类。是否继续？`,
+    hasChildren
+      ? `删除分类“${categoryLabel(category)}”后，使用它的 MOD 将移除此分类；其子分类会保留并成为顶级分类。是否继续？`
+      : `删除分类“${categoryLabel(category)}”后，使用它的 MOD 将移除此分类。是否继续？`,
   );
   if (!shouldDelete) {
     return;
@@ -712,6 +778,46 @@ async function deleteCategory(category: ModCategory) {
   } finally {
     isCategoryAction.value = false;
   }
+}
+
+async function reorderModLibraryItem(
+  mod: InstalledModSummary,
+  target: InstalledModSummary,
+  placeAfter: boolean,
+) {
+  if (reorderingModId.value || mod.id === target.id) {
+    return;
+  }
+
+  reorderingModId.value = mod.id;
+  try {
+    await moveModLibraryItem(mod.id, target.id, placeAfter);
+    reorderInstalledModsInMemory(mod.id, target.id, placeAfter);
+    modLibraryError.value = "";
+  } catch (error) {
+    modLibraryError.value = userFacingError(error);
+  } finally {
+    reorderingModId.value = "";
+  }
+}
+
+function reorderInstalledModsInMemory(modId: string, targetModId: string, placeAfter: boolean) {
+  const modList = installedModList.value;
+  if (!modList) {
+    return;
+  }
+
+  const mods = [...modList.mods];
+  const sourceIndex = mods.findIndex((mod) => mod.id === modId);
+  const targetIndex = mods.findIndex((mod) => mod.id === targetModId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+
+  const [movedMod] = mods.splice(sourceIndex, 1);
+  const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  mods.splice(adjustedTargetIndex + (placeAfter ? 1 : 0), 0, movedMod);
+  installedModList.value = { ...modList, mods };
 }
 
 function openConflictManager() {
@@ -1223,7 +1329,7 @@ async function applySelectedConflictOrder() {
     const shouldApply = window.confirm(
       plan.requiresOverwriteConfirmation
         ? "目标文件不是 Acumod 已记录的文件，将被覆盖。是否继续？"
-        : `保存当前覆盖顺序，并更新 ${plan.applicableFileCount} 个冲突文件，是否继续？`,
+        : `应用当前优先级，并更新 ${plan.applicableFileCount} 个冲突文件，是否继续？`,
     );
 
     if (!shouldApply) {
@@ -1246,7 +1352,16 @@ onMounted(() => {
   void loadAppInfo();
   void loadGameStatus();
   void loadModLibraryStatus();
-  void refreshModViews();
+  void listenOperationProgress(updateOperationStatus)
+    .then((unlisten) => {
+      stopOperationProgressListener = unlisten;
+    })
+    .catch(() => {
+      // Browser-only Vite development has no Tauri event API.
+    })
+    .finally(() => {
+      void refreshModViews();
+    });
   void getCurrentWebview()
     .onDragDropEvent((event) => {
       if (event.payload.type === "enter" || event.payload.type === "over") {
@@ -1271,6 +1386,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopDragListener?.();
+  stopOperationProgressListener?.();
+  if (clearOperationStatusTimer) {
+    clearTimeout(clearOperationStatusTimer);
+  }
 });
 </script>
 
@@ -1289,11 +1408,18 @@ onBeforeUnmount(() => {
         :active-view="activeView"
         :mod-count="installedMods.length"
         :enabled-mod-count="enabledModCount"
-        :is-refreshing="isLoadingGame || isLoadingApp || isLoadingModLibrary"
+        :is-refreshing="
+          isLoadingGame ||
+          isLoadingApp ||
+          isLoadingModLibrary ||
+          isRefreshingModViews ||
+          isOperationInProgress
+        "
         :agent-open="isAgentPanelOpen"
         @refresh="refreshCurrentWorkspace"
         @toggle-agent="isAgentPanelOpen = !isAgentPanelOpen"
       />
+      <OperationStatusBar :operation="activeOperation" />
 
       <div class="workspace-content">
         <div v-show="activeView === 'settings'" class="workspace-page">
@@ -1638,7 +1764,7 @@ onBeforeUnmount(() => {
         />
         <p v-if="categoryError && !isCategoryManagerOpen" class="error">{{ categoryError }}</p>
         <p v-if="installedMods.length" class="hint">
-          显示 {{ displayedInstalledMods.length }} / {{ installedMods.length }} 个 MOD；此处排序不影响冲突覆盖顺序。
+          显示 {{ displayedInstalledMods.length }} / {{ installedMods.length }} 个 MOD；手动排序只影响 MOD 库浏览顺序，不影响冲突优先级。
         </p>
         <ModLibraryTable
           :mods="displayedInstalledMods"
@@ -1651,12 +1777,15 @@ onBeforeUnmount(() => {
           :metadata-saving-mod-id="metadataSavingModId"
           :metadata-error-mod-id="metadataErrorModId"
           :metadata-error="metadataError"
+          :can-reorder="modSort === 'manual' && !reorderingModId"
+          :reordering-mod-id="reorderingModId"
           @update-metadata="saveModMetadata"
           @create-category="openCategoryManager"
           @open-folder="showInstalledModFolder"
           @enable="enableInstalledMod"
           @disable="disableInstalledMod"
           @manage-remap="openRemapManager"
+          @reorder="reorderModLibraryItem"
           @uninstall="uninstallInstalledMod"
         />
       </div>
@@ -1703,14 +1832,14 @@ onBeforeUnmount(() => {
           <div class="panel-heading">
             <div>
               <h2>{{ selectedConflictGroup.participants.map((participant) => participant.name).join(" / ") }}</h2>
-              <p>从上到下为覆盖顺序；对每个冲突文件，排在最后且包含该文件的已启用 MOD 生效。</p>
+              <p>从上到下为优先级；最上方且包含该文件的已启用 MOD 最后覆盖并生效。</p>
             </div>
             <button
               type="button"
               :disabled="isApplyingConflict || selectedConflictGroup.enabledParticipantCount === 0"
               @click="applySelectedConflictOrder"
             >
-              {{ isApplyingConflict ? "保存中" : "保存顺序" }}
+              {{ isApplyingConflict ? "应用中" : "应用优先级" }}
             </button>
           </div>
 
@@ -1723,6 +1852,13 @@ onBeforeUnmount(() => {
               {{ summarizeSharedModelTarget(target) }}
             </span>
           </div>
+
+          <details class="conflict-file-details">
+            <summary>冲突文件（{{ selectedConflictGroup.conflictFiles.length }}）</summary>
+            <ul>
+              <li v-for="file in selectedConflictGroup.conflictFiles" :key="file">{{ file }}</li>
+            </ul>
+          </details>
 
           <ol class="conflict-order-list">
             <li v-for="(participant, index) in selectedConflictGroup.participants" :key="participant.modId">
@@ -1897,7 +2033,7 @@ onBeforeUnmount(() => {
   max-width: calc(100vw - 188px);
   min-width: 0;
   min-height: 100vh;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .workspace-content {
@@ -2265,181 +2401,6 @@ dd {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.mod-table-scroll {
-  margin-top: 12px;
-  overflow: auto;
-  border: 1px solid #dfe7e3;
-  border-radius: 6px;
-}
-
-.mod-table {
-  width: 100%;
-  min-width: 1020px;
-  border-collapse: collapse;
-  background: #ffffff;
-}
-
-.mod-table th,
-.mod-table td {
-  padding: 12px;
-  border-bottom: 1px solid #e7eeeb;
-  color: #435650;
-  font-size: 0.86rem;
-  text-align: left;
-  vertical-align: middle;
-}
-
-.mod-table th {
-  color: #61756f;
-  background: #f7faf8;
-  font-size: 0.76rem;
-  font-weight: 750;
-  white-space: nowrap;
-}
-
-.mod-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.mod-table tbody tr:hover {
-  background: #f9fcfa;
-}
-
-.mod-table td:nth-child(1) {
-  width: 56px;
-}
-
-.mod-table td:nth-child(2) {
-  min-width: 180px;
-}
-
-.mod-table td:nth-child(3) {
-  width: 130px;
-}
-
-.mod-table td:nth-child(4) {
-  min-width: 300px;
-}
-
-.mod-table td:nth-child(5) {
-  width: 150px;
-}
-
-.mod-table td:nth-child(6) {
-  width: 164px;
-}
-
-.mod-index {
-  color: #72837e !important;
-  font-variant-numeric: tabular-nums;
-}
-
-.mod-name strong {
-  display: block;
-  color: #17211f;
-  overflow-wrap: anywhere;
-}
-
-.mod-name small {
-  display: block;
-  margin-top: 3px;
-  color: #72837e;
-  font-size: 0.76rem;
-  overflow-wrap: anywhere;
-}
-
-.replacement-summary {
-  color: #334b44 !important;
-  line-height: 1.45;
-}
-
-.mod-table .conflict-state {
-  color: #9a3412;
-  font-weight: 700;
-}
-
-.mod-actions {
-  white-space: nowrap;
-}
-
-.mod-action-buttons {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-start;
-}
-
-.icon-button {
-  position: relative;
-  display: grid;
-  width: 32px;
-  min-height: 32px;
-  padding: 0;
-  place-items: center;
-  border-color: #cbd8d4;
-  border-radius: 5px;
-  color: #24745b;
-  background: #ffffff;
-  font-size: 0.86rem;
-}
-
-.icon-button:hover:not(:disabled),
-.icon-button:focus-visible {
-  border-color: #8cbca8;
-  color: #17613f;
-  background: #edf5f1;
-}
-
-.icon-button.warning-icon {
-  color: #9a5b00;
-}
-
-.icon-button.danger-icon {
-  color: #b42318;
-  font-size: 1rem;
-}
-
-.icon-button.busy span {
-  animation: subtle-pulse 1.1s ease-in-out infinite;
-}
-
-.icon-button[data-tooltip]::after {
-  position: absolute;
-  z-index: 4;
-  right: 0;
-  top: calc(100% + 7px);
-  display: none;
-  padding: 5px 7px;
-  border: 1px solid #cbd8d4;
-  border-radius: 4px;
-  color: #ffffff;
-  background: #17211f;
-  content: attr(data-tooltip);
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.icon-button[data-tooltip]:hover::after,
-.icon-button[data-tooltip]:focus-visible::after {
-  display: block;
-}
-
-.empty-table-state {
-  margin: 12px 0 0;
-  padding: 20px 12px;
-  border: 1px dashed #cbd8d4;
-  border-radius: 6px;
-  color: #61756f;
-  text-align: center;
-}
-
-@keyframes subtle-pulse {
-  50% {
-    opacity: 0.4;
-  }
-}
-
 .mod-list > li {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -2630,6 +2591,37 @@ dd {
 .shared-model-targets span {
   color: #5f4a24;
   font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.conflict-file-details {
+  margin-top: 14px;
+  border: 1px solid #d9e2df;
+  border-radius: 6px;
+  background: #fbfdfc;
+}
+
+.conflict-file-details summary {
+  padding: 11px 12px;
+  color: #315e52;
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.conflict-file-details ul {
+  display: grid;
+  gap: 5px;
+  max-height: 240px;
+  margin: 0;
+  padding: 0 12px 12px 30px;
+  overflow: auto;
+  color: #52645f;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.78rem;
+}
+
+.conflict-file-details li {
   overflow-wrap: anywhere;
 }
 

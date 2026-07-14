@@ -84,6 +84,16 @@ src-tauri/
 7. 需要接收前端参数时，参数类型是否实现 `serde::Deserialize`。
 8. `src-tauri/src/lib.rs` 的 `tauri::generate_handler![...]` 是否注册命令。
 
+## 后台任务检查清单
+
+涉及目录扫描、解包、批量复制、删除或全库 manifest 读取时：
+
+1. command 使用 `async fn`，并通过 `operations::run_blocking_operation` 调用同步文件 service。
+2. service 在已知文件总数后通过 `OperationReporter` 上报真实完成数；未知总数的扫描只上报阶段和当前项。
+3. 前端不要重复调用列表、分类、冲突三个全量读取 command；刷新 MOD 库时使用 `getModWorkspaceSnapshot()`。
+4. 任务事件统一为 `acumod://operation-progress`，由 `OperationStatusBar` 展示；不要为单个功能另造加载浮层或取消按钮。
+5. 完成后检查软件目录旁的 `AcumodData/logs/operation-timings.log` 是否写入结果和耗时。日志不能记录凭据、令牌或文件内容。
+
 当前已确认示例：
 
 ```text
@@ -128,6 +138,9 @@ src/api/modLibrary.ts
 
   listInstalledMods()
   -> invoke<InstalledModList>("list_installed_mods")
+
+  getModWorkspaceSnapshot()
+  -> invoke<ModWorkspaceSnapshot>("get_mod_workspace_snapshot")
 
   previewModImport(path, allowGameRoot)
   -> invoke<ModImportPreview>("preview_mod_import", { path, allowGameRoot })
@@ -221,7 +234,7 @@ src-tauri/src/services/mod_library.rs
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
   卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
   一键还原时扫描本地 MOD 库 manifest，清理所有记录过的 deployedFiles，并将相关 MOD 标记为未启用
-  扫描 deployRelativePath 构建 MOD 冲突关系图，将每个独立冲突组的整体顺序保存到 conflict-orders.json，并应用组内全部冲突文件
+  扫描 deployRelativePath 构建 MOD 冲突关系图，将每个独立冲突组的优先级保存到 conflict-orders.json，并应用组内全部冲突文件；最上方项目最终覆盖
 
 src-tauri/src/services/model_recognition.rs
   读取编译进应用的 references/mhwi-data/curated/model-index.json
@@ -252,7 +265,7 @@ src-tauri/src/commands/mod_library.rs
   只转发参数与 DTO，不在 command 中写文件逻辑
 
 src-tauri/src/services/mod_library.rs
-  写 manifest 元数据与统一多分类；manifest 的 enabled/deployedFiles 和 conflict-orders.json 共同维护当前唯一的部署状态
+  写 manifest 元数据、两级分类与 MOD 库手动排序；manifest 的 enabled/deployedFiles 和 conflict-orders.json 共同维护当前唯一的部署状态，mod-library-order.json 仅维护浏览顺序
 ```
 
 ## 薄端到端切片
@@ -345,8 +358,8 @@ Vue UI
 
 1. Vue 只提交 `monsterhunterworld` 的 Nexus mod/file ID 或后端解析过的页面 URL，不提交任意下载地址。
 2. `src/api/nexus.ts` 调用 `commands/nexus.rs`；Rust 从系统凭据存储读取授权，并通过 Nexus 适配层获取元数据、文件列表或一次性下载链接。
-3. Rust 创建 `staging/downloads/<task_id>/`，流式写入 `.part`，持续返回进度、剩余 API 配额和可取消状态。
-4. 下载完成后校验文件大小和可用哈希，再原子改名为归档文件；失败或取消只清理该 task ID 下由 Acumod 创建的文件。
+3. Rust 创建 `staging/downloads/<task_id>/`，流式写入 `.part`，持续返回进度和剩余 API 配额；下载不提供取消。
+4. 下载完成后校验文件大小和可用哈希，再原子改名为归档文件；失败时只清理该 task ID 下由 Acumod 创建的文件。
 5. 用户点击“继续导入”后，把已完成归档交给现有 `install_mod_from_archive` 预览链路；多候选和游戏根目录 fallback 仍由现有 UI 确认。
 6. 成功安装后 manifest 记录可选 `nexusSource`，临时下载链接和 API key 永不写入 manifest。
 
@@ -387,13 +400,15 @@ Vue UI
 
 例如“冲突检测和排序”：
 
-1. Vue 读取已安装 MOD 后调用 `get_mod_conflict_report`，主列表只显示普通序号。
+1. Vue 读取已安装 MOD 后调用 `get_mod_conflict_report`，主列表只显示普通序号；手动拖拽排序调用 `move_mod_library_item` 并只写 `mod-library-order.json`。
 2. Rust service 扫描所有 manifest 中的 `deployRelativePath`，将直接或间接相互冲突的 MOD 聚合为独立冲突组。
-3. 用户打开冲突管理界面并选择一个 MOD 组；Vue 调用 `move_conflict_participant` 上移或下移组内 MOD。
+3. 用户打开冲突管理界面并选择一个 MOD 组；Vue 调用 `move_conflict_participant` 上移或下移组内 MOD。列表从上到下为优先级，第一项是最终覆盖者。
 4. 排序移动只更新 `conflict-orders.json` 中这个 MOD 组合的顺序，不立即写入 MHW 游戏目录。
 5. 用户点击应用此组顺序后，Vue 先调用 `preview_apply_conflict_order`。
-6. 用户确认后调用 `apply_conflict_order`，Rust service 遍历组内全部冲突文件，按组顺序选择各文件的最终提供者并更新部署记录。
-7. 冲突报告只使用已启用 MOD；`enable_mod` 成功后把本次启用的 MOD 追加到相关组末尾，再应用组顺序。
+6. 用户确认后调用 `apply_conflict_order`，Rust service 遍历组内全部冲突文件，按组优先级选择各文件的最终提供者并更新部署记录。
+7. 冲突报告只使用已启用 MOD；`enable_mod` 成功后把本次启用的 MOD 放到相关组最上方，再应用组优先级。
+
+Windows 上保留 Tauri Webview 的原生文件拖入，以便接收文件系统路径并走现有导入确认流程；MOD 库排序使用序号列拖拽把手的 Pointer Events 实现，不使用 HTML5 drag-and-drop。两者不能混用，因为 Tauri 原生 `dragDropEnabled` 与 Windows 的 HTML5 拖放互斥。
 
 ## 验证标准
 

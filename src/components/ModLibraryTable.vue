@@ -14,6 +14,13 @@ interface ModDraft {
   note?: string;
 }
 
+interface PointerReorderState {
+  sourceModId: string;
+  pointerId: number;
+  targetModId: string;
+  placeAfter: boolean;
+}
+
 const props = defineProps<{
   mods: InstalledModSummary[];
   installedModCount: number;
@@ -25,6 +32,8 @@ const props = defineProps<{
   metadataSavingModId: string;
   metadataErrorModId: string;
   metadataError: string;
+  canReorder: boolean;
+  reorderingModId: string;
 }>();
 
 const emit = defineEmits<{
@@ -35,6 +44,7 @@ const emit = defineEmits<{
   disable: [mod: InstalledModSummary];
   uninstall: [mod: InstalledModSummary];
   manageRemap: [mod: InstalledModSummary];
+  reorder: [mod: InstalledModSummary, target: InstalledModSummary, placeAfter: boolean];
 }>();
 
 const editingCell = ref<{ modId: string; field: EditableField } | null>(null);
@@ -42,6 +52,11 @@ const editingCategoryModId = ref("");
 const editingInputs = ref<HTMLInputElement[]>([]);
 const drafts = reactive<Record<string, ModDraft>>({});
 const expandedModIds = ref(new Set<string>());
+const draggedModId = ref("");
+const dropTargetModId = ref("");
+const pointerReorderState = ref<PointerReorderState | null>(null);
+const modTableScroll = ref<HTMLElement | null>(null);
+const reorderIndicatorTop = ref<number | null>(null);
 
 function modelKindLabel(modelKind: string) {
   const labels: Record<string, string> = {
@@ -81,12 +96,28 @@ function modelReplacementTitle(replacement: ModelReplacement) {
 
 function categorySummary(mod: InstalledModSummary) {
   return mod.categories.length
-    ? mod.categories.map((category) => category.name).join("、")
+    ? categoryTags(mod).map((category) => category.name).join("、")
     : "未分类";
 }
 
 function categoryTags(mod: InstalledModSummary) {
-  return mod.categories.length ? mod.categories : [{ id: "", name: "未分类", createdAtUnixSeconds: 0 }];
+  if (!mod.categories.length) {
+    return [{ id: "", name: "未分类", parentId: null, createdAtUnixSeconds: 0 }];
+  }
+
+  return mod.categories.map((category) => {
+    return {
+      ...category,
+      name: categoryDisplayName(category),
+    };
+  });
+}
+
+function categoryDisplayName(category: ModCategory) {
+  const parent = category.parentId
+    ? props.categories.find((candidate) => candidate.id === category.parentId)
+    : null;
+  return parent ? `${parent.name}·${category.name}` : category.name;
 }
 
 function replacementTargetLabel(replacement: ModelReplacement) {
@@ -262,6 +293,102 @@ function createCategory(mod: InstalledModSummary) {
   emit("createCategory", mod);
 }
 
+function updatePointerReorderTarget(event: PointerEvent) {
+  const reorderState = pointerReorderState.value;
+  if (!reorderState || reorderState.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLTableRowElement>(
+    "tr[data-mod-id]",
+  );
+  const targetModId = row?.dataset.modId ?? "";
+  if (!row || !targetModId || targetModId === reorderState.sourceModId) {
+    reorderState.targetModId = "";
+    dropTargetModId.value = "";
+    reorderIndicatorTop.value = null;
+    return;
+  }
+
+  const bounds = row.getBoundingClientRect();
+  const scrollBounds = modTableScroll.value?.getBoundingClientRect();
+  reorderState.targetModId = targetModId;
+  reorderState.placeAfter = event.clientY >= bounds.top + bounds.height / 2;
+  dropTargetModId.value = targetModId;
+  reorderIndicatorTop.value = scrollBounds
+    ? Math.round(
+        (reorderState.placeAfter ? bounds.bottom : bounds.top) -
+          scrollBounds.top +
+          (modTableScroll.value?.scrollTop ?? 0),
+      )
+    : null;
+}
+
+function startPointerReordering(mod: InstalledModSummary, event: PointerEvent) {
+  if (!props.canReorder || isRowActionDisabled() || event.button !== 0) {
+    return;
+  }
+
+  const dragHandle = event.currentTarget as HTMLElement;
+  dragHandle.setPointerCapture(event.pointerId);
+  draggedModId.value = mod.id;
+  dropTargetModId.value = "";
+  pointerReorderState.value = {
+    sourceModId: mod.id,
+    pointerId: event.pointerId,
+    targetModId: "",
+    placeAfter: false,
+  };
+}
+
+function trackPointerReordering(event: PointerEvent) {
+  if (!pointerReorderState.value || pointerReorderState.value.pointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  updatePointerReorderTarget(event);
+}
+
+function clearPointerReordering() {
+  draggedModId.value = "";
+  dropTargetModId.value = "";
+  pointerReorderState.value = null;
+  reorderIndicatorTop.value = null;
+}
+
+function finishPointerReordering(event: PointerEvent) {
+  if (!pointerReorderState.value || pointerReorderState.value.pointerId !== event.pointerId) {
+    return;
+  }
+
+  updatePointerReorderTarget(event);
+  const reorderState = pointerReorderState.value;
+  if (!reorderState) {
+    return;
+  }
+
+  const dragHandle = event.currentTarget as HTMLElement;
+  if (dragHandle.hasPointerCapture(event.pointerId)) {
+    dragHandle.releasePointerCapture(event.pointerId);
+  }
+
+  const sourceMod = props.mods.find((mod) => mod.id === reorderState.sourceModId);
+  const targetMod = props.mods.find((mod) => mod.id === reorderState.targetModId);
+  if (sourceMod && targetMod) {
+    emit("reorder", sourceMod, targetMod, reorderState.placeAfter);
+  }
+  clearPointerReordering();
+}
+
+function cancelPointerReordering(event: PointerEvent) {
+  if (pointerReorderState.value?.pointerId !== event.pointerId) {
+    return;
+  }
+
+  clearPointerReordering();
+}
+
 function isEditingCategory(mod: InstalledModSummary) {
   return editingCategoryModId.value === mod.id;
 }
@@ -296,7 +423,7 @@ function isExpanded(modId: string) {
 }
 
 function isRowActionDisabled() {
-  return Boolean(props.activeModAction || props.metadataSavingModId);
+  return Boolean(props.activeModAction || props.metadataSavingModId || props.reorderingModId);
 }
 
 function conflictPartnerSummary(mod: InstalledModSummary) {
@@ -323,7 +450,13 @@ watch(
 </script>
 
 <template>
-  <div v-if="props.mods.length" class="mod-table-scroll">
+  <div v-if="props.mods.length" ref="modTableScroll" class="mod-table-scroll">
+    <div
+      v-if="reorderIndicatorTop !== null"
+      class="reorder-indicator"
+      :style="{ top: `${reorderIndicatorTop}px` }"
+      aria-hidden="true"
+    ></div>
     <table class="mod-table">
       <colgroup>
         <col class="status-column" />
@@ -347,7 +480,15 @@ watch(
       </thead>
       <tbody>
         <template v-for="(mod, index) in props.mods" :key="mod.id">
-          <tr :class="{ 'is-enabled': mod.enabled, 'has-conflict': props.conflictingModIds.has(mod.id) }">
+          <tr
+            :class="{
+              'is-enabled': mod.enabled,
+              'has-conflict': props.conflictingModIds.has(mod.id),
+              'is-dragging': draggedModId === mod.id,
+              'is-drop-target': dropTargetModId === mod.id,
+            }"
+            :data-mod-id="mod.id"
+          >
             <td class="mod-status">
               <button
                 type="button"
@@ -365,7 +506,7 @@ watch(
                       ? '已启用，点击禁用 MOD'
                       : '未启用，点击启用 MOD'
                 "
-                :data-tooltip="
+                :title="
                   props.activeModAction === mod.id
                     ? '正在更新'
                     : mod.enabled
@@ -375,11 +516,30 @@ watch(
                 @click="mod.enabled ? $emit('disable', mod) : $emit('enable', mod)"
               >
                 <span v-if="props.activeModAction === mod.id" aria-hidden="true">&#8987;</span>
-                <span v-else aria-hidden="true">&#9211;</span>
+                <span v-else class="power-symbol" aria-hidden="true"></span>
               </button>
             </td>
 
-            <td class="mod-index">{{ index + 1 }}</td>
+            <td class="mod-index">
+              <span class="mod-index-content">
+                <span class="mod-index-number">{{ index + 1 }}</span>
+                <button
+                  v-if="props.canReorder"
+                  type="button"
+                  class="drag-handle"
+                  aria-label="拖拽调整 MOD 顺序"
+                  title="拖拽调整顺序"
+                  @pointerdown.prevent="startPointerReordering(mod, $event)"
+                  @pointermove="trackPointerReordering"
+                  @pointerup="finishPointerReordering"
+                  @pointercancel="cancelPointerReordering"
+                >
+                  <span class="drag-grip" aria-hidden="true">
+                    <span v-for="dot in 6" :key="dot"></span>
+                  </span>
+                </button>
+              </span>
+            </td>
 
             <td class="mod-name">
               <div class="name-editor">
@@ -449,7 +609,7 @@ watch(
                       :disabled="!!props.metadataSavingModId || !!props.activeModAction"
                       @change="toggleCategory(mod, category.id, $event)"
                     />
-                    <span>{{ category.name }}</span>
+                    <span>{{ categoryDisplayName(category) }}</span>
                   </label>
                   <p v-if="!props.categories.length" class="empty-category-options">暂无分类</p>
                   <div class="category-menu-actions">
@@ -496,7 +656,7 @@ watch(
             <td class="mod-note">
               <input
                 v-if="isEditing(mod, 'note')"
-                ref="editingInput"
+                ref="editingInputs"
                 :value="draftValue(mod, 'note')"
                 class="inline-editor"
                 maxlength="800"
@@ -588,17 +748,6 @@ watch(
                 <div class="replacement-heading">
                   <h4>替换目标</h4>
                   <span v-if="mod.modelRemapCount" class="remap-count">已改绑 {{ mod.modelRemapCount }}</span>
-                  <button
-                    v-if="hasRemappableTarget(mod)"
-                    type="button"
-                    class="detail-icon-button"
-                    :disabled="isRowActionDisabled() || mod.enabled"
-                    :aria-label="mod.enabled ? '请先禁用 MOD 再修改替换目标' : '修改模型替换目标'"
-                    :data-tooltip="mod.enabled ? '请先禁用 MOD' : '修改替换目标'"
-                    @click="$emit('manageRemap', mod)"
-                  >
-                    <span aria-hidden="true">&#8644;</span>
-                  </button>
                 </div>
                 <ul v-if="mod.modelReplacements.length">
                   <li v-for="replacement in mod.modelReplacements" :key="`${replacement.modelKind}-${replacement.modelId}`">
@@ -636,6 +785,7 @@ watch(
 
 <style scoped>
 .mod-table-scroll {
+  position: relative;
   width: 100%;
   max-width: 100%;
   margin-top: 12px;
@@ -657,7 +807,7 @@ watch(
 }
 
 .index-column {
-  width: 44px;
+  width: 68px;
 }
 
 .name-column {
@@ -683,14 +833,28 @@ watch(
 .mod-table th,
 .mod-table td {
   padding: 10px 12px;
-  border-bottom: 1px solid #e7eeeb;
   color: #435650;
   font-size: 0.86rem;
   text-align: left;
   vertical-align: middle;
 }
 
+.mod-table tbody > tr:not(.mod-details-row) {
+  border-bottom: 1px solid #e7eeeb;
+}
+
+.reorder-indicator {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: #24745b;
+  pointer-events: none;
+}
+
 .mod-table th {
+  border-bottom: 1px solid #e7eeeb;
   color: #61756f;
   background: #f7faf8;
   font-size: 0.76rem;
@@ -725,6 +889,71 @@ watch(
   color: #72837e !important;
   text-align: center !important;
   font-variant-numeric: tabular-nums;
+  padding-right: 8px !important;
+  padding-left: 8px !important;
+}
+
+.mod-index-content {
+  display: inline-grid;
+  width: 48px;
+  height: 28px;
+  grid-template-columns: 24px 18px;
+  column-gap: 6px;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.mod-index-number {
+  text-align: right;
+}
+
+.drag-handle {
+  display: grid;
+  width: 18px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  color: #83948f;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle:hover,
+.drag-handle:focus-visible {
+  color: #24745b;
+}
+
+.is-dragging .drag-handle,
+.is-drop-target .drag-handle {
+  color: #17613f;
+}
+
+.drag-handle:focus-visible {
+  outline: 2px solid #8cbca8;
+  outline-offset: 1px;
+}
+
+.drag-grip {
+  display: grid;
+  width: 8px;
+  height: 13px;
+  grid-template-columns: repeat(2, 3px);
+  grid-template-rows: repeat(3, 3px);
+  gap: 2px;
+}
+
+.drag-grip span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .status-button,
@@ -746,7 +975,29 @@ watch(
 .status-button {
   width: 34px;
   height: 34px;
-  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.power-symbol {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 1.8px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+}
+
+.power-symbol::after {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 2px;
+  height: 7px;
+  border-radius: 1px;
+  background: currentColor;
+  content: "";
+  transform: translateX(-50%);
 }
 
 .status-button.enabled {
@@ -971,15 +1222,17 @@ watch(
 
 .conflict-indicator {
   display: grid;
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   flex: none;
   place-items: center;
+  border: 1px solid #c76a26;
   border-radius: 50%;
-  color: #ffffff;
-  background: #c46a24;
-  font-size: 0.72rem;
+  color: #9a4b16;
+  background: #fff8ed;
+  font-size: 0.7rem;
   font-weight: 800;
+  line-height: 1;
 }
 
 .metadata-error {
@@ -1079,7 +1332,6 @@ watch(
   font-size: 1rem;
 }
 
-.status-button[data-tooltip]::after,
 .icon-button[data-tooltip]::after,
 .replacement-entry-button[data-tooltip]::after {
   position: absolute;
@@ -1099,8 +1351,6 @@ watch(
   white-space: nowrap;
 }
 
-.status-button[data-tooltip]:hover::after,
-.status-button[data-tooltip]:focus-visible::after,
 .icon-button[data-tooltip]:hover::after,
 .icon-button[data-tooltip]:focus-visible::after,
 .replacement-entry-button[data-tooltip]:hover::after,

@@ -120,6 +120,26 @@ Rust AppInfo
   backend: &'static str
 ```
 
+## 后台任务与进度
+
+读取大量 manifest、目录扫描、解包和游戏目录复制不能在 Tauri command 的同步主路径中执行。当前重任务统一经过 `src-tauri/src/operations.rs`：
+
+```text
+Vue 操作
+  -> typed invoke wrapper
+  -> async Tauri command
+  -> run_blocking_operation
+  -> Rust service 的同步文件操作
+  -> acumod://operation-progress 事件
+  -> App.vue + OperationStatusBar
+```
+
+- `OperationCoordinator` 同一时间只允许一个重任务，避免导入、部署和冲突重写同时修改 manifest 或游戏文件；页面导航保持可用，重复重任务会明确提示等待当前任务结束。
+- `OperationReporter` 对目录扫描、压缩包解包、本地库复制、游戏目录复制和删除发送阶段与真实完成数。扫描总数未知时只展示当前发现项；文件清单确定后展示 `已完成 / 总数`。
+- 每个任务结束后把类型、结果和耗时追加到 `AcumodData/logs/operation-timings.log`。该日志用于定位性能问题，不保存凭据或文件内容。
+- 本项目不提供任务取消。复制、删除和 manifest 写入一旦开始必须顺序完成，以保持部署记录与实际游戏目录一致。
+- `get_mod_workspace_snapshot` 在一次 manifest 读取后组装 MOD 列表、分类和冲突报告；MOD 库刷新优先使用它，避免前端并行调用三个全量扫描 command。
+
 ## MOD 库和复制式部署
 
 当前确认的部署模型是复制式部署：
@@ -159,6 +179,8 @@ AppData/
 
 <软件目录>/
   AcumodData/
+    logs/
+      operation-timings.log  后台任务类型、结果和耗时
     mods/
       installed/           已导入并由 Acumod 管理的 MOD 副本
       staging/
@@ -170,7 +192,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 `staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`staging/downloads` 后续只保存 Nexus 下载中的 `.part` 文件和等待用户确认导入的归档。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
-`AcumodData/mods/categories.json` 使用 schema 2 保存统一的全局分类定义。公开字段只有稳定 ID、名称和创建时间；内部 `recognitionKeys` 用于让新导入 MOD 复用识别类别，`suppressedRecognitionKeys` 防止用户删除的识别分类被自动重建。每个 `installed/<mod_id>/manifest.json` 保存 `categoryIds[]`，一个 MOD 可关联零个或多个分类。删除分类时，服务层先清除全部 manifest 引用，再删除定义；分类操作不修改 MOD 内容。
+`AcumodData/mods/categories.json` 使用 schema 3 保存统一的全局分类定义。公开字段包括稳定 ID、名称、可选 `parentId` 和创建时间；只支持顶级加一层子分类。内部 `recognitionKeys` 用于让新导入 MOD 复用识别类别，`suppressedRecognitionKeys` 防止用户删除的识别分类被自动重建。武器识别会创建或复用顶级“武器”及其子分类，例如“太刀”，MOD 实际关联子分类并显示为“武器·太刀”。每个 `installed/<mod_id>/manifest.json` 保存 `categoryIds[]`，一个 MOD 可关联零个或多个分类；若同时选择父分类和子分类，服务层只保存子分类。删除顶级分类时，直接子分类会保留并提升为顶级分类。分类操作不修改 MOD 内容。
 
 ## MOD 导入目录识别
 
@@ -294,7 +316,7 @@ MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和
 - 文件结构更适合学习和调试。
 - 暂时不需要引入数据库依赖。
 
-当前传统管理器增强阶段仍使用 JSON：每个 `installed/<mod_id>/manifest.json` 的 `enabled` 与 `deployedFiles` 表示当前真正部署到游戏目录的状态，`installed/conflict-orders.json` 保存各冲突组的覆盖顺序。它们共同构成唯一的运行状态。
+当前传统管理器增强阶段仍使用 JSON：每个 `installed/<mod_id>/manifest.json` 的 `enabled` 与 `deployedFiles` 表示当前真正部署到游戏目录的状态，`installed/conflict-orders.json` 保存各冲突组的优先级，`mods/mod-library-order.json` 保存手动浏览顺序。冲突组顺序的第一项是最终覆盖者，MOD 库顺序绝不参与部署。它们共同构成唯一的运行状态。
 
 ### 多配置移除迁移
 
@@ -419,11 +441,11 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 第九个 MVP 切片是“冲突检测和按 MOD 组排序”：
 
 1. Rust service 只扫描当前已启用 MOD 的有效部署路径，先找出相同目标路径，再构建 MOD 冲突关系图；同一连通分量中的 MOD 归为一个冲突组，未启用 MOD 不显示。
-2. 主 MOD 列表按安装时间展示普通序号，不维护全局 MOD 优先级。
-3. Vue 使用独立的冲突管理工作区，只显示每组包含哪些 MOD 和整体覆盖顺序，不展示具体冲突文件路径；A/B 与 C/D 这类无关关系显示为两个组。
+2. 主 MOD 列表的默认手动浏览顺序保存在 `mods/mod-library-order.json`，可以拖拽调整；它不维护全局 MOD 优先级。
+3. Vue 使用独立的冲突管理工作区，只显示每组包含哪些 MOD 和整体优先级，并可展开查看该组冲突文件路径；A/B 与 C/D 这类无关关系显示为两个组。
 4. 用户移动参与 MOD 时，只更新 `AcumodData/mods/installed/conflict-orders.json` 中该 MOD 组合对应的顺序，不立即改写游戏目录。
-5. 用户点击“应用此组顺序”后，Rust service 遍历组内全部冲突文件；每个文件由顺序中最后一个已启用且实际包含该文件的 MOD 提供，并同步更新 `deployedFiles` 记录归属。
-6. 每次成功启用 MOD 后，Rust service 把它追加到相关冲突组顺序末尾并立即按该顺序协调冲突文件，因此实际启用顺序就是初始覆盖顺序。
+5. 用户点击“应用此组优先级”后，Rust service 遍历组内全部冲突文件；每个文件由顺序中第一个已启用且实际包含该文件的 MOD 提供，并同步更新 `deployedFiles` 记录归属。
+6. 每次成功启用 MOD 后，Rust service 把它放到相关冲突组最上方并立即按该优先级协调冲突文件，因此后启用的 MOD 默认覆盖先启用的 MOD。
 
 冲突覆盖不额外创建备份，因为各 MOD 的原始文件已保存在 Acumod 本地 MOD 库中。若游戏目录目标文件存在但没有 Acumod 部署记录，应用前仍会要求用户确认覆盖。
 

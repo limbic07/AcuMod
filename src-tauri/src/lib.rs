@@ -1,10 +1,12 @@
 mod commands;
+mod operations;
 mod services;
 mod storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(operations::OperationCoordinator::default())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::app::get_app_info,
@@ -20,12 +22,14 @@ pub fn run() {
             commands::mod_library::get_mod_conflict_report,
             commands::mod_library::get_mod_library_status,
             commands::mod_library::get_mod_remap_details,
+            commands::mod_library::get_mod_workspace_snapshot,
             commands::mod_library::install_mod_from_archive,
             commands::mod_library::install_mod_from_candidate,
             commands::mod_library::install_mod_from_folder,
             commands::mod_library::list_installed_mods,
             commands::mod_library::list_mod_categories,
             commands::mod_library::move_conflict_participant,
+            commands::mod_library::move_mod_library_item,
             commands::mod_library::open_installed_mod_folder,
             commands::mod_library::preview_apply_conflict_order,
             commands::mod_library::preview_disable_mod,

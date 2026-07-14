@@ -14,6 +14,7 @@ const MODEL_INDEX_JSON: &str = include_str!(concat!(
 const MRL3_TEXTURE_ENTRY_SIZE: usize = 272;
 const MRL3_TEXTURE_PATH_OFFSET: usize = 16;
 const MRL3_TEXTURE_PATH_CAPACITY: usize = 256;
+const ARMOR_PARTS: [&str; 5] = ["head", "body", "arm", "wst", "leg"];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1234,8 +1235,6 @@ fn rewrite_armor_epv_file_name(
     source_set_id: &str,
     target_set_id: &str,
 ) -> Option<String> {
-    const ARMOR_PARTS: [&str; 5] = ["head", "body", "arm", "wst", "leg"];
-
     let file_name_index = components.len().checked_sub(1)?;
     let epv_directory_index = file_name_index.checked_sub(1)?;
     let part_directory_index = epv_directory_index.checked_sub(1)?;
@@ -1258,6 +1257,30 @@ fn rewrite_armor_epv_file_name(
     }
 
     None
+}
+
+pub fn is_armor_epv_deploy_path(path: &str) -> bool {
+    let normalized = normalize_deploy_path(path);
+    let components = normalized
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    if components.len() < 6 {
+        return false;
+    }
+
+    let suffix = &components[components.len() - 6..];
+    suffix[0].eq_ignore_ascii_case("pl")
+        && matches!(
+            suffix[1].to_ascii_lowercase().as_str(),
+            "f_equip" | "m_equip"
+        )
+        && armor_set_base_id(suffix[2]).is_some()
+        && ARMOR_PARTS
+            .iter()
+            .any(|part| suffix[3].eq_ignore_ascii_case(part))
+        && suffix[4].eq_ignore_ascii_case("epv")
+        && has_extension(suffix[5], "epv3")
 }
 
 fn build_texture_path_rewrites(
@@ -1516,6 +1539,22 @@ mod tests {
             effective[0].deploy_relative_path,
             "nativePC/pl/f_equip/pl001_0000/body/epv/f_body105_alternate.epv3"
         );
+    }
+
+    #[test]
+    fn recognizes_armor_epv_paths_for_remap_confirmation() {
+        assert!(is_armor_epv_deploy_path(
+            "nativePC/pl/f_equip/pl106_0000/body/epv/f_body106.epv3"
+        ));
+        assert!(is_armor_epv_deploy_path(
+            "nativePC/pl/m_equip/pl027_0010/leg/epv/custom_leg_effect.epv3"
+        ));
+        assert!(!is_armor_epv_deploy_path(
+            "nativePC/pl/f_equip/pl106_0000/body/mod/f_body106_0000.mod3"
+        ));
+        assert!(!is_armor_epv_deploy_path(
+            "nativePC/vfx/efx/EXX/body_effect.epv3"
+        ));
     }
 
     #[test]

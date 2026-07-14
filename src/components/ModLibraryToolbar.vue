@@ -1,12 +1,17 @@
 <script setup lang="ts">
+interface CategoryFilterOption {
+  id: string;
+  label: string;
+}
+
 const props = defineProps<{
   isCategoryAction: boolean;
   searchQuery: string;
   categoryFilter: string;
   statusFilter: string;
   conflictFilter: string;
-  sort: "installation" | "name" | "category" | "replacement";
-  categories: string[];
+  sort: "manual" | "installation" | "name" | "category" | "replacement";
+  categories: CategoryFilterOption[];
 }>();
 
 const emit = defineEmits<{
@@ -15,7 +20,7 @@ const emit = defineEmits<{
   updateCategoryFilter: [value: string];
   updateStatusFilter: [value: string];
   updateConflictFilter: [value: string];
-  updateSort: [value: "installation" | "name" | "category" | "replacement"];
+  updateSort: [value: "manual" | "installation" | "name" | "category" | "replacement"];
 }>();
 
 function updateSearchQuery(event: Event) {
@@ -37,7 +42,7 @@ function updateConflictFilter(event: Event) {
 function updateSort(event: Event) {
   emit(
     "updateSort",
-    (event.target as HTMLSelectElement).value as "installation" | "name" | "category" | "replacement",
+    (event.target as HTMLSelectElement).value as "manual" | "installation" | "name" | "category" | "replacement",
   );
 }
 </script>
@@ -58,8 +63,8 @@ function updateSort(event: Event) {
       <div class="category-filter-row">
         <select :value="props.categoryFilter" @change="updateCategoryFilter">
           <option value="all">全部分类</option>
-          <option v-for="category in props.categories" :key="category" :value="category">
-            {{ category }}
+          <option v-for="category in props.categories" :key="category.id" :value="category.id">
+            {{ category.label }}
           </option>
         </select>
         <button
@@ -93,6 +98,7 @@ function updateSort(event: Event) {
     <label>
       <span>排序</span>
       <select :value="props.sort" @change="updateSort">
+        <option value="manual">手动排序</option>
         <option value="installation">导入顺序</option>
         <option value="name">名称</option>
         <option value="category">分类</option>

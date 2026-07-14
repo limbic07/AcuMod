@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { ModCategory } from "../api/modLibrary";
 
 const props = defineProps<{
@@ -11,17 +11,57 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: [];
-  create: [name: string];
+  create: [name: string, parentId: string | null];
   rename: [categoryId: string, name: string];
   delete: [category: ModCategory];
 }>();
 
 const newCategoryName = ref("");
+const newCategoryParentId = ref("");
+const newCategoryInput = ref<HTMLInputElement | null>(null);
 const editingCategoryId = ref("");
 const editingCategoryName = ref("");
 
+const rootCategories = computed(() =>
+  props.categories.filter((category) => !category.parentId),
+);
+
+const visibleCategories = computed(() => {
+  const childrenByParentId = new Map<string, ModCategory[]>();
+  for (const category of props.categories) {
+    if (!category.parentId) {
+      continue;
+    }
+    const children = childrenByParentId.get(category.parentId) ?? [];
+    children.push(category);
+    childrenByParentId.set(category.parentId, children);
+  }
+
+  return rootCategories.value.flatMap((category) => [
+    category,
+    ...(childrenByParentId.get(category.id) ?? []),
+  ]);
+});
+
+function parentCategory(category: ModCategory) {
+  return category.parentId
+    ? props.categories.find((candidate) => candidate.id === category.parentId) ?? null
+    : null;
+}
+
+function categoryLabel(category: ModCategory) {
+  const parent = parentCategory(category);
+  return parent ? `${parent.name}·${category.name}` : category.name;
+}
+
 function createCategory() {
-  emit("create", newCategoryName.value);
+  emit("create", newCategoryName.value, newCategoryParentId.value || null);
+}
+
+async function startCreatingChild(category: ModCategory) {
+  newCategoryParentId.value = category.id;
+  await nextTick();
+  newCategoryInput.value?.focus();
 }
 
 function startRenaming(category: ModCategory) {
@@ -47,6 +87,7 @@ watch(
   (isOpen) => {
     if (!isOpen) {
       newCategoryName.value = "";
+      newCategoryParentId.value = "";
       cancelRenaming();
     }
   },
@@ -57,6 +98,7 @@ watch(
   () => {
     if (!props.error) {
       newCategoryName.value = "";
+      newCategoryParentId.value = "";
       cancelRenaming();
     }
   },
@@ -91,11 +133,18 @@ watch(
         <div>
           <input
             id="new-mod-category"
+            ref="newCategoryInput"
             v-model="newCategoryName"
             :disabled="props.isBusy"
             maxlength="40"
             placeholder="分类名称"
           />
+          <select v-model="newCategoryParentId" :disabled="props.isBusy">
+            <option value="">顶级分类</option>
+            <option v-for="category in rootCategories" :key="category.id" :value="category.id">
+              {{ category.name }} 的子分类
+            </option>
+          </select>
           <button type="submit" :disabled="props.isBusy || !newCategoryName.trim()">新建</button>
         </div>
       </form>
@@ -103,7 +152,11 @@ watch(
       <p v-if="props.error" class="category-error">{{ props.error }}</p>
 
       <ul v-if="props.categories.length" class="category-list">
-        <li v-for="category in props.categories" :key="category.id">
+        <li
+          v-for="category in visibleCategories"
+          :key="category.id"
+          :class="{ 'child-category-row': !!category.parentId }"
+        >
           <template v-if="editingCategoryId === category.id">
             <input
               v-model="editingCategoryName"
@@ -121,8 +174,19 @@ watch(
             </div>
           </template>
           <template v-else>
-            <span>{{ category.name }}</span>
+            <span>{{ categoryLabel(category) }}</span>
             <div class="category-row-actions">
+              <button
+                v-if="!category.parentId"
+                type="button"
+                class="icon-button"
+                :disabled="props.isBusy"
+                :aria-label="`为分类 ${category.name} 新建子分类`"
+                data-tooltip="新建子分类"
+                @click="startCreatingChild(category)"
+              >
+                <span aria-hidden="true">+</span>
+              </button>
               <button
                 type="button"
                 class="icon-button"
@@ -207,6 +271,7 @@ watch(
 }
 
 .create-category-form input,
+.create-category-form select,
 .category-list input {
   min-width: 0;
   min-height: 36px;
@@ -217,6 +282,10 @@ watch(
   color: #17211f;
   background: #fbfdfc;
   font: inherit;
+}
+
+.create-category-form select {
+  flex: 0 1 170px;
 }
 
 button {
@@ -320,6 +389,12 @@ button:disabled {
   padding: 8px 0;
   border-bottom: 1px solid #e7eeeb;
   color: #24332f;
+}
+
+.category-list li.child-category-row {
+  margin-left: 18px;
+  padding-left: 12px;
+  border-left: 2px solid #c9dbd4;
 }
 
 .category-list li > span {

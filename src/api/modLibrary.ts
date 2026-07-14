@@ -291,6 +291,7 @@ export interface ModConflictGroup {
   groupId: string;
   participantCount: number;
   conflictFileCount: number;
+  conflictFiles: string[];
   enabledParticipantCount: number;
   participants: ModConflictParticipant[];
   sharedModelTargets: SharedModelTarget[];
@@ -302,6 +303,12 @@ export interface ModConflictReport {
   groups: ModConflictGroup[];
   warnings: string[];
   message: string;
+}
+
+export interface ModWorkspaceSnapshot {
+  installedMods: InstalledModList;
+  categories: ModCategoryList;
+  conflictReport: ModConflictReport;
 }
 
 export interface ModConflictMoveResult {
@@ -349,6 +356,7 @@ export interface ModMetadataPatch {
 export interface ModCategory {
   id: string;
   name: string;
+  parentId: string | null;
   createdAtUnixSeconds: number;
 }
 
@@ -371,6 +379,10 @@ export function listInstalledMods(): Promise<InstalledModList> {
   return invoke<InstalledModList>("list_installed_mods");
 }
 
+export function getModWorkspaceSnapshot(): Promise<ModWorkspaceSnapshot> {
+  return invoke<ModWorkspaceSnapshot>("get_mod_workspace_snapshot");
+}
+
 export function updateModMetadata(
   modId: string,
   patch: ModMetadataPatch,
@@ -385,8 +397,23 @@ export function listModCategories(): Promise<ModCategoryList> {
   return invoke<ModCategoryList>("list_mod_categories");
 }
 
-export function createModCategory(name: string): Promise<ModCategory> {
-  return invoke<ModCategory>("create_mod_category", { name });
+export function createModCategory(
+  name: string,
+  parentId: string | null,
+): Promise<ModCategory> {
+  return invoke<ModCategory>("create_mod_category", { name, parentId });
+}
+
+export function moveModLibraryItem(
+  modId: string,
+  targetModId: string,
+  placeAfter: boolean,
+): Promise<void> {
+  return invoke<void>("move_mod_library_item", {
+    modId,
+    targetModId,
+    placeAfter,
+  });
 }
 
 export function renameModCategory(

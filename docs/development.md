@@ -175,6 +175,9 @@ src/api/modLibrary.ts
   disableMod(modId)
   -> invoke<ModDeploymentResult>("disable_mod", { modId })
 
+  batchUpdateMods(action, modIds)
+  -> invoke<BatchModOperationResult>("batch_update_mods", { action, modIds })
+
   previewUninstallMod(modId)
   -> invoke<ModUninstallPlan>("preview_uninstall_mod", { modId })
 
@@ -221,6 +224,8 @@ src-tauri/src/commands/mod_library.rs
 
   disable_mod(app, mod_id) -> Result<ModDeploymentResult, String>
 
+  batch_update_mods(app, action, mod_ids) -> Result<BatchModOperationResult, String>
+
   preview_uninstall_mod(app, mod_id) -> Result<ModUninstallPlan, String>
 
   uninstall_mod(app, mod_id) -> Result<ModUninstallResult, String>
@@ -252,6 +257,7 @@ src-tauri/src/services/mod_library.rs
   调用 model_remap service，校验并保存五类改绑选择，生成有效部署文件、MRL3 贴图路径修正和 EVAM 飞翔爪绑定修正
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
+  批量启用、禁用和卸载在一个后台任务内顺序复用单项核心函数；单项失败写入结果并继续后续项目
   卸载 MOD 时先预览，再清理已记录部署文件，最后删除 Acumod 本地库中的该 MOD 目录
   一键还原时扫描本地 MOD 库 manifest，清理所有记录过的 deployedFiles，并将相关 MOD 标记为未启用
   扫描 deployRelativePath 构建 MOD 冲突关系图，将每个独立冲突组的优先级保存到 conflict-orders.json，并应用组内全部冲突文件；最上方项目最终覆盖

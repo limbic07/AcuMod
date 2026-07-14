@@ -326,6 +326,29 @@ export interface ModUninstallResult {
   message: string;
 }
 
+export type BatchModAction = "enable" | "disable" | "uninstall";
+
+export interface BatchModOperationItem {
+  modId: string;
+  name: string;
+  status: "succeeded" | "skipped" | "failed";
+  affectedFileCount: number;
+  warnings: string[];
+  message: string;
+}
+
+export interface BatchModOperationResult {
+  action: BatchModAction;
+  requestedCount: number;
+  succeededCount: number;
+  skippedCount: number;
+  failedCount: number;
+  affectedFileCount: number;
+  items: BatchModOperationItem[];
+  warnings: string[];
+  message: string;
+}
+
 export interface RestoreModPlanItem {
   modId: string;
   name: string;
@@ -625,6 +648,17 @@ export function enableMod(
 export function disableMod(modId: string): Promise<ModDeploymentResult> {
   return invoke<ModDeploymentResult>("disable_mod", {
     modId,
+  });
+}
+
+// 批量操作只发起一个后台任务，Rust 会逐项复用现有启停和卸载保护逻辑。
+export function batchUpdateMods(
+  action: BatchModAction,
+  modIds: string[],
+): Promise<BatchModOperationResult> {
+  return invoke<BatchModOperationResult>("batch_update_mods", {
+    action,
+    modIds,
   });
 }
 

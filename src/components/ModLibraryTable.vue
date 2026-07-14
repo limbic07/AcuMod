@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import type {
   InstalledModSummary,
   ModCategory,
@@ -34,6 +34,7 @@ const props = defineProps<{
   metadataError: string;
   canReorder: boolean;
   reorderingModId: string;
+  activeBatchAction: string;
 }>();
 
 const emit = defineEmits<{
@@ -45,6 +46,9 @@ const emit = defineEmits<{
   uninstall: [mod: InstalledModSummary];
   manageRemap: [mod: InstalledModSummary];
   reorder: [mod: InstalledModSummary, target: InstalledModSummary, placeAfter: boolean];
+  batchEnable: [mods: InstalledModSummary[]];
+  batchDisable: [mods: InstalledModSummary[]];
+  batchUninstall: [mods: InstalledModSummary[]];
 }>();
 
 const editingCell = ref<{ modId: string; field: EditableField } | null>(null);
@@ -57,6 +61,42 @@ const dropTargetModId = ref("");
 const pointerReorderState = ref<PointerReorderState | null>(null);
 const modTableScroll = ref<HTMLElement | null>(null);
 const reorderIndicatorTop = ref<number | null>(null);
+const selectedModIds = ref(new Set<string>());
+
+const selectedMods = computed(() =>
+  props.mods.filter((mod) => selectedModIds.value.has(mod.id)),
+);
+const selectedDisabledMods = computed(() => selectedMods.value.filter((mod) => !mod.enabled));
+const selectedEnabledMods = computed(() => selectedMods.value.filter((mod) => mod.enabled));
+const allVisibleModsSelected = computed(
+  () => props.mods.length > 0 && selectedMods.value.length === props.mods.length,
+);
+const someVisibleModsSelected = computed(
+  () => selectedMods.value.length > 0 && !allVisibleModsSelected.value,
+);
+
+function setSelectedModIds(modIds: Iterable<string>) {
+  selectedModIds.value = new Set(modIds);
+}
+
+function toggleAllVisibleMods(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  setSelectedModIds(checked ? props.mods.map((mod) => mod.id) : []);
+}
+
+function toggleModSelection(modId: string, event: Event) {
+  const nextSelectedIds = new Set(selectedModIds.value);
+  if ((event.target as HTMLInputElement).checked) {
+    nextSelectedIds.add(modId);
+  } else {
+    nextSelectedIds.delete(modId);
+  }
+  selectedModIds.value = nextSelectedIds;
+}
+
+function clearSelection() {
+  setSelectedModIds([]);
+}
 
 function modelKindLabel(modelKind: string) {
   const labels: Record<string, string> = {
@@ -200,7 +240,7 @@ function setDraftValue(mod: InstalledModSummary, field: EditableField, event: Ev
 }
 
 async function beginEditing(mod: InstalledModSummary, field: EditableField) {
-  if (props.metadataSavingModId || props.activeModAction) {
+  if (isRowActionDisabled()) {
     return;
   }
 
@@ -394,7 +434,7 @@ function isEditingCategory(mod: InstalledModSummary) {
 }
 
 function beginCategoryEditing(mod: InstalledModSummary) {
-  if (props.metadataSavingModId || props.activeModAction) {
+  if (isRowActionDisabled()) {
     return;
   }
 
@@ -423,7 +463,12 @@ function isExpanded(modId: string) {
 }
 
 function isRowActionDisabled() {
-  return Boolean(props.activeModAction || props.metadataSavingModId || props.reorderingModId);
+  return Boolean(
+    props.activeBatchAction ||
+      props.activeModAction ||
+      props.metadataSavingModId ||
+      props.reorderingModId,
+  );
 }
 
 function conflictPartnerSummary(mod: InstalledModSummary) {
@@ -447,42 +492,114 @@ watch(
     }
   },
 );
+
+watch(
+  () => props.mods.map((mod) => mod.id).join("\u0000"),
+  () => {
+    // 批量选择只作用于当前筛选结果；隐藏项不会在用户看不到时继续被选中。
+    const visibleIds = new Set(props.mods.map((mod) => mod.id));
+    setSelectedModIds([...selectedModIds.value].filter((modId) => visibleIds.has(modId)));
+  },
+);
 </script>
 
 <template>
-  <div v-if="props.mods.length" ref="modTableScroll" class="mod-table-scroll">
-    <div
-      v-if="reorderIndicatorTop !== null"
-      class="reorder-indicator"
-      :style="{ top: `${reorderIndicatorTop}px` }"
-      aria-hidden="true"
-    ></div>
-    <table class="mod-table">
-      <colgroup>
-        <col class="status-column" />
-        <col class="index-column" />
-        <col class="name-column" />
-        <col class="category-column" />
-        <col class="replacement-column" />
-        <col class="note-column" />
-        <col class="actions-column" />
-      </colgroup>
-      <thead>
-        <tr>
-          <th scope="col">启用</th>
-          <th scope="col">序号</th>
-          <th scope="col">名称</th>
-          <th scope="col">分类</th>
-          <th scope="col">替换信息</th>
-          <th scope="col">备注</th>
-          <th scope="col">操作</th>
-        </tr>
-      </thead>
+  <div v-if="props.mods.length" class="mod-table-region">
+    <div class="batch-toolbar">
+      <label class="batch-selection-summary">
+        <input
+          type="checkbox"
+          :checked="allVisibleModsSelected"
+          :indeterminate="someVisibleModsSelected"
+          :disabled="isRowActionDisabled()"
+          @change="toggleAllVisibleMods"
+        />
+        <span>{{ selectedMods.length ? `已选择 ${selectedMods.length} 项` : "选择当前结果" }}</span>
+      </label>
+      <div class="batch-actions">
+        <button
+          type="button"
+          class="batch-action-button"
+          :disabled="!selectedDisabledMods.length || isRowActionDisabled()"
+          title="按当前表格顺序启用；后处理的冲突 MOD 优先级更高"
+          @click="$emit('batchEnable', selectedDisabledMods)"
+        >
+          启用 {{ selectedDisabledMods.length }} 项
+        </button>
+        <button
+          type="button"
+          class="batch-action-button"
+          :disabled="!selectedEnabledMods.length || isRowActionDisabled()"
+          @click="$emit('batchDisable', selectedEnabledMods)"
+        >
+          禁用 {{ selectedEnabledMods.length }} 项
+        </button>
+        <button
+          type="button"
+          class="batch-action-button danger"
+          :disabled="!selectedMods.length || isRowActionDisabled()"
+          @click="$emit('batchUninstall', selectedMods)"
+        >
+          卸载 {{ selectedMods.length }} 项
+        </button>
+        <button
+          v-if="selectedMods.length"
+          type="button"
+          class="batch-clear-button"
+          :disabled="isRowActionDisabled()"
+          @click="clearSelection"
+        >
+          清空选择
+        </button>
+      </div>
+    </div>
+
+    <div ref="modTableScroll" class="mod-table-scroll">
+      <div
+        v-if="reorderIndicatorTop !== null"
+        class="reorder-indicator"
+        :style="{ top: `${reorderIndicatorTop}px` }"
+        aria-hidden="true"
+      ></div>
+      <table class="mod-table">
+        <colgroup>
+          <col class="status-column" />
+          <col class="selection-column" />
+          <col class="index-column" />
+          <col class="name-column" />
+          <col class="category-column" />
+          <col class="replacement-column" />
+          <col class="note-column" />
+          <col class="actions-column" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">启用</th>
+            <th scope="col" class="selection-heading">
+              <input
+                type="checkbox"
+                :checked="allVisibleModsSelected"
+                :indeterminate="someVisibleModsSelected"
+                :disabled="isRowActionDisabled()"
+                aria-label="选择当前显示的全部 MOD"
+                title="选择当前显示的全部 MOD"
+                @change="toggleAllVisibleMods"
+              />
+            </th>
+            <th scope="col">序号</th>
+            <th scope="col">名称</th>
+            <th scope="col">分类</th>
+            <th scope="col">替换信息</th>
+            <th scope="col">备注</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
       <tbody>
         <template v-for="(mod, index) in props.mods" :key="mod.id">
           <tr
             :class="{
               'is-enabled': mod.enabled,
+              'is-selected': selectedModIds.has(mod.id),
               'has-conflict': props.conflictingModIds.has(mod.id),
               'is-dragging': draggedModId === mod.id,
               'is-drop-target': dropTargetModId === mod.id,
@@ -518,6 +635,16 @@ watch(
                 <span v-if="props.activeModAction === mod.id" aria-hidden="true">&#8987;</span>
                 <span v-else class="power-symbol" aria-hidden="true"></span>
               </button>
+            </td>
+
+            <td class="mod-selection">
+              <input
+                type="checkbox"
+                :checked="selectedModIds.has(mod.id)"
+                :disabled="isRowActionDisabled()"
+                :aria-label="`选择 ${mod.name}`"
+                @change="toggleModSelection(mod.id, $event)"
+              />
             </td>
 
             <td class="mod-index">
@@ -559,7 +686,7 @@ watch(
                   v-else
                   type="button"
                   class="inline-value-button mod-name-value"
-                  :disabled="!!props.metadataSavingModId || !!props.activeModAction"
+                  :disabled="isRowActionDisabled()"
                   :title="mod.name"
                   @click="beginEditing(mod, 'name')"
                 >
@@ -593,7 +720,7 @@ watch(
                   type="button"
                   class="category-tag-button"
                   :class="{ active: isEditingCategory(mod) }"
-                  :disabled="!!props.metadataSavingModId || !!props.activeModAction"
+                  :disabled="isRowActionDisabled()"
                   :title="categoryTags(mod).map((tag) => tag.name).join('、')"
                   :aria-label="`编辑 MOD 分类：${categoryTags(mod).map((tag) => tag.name).join('、')}`"
                   :aria-expanded="isEditingCategory(mod)"
@@ -614,7 +741,7 @@ watch(
                     <input
                       type="checkbox"
                       :checked="mod.categoryIds.includes(category.id)"
-                      :disabled="!!props.metadataSavingModId || !!props.activeModAction"
+                      :disabled="isRowActionDisabled()"
                       @change="toggleCategory(mod, category.id, $event)"
                     />
                     <span>{{ categoryDisplayName(category) }}</span>
@@ -623,12 +750,12 @@ watch(
                   <div class="category-menu-actions">
                     <button
                       type="button"
-                      :disabled="!mod.categoryIds.length || !!props.metadataSavingModId"
+                      :disabled="!mod.categoryIds.length || isRowActionDisabled()"
                       @click="clearCategories(mod)"
                     >
                       清空分类
                     </button>
-                    <button type="button" @click="createCategory(mod)">新建分类</button>
+                    <button type="button" :disabled="isRowActionDisabled()" @click="createCategory(mod)">新建分类</button>
                   </div>
                 </div>
               </div>
@@ -678,7 +805,7 @@ watch(
                 v-else
                 type="button"
                 class="inline-value-button note-value"
-                :disabled="!!props.metadataSavingModId || !!props.activeModAction"
+                :disabled="isRowActionDisabled()"
                 :title="mod.note || '添加备注'"
                 @click="beginEditing(mod, 'note')"
               >
@@ -727,7 +854,7 @@ watch(
           </tr>
 
           <tr v-if="isExpanded(mod.id)" class="mod-details-row">
-            <td colspan="7" class="mod-details-cell">
+            <td colspan="8" class="mod-details-cell">
               <div class="mod-details-grid">
                 <section>
                   <h4>分类</h4>
@@ -793,6 +920,7 @@ watch(
         </template>
       </tbody>
     </table>
+    </div>
   </div>
   <p v-else class="empty-table-state">
     {{ props.installedModCount ? "没有符合当前筛选条件的 MOD。" : "当前没有已安装的 MOD。" }}
@@ -800,11 +928,97 @@ watch(
 </template>
 
 <style scoped>
+.mod-table-region {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 12px;
+}
+
+.batch-toolbar {
+  display: flex;
+  min-height: 42px;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 2px 8px;
+}
+
+.batch-selection-summary,
+.batch-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.batch-selection-summary {
+  color: #52645f;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.batch-selection-summary input,
+.selection-heading input,
+.mod-selection input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #24745b;
+  cursor: pointer;
+}
+
+.batch-selection-summary input:disabled,
+.selection-heading input:disabled,
+.mod-selection input:disabled {
+  cursor: not-allowed;
+}
+
+.batch-action-button,
+.batch-clear-button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #cbd8d4;
+  border-radius: 5px;
+  color: #334b44;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.batch-action-button:hover:not(:disabled),
+.batch-action-button:focus-visible,
+.batch-clear-button:hover:not(:disabled),
+.batch-clear-button:focus-visible {
+  border-color: #8cbca8;
+  color: #17613f;
+  background: #edf5f1;
+}
+
+.batch-action-button.danger {
+  border-color: #e0c3bc;
+  color: #9a392c;
+}
+
+.batch-action-button.danger:hover:not(:disabled),
+.batch-action-button.danger:focus-visible {
+  border-color: #c86557;
+  color: #7f2e23;
+  background: #fff2ef;
+}
+
+.batch-action-button:disabled,
+.batch-clear-button:disabled {
+  color: #8a9894;
+  background: #f3f6f5;
+  cursor: not-allowed;
+}
+
 .mod-table-scroll {
   position: relative;
   width: 100%;
   max-width: 100%;
-  margin-top: 12px;
   overflow: auto;
   border: 1px solid #dfe7e3;
   border-radius: 6px;
@@ -812,7 +1026,7 @@ watch(
 
 .mod-table {
   width: 100%;
-  min-width: 850px;
+  min-width: 900px;
   table-layout: fixed;
   border-collapse: collapse;
   background: #ffffff;
@@ -820,6 +1034,10 @@ watch(
 
 .status-column {
   width: 48px;
+}
+
+.selection-column {
+  width: 42px;
 }
 
 .index-column {
@@ -879,12 +1097,18 @@ watch(
 }
 
 .mod-table th:nth-child(1),
-.mod-table th:nth-child(2) {
+.mod-table th:nth-child(2),
+.mod-table th:nth-child(3) {
   text-align: center;
 }
 
 .mod-table tbody tr:hover:not(.mod-details-row) {
   background: #f9fcfa;
+}
+
+.mod-table tbody tr.is-selected:not(.mod-details-row),
+.mod-table tbody tr.is-selected:hover:not(.mod-details-row) {
+  background: #eef6f2;
 }
 
 .name-editor,
@@ -898,6 +1122,17 @@ watch(
 }
 
 .mod-status .status-button {
+  margin: 0 auto;
+}
+
+.selection-heading,
+.mod-selection {
+  text-align: center !important;
+}
+
+.selection-heading input,
+.mod-selection input {
+  display: block;
   margin: 0 auto;
 }
 
@@ -1541,6 +1776,17 @@ watch(
 @keyframes subtle-pulse {
   50% {
     opacity: 0.4;
+  }
+}
+
+@media (max-width: 980px) {
+  .batch-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .batch-actions {
+    flex-wrap: wrap;
   }
 }
 

@@ -15,6 +15,7 @@ pub fn run() {
             commands::game::save_game_directory,
             commands::mod_library::apply_conflict_order,
             commands::mod_library::apply_mod_remap,
+            commands::mod_library::batch_update_mods,
             commands::mod_library::create_mod_category,
             commands::mod_library::delete_mod_category,
             commands::mod_library::disable_mod,

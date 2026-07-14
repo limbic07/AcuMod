@@ -317,6 +317,42 @@ pub struct ModUninstallResult {
     pub message: String,
 }
 
+/// MOD 库支持的批量操作类型。
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BatchModAction {
+    Enable,
+    Disable,
+    Uninstall,
+}
+
+/// 批量操作中单个 MOD 的执行结果；失败不会阻止后续项目继续执行。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchModOperationItem {
+    pub mod_id: String,
+    pub name: String,
+    pub status: String,
+    pub affected_file_count: usize,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+/// 一次批量启用、禁用或卸载的汇总结果。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchModOperationResult {
+    pub action: BatchModAction,
+    pub requested_count: usize,
+    pub succeeded_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+    pub affected_file_count: usize,
+    pub items: Vec<BatchModOperationItem>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreModPlanItem {
@@ -1707,6 +1743,25 @@ pub fn disable_mod_with_progress(
     disable_mod_from_with_progress(&paths.installed_path, &game_root, &mod_id, progress)
 }
 
+/// 在一个后台任务中顺序处理多个 MOD；单项失败会记录在结果中并继续后续项目。
+pub fn batch_update_mods_with_progress(
+    app: &tauri::AppHandle,
+    action: BatchModAction,
+    mod_ids: Vec<String>,
+    progress: &OperationReporter,
+) -> Result<BatchModOperationResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    batch_update_mods_from_with_progress(
+        &paths.installed_path,
+        &game_root,
+        action,
+        mod_ids,
+        progress,
+    )
+}
+
 pub fn preview_disable_mod(
     app: &tauri::AppHandle,
     mod_id: String,
@@ -1733,14 +1788,22 @@ pub fn uninstall_mod_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    let mut result =
-        uninstall_mod_from_with_progress(&paths.installed_path, &game_root, &mod_id, progress)?;
-    if let Err(error) = remove_mod_from_conflict_orders(&paths.installed_path, &mod_id) {
+    uninstall_mod_with_paths_and_progress(&paths.installed_path, &game_root, &mod_id, progress)
+}
+
+fn uninstall_mod_with_paths_and_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    mod_id: &str,
+    progress: &OperationReporter,
+) -> Result<ModUninstallResult, String> {
+    let mut result = uninstall_mod_from_with_progress(installed_root, game_root, mod_id, progress)?;
+    if let Err(error) = remove_mod_from_conflict_orders(installed_root, mod_id) {
         result.warnings.push(format!(
             "MOD was uninstalled, but conflict order entries could not be cleaned: {error}"
         ));
     }
-    if let Err(error) = remove_mod_from_library_order(&paths.installed_path, &mod_id) {
+    if let Err(error) = remove_mod_from_library_order(installed_root, mod_id) {
         result.warnings.push(format!(
             "MOD was uninstalled, but library order entries could not be cleaned: {error}"
         ));
@@ -3538,6 +3601,167 @@ fn preview_enable_mod_from(
 ) -> Result<ModDeploymentPlan, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
     build_deployment_plan(installed_root, game_root, &context)
+}
+
+fn batch_update_mods_from_with_progress(
+    installed_root: &Path,
+    game_root: &Path,
+    action: BatchModAction,
+    mod_ids: Vec<String>,
+    progress: &OperationReporter,
+) -> Result<BatchModOperationResult, String> {
+    let mut seen_ids = HashSet::new();
+    let mod_ids = mod_ids
+        .into_iter()
+        .map(|mod_id| mod_id.trim().to_string())
+        .filter(|mod_id| !mod_id.is_empty() && seen_ids.insert(mod_id.clone()))
+        .collect::<Vec<_>>();
+    if mod_ids.is_empty() {
+        return Err("请至少选择一个 MOD。".to_string());
+    }
+
+    let requested_count = mod_ids.len();
+    let action_label = batch_action_label(action);
+    let progress_phase = format!("正在批量{action_label}");
+    let mut items = Vec::with_capacity(requested_count);
+    let mut succeeded_count = 0;
+    let mut skipped_count = 0;
+    let mut failed_count = 0;
+    let mut affected_file_count = 0;
+    let mut warnings = Vec::new();
+
+    for (index, mod_id) in mod_ids.into_iter().enumerate() {
+        let context = match load_installed_manifest(installed_root, &mod_id) {
+            Ok(context) => context,
+            Err(error) => {
+                failed_count += 1;
+                items.push(BatchModOperationItem {
+                    mod_id: mod_id.clone(),
+                    name: mod_id.clone(),
+                    status: "failed".to_string(),
+                    affected_file_count: 0,
+                    warnings: Vec::new(),
+                    message: error,
+                });
+                progress.report(
+                    progress_phase.clone(),
+                    index + 1,
+                    Some(requested_count),
+                    Some(mod_id),
+                );
+                continue;
+            }
+        };
+        let name = manifest_display_name(&context.manifest);
+        let should_skip = match action {
+            BatchModAction::Enable => context.manifest.enabled,
+            BatchModAction::Disable => {
+                !context.manifest.enabled && context.manifest.deployed_files.is_empty()
+            }
+            BatchModAction::Uninstall => false,
+        };
+        if should_skip {
+            skipped_count += 1;
+            items.push(BatchModOperationItem {
+                mod_id,
+                name: name.clone(),
+                status: "skipped".to_string(),
+                affected_file_count: 0,
+                warnings: Vec::new(),
+                message: format!("{name} 已经处于目标状态。"),
+            });
+            progress.report(
+                progress_phase.clone(),
+                index + 1,
+                Some(requested_count),
+                Some(name),
+            );
+            continue;
+        }
+
+        // 批量入口复用单项核心函数，确保冲突顺序、观察所得文件保护和版本恢复
+        // 与用户逐个点击时完全一致。
+        let operation_result = match action {
+            BatchModAction::Enable => {
+                enable_mod_from_with_progress(installed_root, game_root, &mod_id, true, progress)
+                    .map(|result| (result.affected_file_count, result.warnings, result.message))
+            }
+            BatchModAction::Disable => {
+                disable_mod_from_with_progress(installed_root, game_root, &mod_id, progress)
+                    .map(|result| (result.affected_file_count, result.warnings, result.message))
+            }
+            BatchModAction::Uninstall => {
+                uninstall_mod_with_paths_and_progress(installed_root, game_root, &mod_id, progress)
+                    .map(|result| {
+                        (
+                            result.removed_deployed_file_count + result.removed_library_file_count,
+                            result.warnings,
+                            result.message,
+                        )
+                    })
+            }
+        };
+
+        match operation_result {
+            Ok((item_affected_file_count, item_warnings, message)) => {
+                succeeded_count += 1;
+                affected_file_count += item_affected_file_count;
+                warnings.extend(
+                    item_warnings
+                        .iter()
+                        .map(|warning| format!("{name}：{warning}")),
+                );
+                items.push(BatchModOperationItem {
+                    mod_id,
+                    name: name.clone(),
+                    status: "succeeded".to_string(),
+                    affected_file_count: item_affected_file_count,
+                    warnings: item_warnings,
+                    message,
+                });
+            }
+            Err(error) => {
+                failed_count += 1;
+                items.push(BatchModOperationItem {
+                    mod_id,
+                    name: name.clone(),
+                    status: "failed".to_string(),
+                    affected_file_count: 0,
+                    warnings: Vec::new(),
+                    message: error,
+                });
+            }
+        }
+        progress.report(
+            progress_phase.clone(),
+            index + 1,
+            Some(requested_count),
+            Some(name),
+        );
+    }
+
+    let message = format!(
+        "批量{action_label}完成：成功 {succeeded_count} 个，跳过 {skipped_count} 个，失败 {failed_count} 个。"
+    );
+    Ok(BatchModOperationResult {
+        action,
+        requested_count,
+        succeeded_count,
+        skipped_count,
+        failed_count,
+        affected_file_count,
+        items,
+        warnings,
+        message,
+    })
+}
+
+fn batch_action_label(action: BatchModAction) -> &'static str {
+    match action {
+        BatchModAction::Enable => "启用",
+        BatchModAction::Disable => "禁用",
+        BatchModAction::Uninstall => "卸载",
+    }
 }
 
 fn preview_disable_mod_from(installed_root: &Path, mod_id: &str) -> Result<ModDisablePlan, String> {

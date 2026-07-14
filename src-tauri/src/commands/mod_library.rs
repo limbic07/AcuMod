@@ -1,12 +1,13 @@
 use crate::operations::run_blocking_operation;
 use crate::services::legacy_box::{self, LegacyBoxImportResult, LegacyBoxScan};
 use crate::services::mod_library::{
-    self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
-    ModArchiveImportOutcome, ModCategory, ModCategoryDeleteResult, ModCategoryList,
-    ModConflictMoveResult, ModConflictReport, ModDeploymentPlan, ModDeploymentResult,
-    ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus, ModMetadataPatch,
-    ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan, ModUninstallPlan,
-    ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
+    self, ApplyConflictOrderPlan, ApplyConflictOrderResult, BatchModAction,
+    BatchModOperationResult, InstalledModList, ModArchiveImportOutcome, ModCategory,
+    ModCategoryDeleteResult, ModCategoryList, ModConflictMoveResult, ModConflictReport,
+    ModDeploymentPlan, ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult,
+    ModLibraryStatus, ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult,
+    ModRemapDetails, ModRemapPlan, ModUninstallPlan, ModUninstallResult, ModWorkspaceSnapshot,
+    RestoreAllPlan, RestoreAllResult,
 };
 use crate::services::mod_state_sync::ModStateSyncResult;
 
@@ -336,6 +337,25 @@ pub async fn disable_mod(
     let worker_app = app.clone();
     run_blocking_operation(app, "disableMod", "正在禁用 MOD", move |progress| {
         mod_library::disable_mod_with_progress(&worker_app, mod_id, &progress)
+    })
+    .await
+}
+
+/// 在一个后台任务中顺序启用、禁用或卸载多个 MOD。
+#[tauri::command]
+pub async fn batch_update_mods(
+    app: tauri::AppHandle,
+    action: BatchModAction,
+    mod_ids: Vec<String>,
+) -> Result<BatchModOperationResult, String> {
+    let title = match action {
+        BatchModAction::Enable => "正在批量启用 MOD",
+        BatchModAction::Disable => "正在批量禁用 MOD",
+        BatchModAction::Uninstall => "正在批量卸载 MOD",
+    };
+    let worker_app = app.clone();
+    run_blocking_operation(app, "batchUpdateMods", title, move |progress| {
+        mod_library::batch_update_mods_with_progress(&worker_app, action, mod_ids, &progress)
     })
     .await
 }

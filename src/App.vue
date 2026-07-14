@@ -19,6 +19,7 @@ import {
 import {
   applyModRemap,
   applyConflictOrder,
+  batchUpdateMods,
   createModCategory,
   deleteModCategory,
   disableMod,
@@ -47,6 +48,7 @@ import {
   scanLegacyBoxMods,
   uninstallMod,
   updateModMetadata,
+  type BatchModAction,
   type InstalledModList,
   type InstalledModSummary,
   type LegacyBoxImportResult,
@@ -121,6 +123,8 @@ const isScanningLegacyBox = ref(false);
 const isImportingLegacyBox = ref(false);
 const isRefreshingGameModStates = ref(false);
 const activeModAction = ref("");
+const activeBatchAction = ref<BatchModAction | "">("");
+const batchOperationSummary = ref("");
 const openingModFolderId = ref("");
 const metadataSavingModId = ref("");
 const metadataErrorModId = ref("");
@@ -1194,6 +1198,7 @@ async function confirmDroppedImport() {
 
 async function enableInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
+  batchOperationSummary.value = "";
 
   try {
     deploymentError.value = "";
@@ -1208,6 +1213,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
 
 async function disableInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
+  batchOperationSummary.value = "";
 
   try {
     deploymentError.value = "";
@@ -1218,6 +1224,91 @@ async function disableInstalledMod(mod: InstalledModSummary) {
   } finally {
     activeModAction.value = "";
   }
+}
+
+function batchActionLabel(action: BatchModAction) {
+  const labels: Record<BatchModAction, string> = {
+    enable: "启用",
+    disable: "禁用",
+    uninstall: "卸载",
+  };
+  return labels[action];
+}
+
+async function updateInstalledModsInBatch(
+  action: BatchModAction,
+  mods: InstalledModSummary[],
+) {
+  if (!mods.length) {
+    return;
+  }
+
+  if (action === "uninstall") {
+    const enabledCount = mods.filter((mod) => mod.enabled).length;
+    const localFileCount = mods.reduce((total, mod) => total + mod.fileCount, 0);
+    const detailNames = mods.slice(0, 8).map((mod) => mod.name);
+    if (mods.length > detailNames.length) {
+      detailNames.push(`另有 ${mods.length - detailNames.length} 个 MOD`);
+    }
+    const shouldUninstall = await requestConfirmation({
+      title: "确认批量卸载 MOD",
+      message:
+        `将从 Acumod 本地库卸载 ${mods.length} 个 MOD，共 ${localFileCount} 个本地文件。` +
+        (enabledCount
+          ? `其中 ${enabledCount} 个当前已启用，会先按部署记录清理游戏目录。`
+          : ""),
+      details: detailNames,
+      confirmLabel: `卸载 ${mods.length} 个 MOD`,
+      tone: "danger",
+    });
+    if (!shouldUninstall) {
+      return;
+    }
+  }
+
+  activeBatchAction.value = action;
+  batchOperationSummary.value = "";
+  deploymentError.value = "";
+  try {
+    const result = await batchUpdateMods(
+      action,
+      mods.map((mod) => mod.id),
+    );
+    const warningItems = result.items.filter((item) => item.warnings.length);
+    batchOperationSummary.value =
+      result.message +
+      (warningItems.length
+        ? ` ${warningItems.map((item) => item.name).join("、")} 产生了操作提示。`
+        : "");
+
+    const failedItems = result.items.filter((item) => item.status === "failed");
+    if (failedItems.length) {
+      deploymentError.value =
+        `以下 MOD 未能完成批量${batchActionLabel(action)}：` +
+        failedItems.map((item) => item.name).join("、");
+    }
+
+    if (action === "uninstall") {
+      await loadModLibraryStatus();
+    }
+    await refreshModViews();
+  } catch (error) {
+    deploymentError.value = userFacingError(error);
+  } finally {
+    activeBatchAction.value = "";
+  }
+}
+
+async function enableInstalledModsInBatch(mods: InstalledModSummary[]) {
+  await updateInstalledModsInBatch("enable", mods);
+}
+
+async function disableInstalledModsInBatch(mods: InstalledModSummary[]) {
+  await updateInstalledModsInBatch("disable", mods);
+}
+
+async function uninstallInstalledModsInBatch(mods: InstalledModSummary[]) {
+  await updateInstalledModsInBatch("uninstall", mods);
 }
 
 async function showInstalledModFolder(mod: InstalledModSummary) {
@@ -1384,6 +1475,7 @@ async function applySelectedRemap() {
 
 async function uninstallInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
+  batchOperationSummary.value = "";
 
   try {
     const plan = await previewUninstallMod(mod.id);
@@ -1416,6 +1508,7 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
 
 async function restoreAllInstalledMods() {
   isRestoringAll.value = true;
+  batchOperationSummary.value = "";
 
   try {
     const plan = await previewRestoreAllMods();
@@ -2138,6 +2231,7 @@ onBeforeUnmount(() => {
           :conflicting-mod-ids="conflictingModIds"
           :conflict-partner-names="conflictPartnerNames"
           :active-mod-action="activeModAction"
+          :active-batch-action="activeBatchAction"
           :opening-mod-folder-id="openingModFolderId"
           :metadata-saving-mod-id="metadataSavingModId"
           :metadata-error-mod-id="metadataErrorModId"
@@ -2149,12 +2243,16 @@ onBeforeUnmount(() => {
           @open-folder="showInstalledModFolder"
           @enable="enableInstalledMod"
           @disable="disableInstalledMod"
+          @batch-enable="enableInstalledModsInBatch"
+          @batch-disable="disableInstalledModsInBatch"
+          @batch-uninstall="uninstallInstalledModsInBatch"
           @manage-remap="openRemapManager"
           @reorder="reorderModLibraryItem"
           @uninstall="uninstallInstalledMod"
         />
       </div>
 
+      <p v-if="batchOperationSummary" class="hint">{{ batchOperationSummary }}</p>
       <p v-if="deploymentError" class="error">{{ deploymentError }}</p>
 
       <div v-if="installedModList?.warnings.length" class="preview-block">

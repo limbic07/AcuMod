@@ -906,6 +906,12 @@ pub fn import_legacy_box_mods_with_progress(
     let mut items = Vec::with_capacity(total);
     let mut imported_count = 0;
     let mut already_installed_count = 0;
+    // 批量导入期间复用同一份清单索引，避免每个盒子模块都重新扫描整个本地库。
+    let mut installed_contexts = load_all_installed_manifests_with_progress_phase(
+        &paths.installed_path,
+        progress,
+        "正在建立本地 MOD 索引",
+    )?;
 
     for (index, source) in sources.into_iter().enumerate() {
         progress.report(
@@ -921,15 +927,15 @@ pub fn import_legacy_box_mods_with_progress(
             module_id: module_id.clone(),
         };
         // 盒子模块先按已保存来源、再按完整内容关联。这样同名但内容不同的 MOD 不会被误吞掉。
-        let existing =
-            match find_installed_mod_by_legacy_source(&paths.installed_path, &source_ref)? {
-                Some(existing) => Some(existing),
-                None => find_installed_mod_by_content(
-                    &paths.installed_path,
-                    legacy_box::import_source_files_path(&source),
-                    progress,
-                )?,
-            };
+        let existing = match find_installed_mod_by_legacy_source(&installed_contexts, &source_ref)?
+        {
+            Some(existing) => Some(existing),
+            None => find_installed_mod_by_content(
+                &installed_contexts,
+                legacy_box::import_source_files_path(&source),
+                progress,
+            )?,
+        };
         let result = match existing {
             Some(result) => Ok(result),
             None => install_mod_from_folder_into_with_options_and_progress_allow_same_name(
@@ -946,19 +952,25 @@ pub fn import_legacy_box_mods_with_progress(
 
         match result {
             Ok(result) => {
-                if let Err(error) =
-                    associate_legacy_box_source(&paths.installed_path, &result.mod_id, source_ref)
-                {
-                    items.push(LegacyBoxImportItem {
-                        module_id,
-                        name,
-                        status: "failed".to_string(),
-                        mod_id: Some(result.mod_id),
-                        message: format!("本地副本已存在，但无法保存盒子来源关联：{error}"),
-                    });
-                    progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
-                    continue;
-                }
+                let associated_context = match associate_legacy_box_source(
+                    &paths.installed_path,
+                    &result.mod_id,
+                    source_ref,
+                ) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        items.push(LegacyBoxImportItem {
+                            module_id,
+                            name,
+                            status: "failed".to_string(),
+                            mod_id: Some(result.mod_id),
+                            message: format!("本地副本已存在，但无法保存盒子来源关联：{error}"),
+                        });
+                        progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
+                        continue;
+                    }
+                };
+                upsert_installed_manifest_context(&mut installed_contexts, associated_context);
 
                 if result.already_installed {
                     already_installed_count += 1;
@@ -1041,12 +1053,32 @@ fn synchronize_legacy_mod_states_with_progress(
     game_root: &Path,
     progress: &OperationReporter,
 ) -> Result<ModStateSyncResult, String> {
-    progress.report("正在读取可检测的 MOD", 0, None, None);
-    let mut contexts = load_all_installed_manifests_with_progress(installed_root, progress)?;
+    progress.report("正在读取状态检测清单", 0, None, None);
+    let mut contexts = load_all_installed_manifests_with_progress_phase(
+        installed_root,
+        progress,
+        "正在读取状态检测清单",
+    )?;
     let mut warnings = Vec::new();
     let mut inputs = Vec::new();
+    let detectable_context_count = contexts
+        .iter()
+        .filter(|context| {
+            let is_trusted_enabled = context.manifest.enabled
+                && context
+                    .manifest
+                    .deployed_files
+                    .iter()
+                    .any(is_copied_deployment_file);
+            is_trusted_enabled || !context.manifest.legacy_sources.is_empty()
+        })
+        .count();
+    let mut prepared_mods = Vec::with_capacity(detectable_context_count);
+    let mut total_file_count = 0;
+    let mut prepared_context_count = 0;
 
-    for context in &contexts {
+    // 先生成全部有效文件，得到准确总数后再进入逐文件比对阶段。
+    for (context_index, context) in contexts.iter().enumerate() {
         let is_trusted_enabled = context.manifest.enabled
             && context
                 .manifest
@@ -1068,9 +1100,8 @@ fn synchronize_legacy_mod_states_with_progress(
                 Vec::new()
             }
         };
-        let mut files = Vec::new();
         let mut seen_path_keys = HashSet::new();
-
+        let mut unique_effective_files = Vec::with_capacity(effective_files.len());
         for effective_file in effective_files {
             let path_key = conflict_path_key(&effective_file.deploy_relative_path);
             if !seen_path_keys.insert(path_key.clone()) {
@@ -1081,6 +1112,33 @@ fn synchronize_legacy_mod_states_with_progress(
                 ));
                 continue;
             }
+            unique_effective_files.push(effective_file);
+        }
+        total_file_count += unique_effective_files.len();
+        prepared_context_count += 1;
+        progress.report(
+            "正在准备游戏状态检测",
+            prepared_context_count,
+            Some(detectable_context_count),
+            Some(manifest_display_name(&context.manifest)),
+        );
+        prepared_mods.push((
+            context_index,
+            is_candidate,
+            is_trusted_enabled,
+            unique_effective_files,
+        ));
+    }
+
+    let mut compared_file_count = 0;
+    progress.report("正在检测游戏实际状态", 0, Some(total_file_count), None);
+
+    for (context_index, is_candidate, is_trusted_enabled, effective_files) in prepared_mods {
+        let context = &contexts[context_index];
+        let mut files = Vec::with_capacity(effective_files.len());
+
+        for effective_file in effective_files {
+            let path_key = conflict_path_key(&effective_file.deploy_relative_path);
             let matches_game_directory =
                 match relative_string_to_path(&effective_file.deploy_relative_path) {
                     Ok(relative_path) => {
@@ -1113,6 +1171,17 @@ fn synchronize_legacy_mod_states_with_progress(
                         false
                     }
                 };
+            compared_file_count += 1;
+            progress.report(
+                "正在检测游戏实际状态",
+                compared_file_count,
+                Some(total_file_count),
+                Some(format!(
+                    "{} · {}",
+                    manifest_display_name(&context.manifest),
+                    effective_file.deploy_relative_path
+                )),
+            );
             let has_existing_record = context
                 .manifest
                 .deployed_files
@@ -2132,24 +2201,25 @@ fn find_installed_mod_by_name(
 }
 
 fn find_installed_mod_by_legacy_source(
-    installed_root: &Path,
+    contexts: &[InstalledManifestContext],
     source_ref: &LegacyBoxSourceRef,
 ) -> Result<Option<ModInstallResult>, String> {
-    let context = load_all_installed_manifests(installed_root)?
-        .into_iter()
+    let context = contexts
+        .iter()
         .find(|context| {
             context
                 .manifest
                 .legacy_sources
                 .iter()
                 .any(|stored| legacy_box_source_matches(stored, source_ref))
-        });
+        })
+        .cloned();
 
     context.map(existing_mod_install_result).transpose()
 }
 
 fn find_installed_mod_by_content(
-    installed_root: &Path,
+    contexts: &[InstalledManifestContext],
     source_path: &Path,
     progress: &OperationReporter,
 ) -> Result<Option<ModInstallResult>, String> {
@@ -2169,7 +2239,7 @@ fn find_installed_mod_by_content(
     let source_files = build_file_previews(&content_root, &deploy_root, progress)?;
     let source_files_by_path = file_previews_by_deploy_path(&source_files)?;
 
-    for context in load_all_installed_manifests_with_progress(installed_root, progress)? {
+    for context in contexts {
         if context.manifest.files.len() != source_files_by_path.len() {
             continue;
         }
@@ -2196,7 +2266,7 @@ fn find_installed_mod_by_content(
         }
 
         if same_content {
-            return Ok(Some(existing_mod_install_result(context)?));
+            return Ok(Some(existing_mod_install_result(context.clone())?));
         }
     }
 
@@ -2259,7 +2329,7 @@ fn associate_legacy_box_source(
     installed_root: &Path,
     mod_id: &str,
     source_ref: LegacyBoxSourceRef,
-) -> Result<(), String> {
+) -> Result<InstalledManifestContext, String> {
     let mut context = load_installed_manifest(installed_root, mod_id)?;
     if !context
         .manifest
@@ -2271,7 +2341,22 @@ fn associate_legacy_box_source(
         context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
         save_manifest(&context.manifest_path, &context.manifest)?;
     }
-    Ok(())
+    Ok(context)
+}
+
+fn upsert_installed_manifest_context(
+    contexts: &mut Vec<InstalledManifestContext>,
+    updated: InstalledManifestContext,
+) {
+    if let Some(existing) = contexts
+        .iter_mut()
+        .find(|context| context.manifest.id == updated.manifest.id)
+    {
+        *existing = updated;
+    } else {
+        contexts.push(updated);
+        sort_contexts_by_installation(contexts);
+    }
 }
 
 fn legacy_box_source_matches(left: &LegacyBoxSourceRef, right: &LegacyBoxSourceRef) -> bool {
@@ -5260,6 +5345,14 @@ fn load_all_installed_manifests_with_progress(
     installed_root: &Path,
     progress: &OperationReporter,
 ) -> Result<Vec<InstalledManifestContext>, String> {
+    load_all_installed_manifests_with_progress_phase(installed_root, progress, "正在读取 MOD 清单")
+}
+
+fn load_all_installed_manifests_with_progress_phase(
+    installed_root: &Path,
+    progress: &OperationReporter,
+    phase: &str,
+) -> Result<Vec<InstalledManifestContext>, String> {
     let mut mod_ids = Vec::new();
 
     if !installed_root.exists() {
@@ -5306,7 +5399,7 @@ fn load_all_installed_manifests_with_progress(
     for (index, mod_id) in mod_ids.into_iter().enumerate() {
         let context = load_installed_manifest(installed_root, &mod_id)?;
         progress.report(
-            "正在读取 MOD 清单",
+            phase,
             index + 1,
             Some(total),
             Some(manifest_display_name(&context.manifest)),
@@ -6713,9 +6806,10 @@ mod tests {
 
     use super::{
         apply_conflict_order_from, apply_mod_remap_from, armor_set_label, clear_import_staging,
-        disable_mod_from, enable_mod_from, get_mod_conflict_report_from,
-        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
-        list_installed_mods_from, load_or_initialize_mod_category_store_for_installed_root,
+        disable_mod_from, enable_mod_from, find_installed_mod_by_content,
+        get_mod_conflict_report_from, install_mod_from_candidate_into,
+        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
+        load_all_installed_manifests, load_or_initialize_mod_category_store_for_installed_root,
         move_conflict_participant_from, move_mod_library_item_from, preview_disable_mod_from,
         preview_enable_mod_from, preview_mod_import, preview_mod_remap_from,
         preview_restore_all_mods_from, preview_uninstall_mod_from, read_conflict_order_store,
@@ -6723,6 +6817,7 @@ mod tests {
         save_mod_category_store, uninstall_mod_from, validate_archive_path, ModCategoryStore,
         StoredModCategory, MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
+    use crate::operations::OperationReporter;
 
     #[test]
     fn summarizes_complete_armor_target_as_set_name() {
@@ -6901,6 +6996,30 @@ mod tests {
         assert!(manifest.contains("nativePC/weapon/sword.mod3"));
 
         cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn finds_same_content_from_preloaded_manifest_index() {
+        let source = temp_root("content_index_source");
+        let duplicate = temp_root("content_index_duplicate");
+        let installed_root = temp_root("content_index_target");
+        write_file(&source.join("nativePC/weapon/sword.mod3"));
+        write_file(&duplicate.join("nativePC/weapon/sword.mod3"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source), false, &installed_root).unwrap();
+        let contexts = load_all_installed_manifests(&installed_root).unwrap();
+        let matched =
+            find_installed_mod_by_content(&contexts, &duplicate, &OperationReporter::default())
+                .unwrap()
+                .expect("相同内容应从预加载索引中找到");
+
+        assert_eq!(matched.mod_id, installed.mod_id);
+        assert!(matched.already_installed);
+
+        cleanup(source);
+        cleanup(duplicate);
         cleanup(installed_root);
     }
 

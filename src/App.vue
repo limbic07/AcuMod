@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
@@ -30,24 +30,27 @@ import {
   installModFromArchive,
   installModFromCandidate,
   installModFromFolder,
+  importLegacyBoxMods,
   listInstalledMods,
   listModCategories,
   moveConflictParticipant,
   moveModLibraryItem,
   openInstalledModFolder,
   previewApplyConflictOrder,
-  previewDisableMod,
-  previewEnableMod,
   previewModImport,
   previewModRemap,
   previewRestoreAllMods,
   previewUninstallMod,
   renameModCategory,
   restoreAllMods,
+  scanLegacyBoxMods,
   uninstallMod,
   updateModMetadata,
   type InstalledModList,
   type InstalledModSummary,
+  type LegacyBoxImportResult,
+  type LegacyBoxMod,
+  type LegacyBoxScan,
   type ModConflictReport,
   type ModImportPreview,
   type ModInstallResult,
@@ -60,6 +63,16 @@ import {
 } from "./api/modLibrary";
 
 const MANUAL_SLINGER_TARGET = "__manual_slinger_target__";
+
+type ConfirmationTone = "default" | "danger";
+
+interface ConfirmationRequest {
+  title: string;
+  message: string;
+  details?: string[];
+  confirmLabel: string;
+  tone?: ConfirmationTone;
+}
 
 const appInfo = ref<AppInfo | null>(null);
 const gameStatus = ref<GameDirectoryStatus | null>(null);
@@ -79,6 +92,11 @@ const isApplyingRemap = ref(false);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
+const legacyBoxPath = ref("");
+const legacyBoxScan = ref<LegacyBoxScan | null>(null);
+const legacyBoxImportResult = ref<LegacyBoxImportResult | null>(null);
+const selectedLegacyBoxModuleIds = ref<string[]>([]);
+const selectedLegacyBoxModuleId = ref("");
 const candidateImportSourcePath = ref("");
 const candidateOriginalArchivePath = ref<string | null>(null);
 const selectedCandidateRootPath = ref("");
@@ -87,6 +105,7 @@ const gameError = ref("");
 const modLibraryError = ref("");
 const importError = ref("");
 const archiveError = ref("");
+const legacyBoxError = ref("");
 const deploymentError = ref("");
 const isLoadingApp = ref(false);
 const isLoadingGame = ref(false);
@@ -95,6 +114,8 @@ const isRefreshingModViews = ref(false);
 const isPreviewingImport = ref(false);
 const isInstallingMod = ref(false);
 const isInstallingArchive = ref(false);
+const isScanningLegacyBox = ref(false);
+const isImportingLegacyBox = ref(false);
 const activeModAction = ref("");
 const openingModFolderId = ref("");
 const metadataSavingModId = ref("");
@@ -120,9 +141,12 @@ const modStatusFilter = ref("all");
 const modConflictFilter = ref("all");
 const modSort = ref<"manual" | "installation" | "name" | "category" | "replacement">("manual");
 const reorderingModId = ref("");
+const confirmationRequest = ref<ConfirmationRequest | null>(null);
+const confirmationCancelButton = ref<HTMLButtonElement | null>(null);
 let stopDragListener: (() => void) | undefined;
 let stopOperationProgressListener: (() => void) | undefined;
 let clearOperationStatusTimer: ReturnType<typeof setTimeout> | undefined;
+let resolveConfirmation: ((confirmed: boolean) => void) | undefined;
 const activeOperation = ref<OperationProgress | null>(null);
 
 function userFacingError(error: unknown) {
@@ -132,6 +156,23 @@ function userFacingError(error: unknown) {
   }
   console.error(message);
   return "操作失败，请检查输入内容、文件权限和游戏目录设置。";
+}
+
+function requestConfirmation(request: ConfirmationRequest): Promise<boolean> {
+  resolveConfirmation?.(false);
+  confirmationRequest.value = request;
+  void nextTick(() => confirmationCancelButton.value?.focus());
+
+  return new Promise((resolve) => {
+    resolveConfirmation = resolve;
+  });
+}
+
+function finishConfirmation(confirmed: boolean) {
+  const resolver = resolveConfirmation;
+  resolveConfirmation = undefined;
+  confirmationRequest.value = null;
+  resolver?.(confirmed);
 }
 
 const statusLabel = computed(() => {
@@ -241,8 +282,52 @@ function deployRootLabel(deployRoot: string) {
       : "未确定";
 }
 
+function legacyBoxDeploymentLabel(mod: LegacyBoxMod) {
+  const labels = {
+    fullyMatched: "文件完全一致",
+    partiallyMatched: "部分文件一致",
+    notDeployed: "未检测到部署",
+    different: "文件不一致",
+    unavailable: "无法核验",
+  } as const;
+  return labels[mod.deployment.status] ?? "无法核验";
+}
+
+function legacyBoxDeploymentClass(mod: LegacyBoxMod) {
+  if (mod.deployment.status === "fullyMatched") {
+    return "success";
+  }
+  if (mod.deployment.status === "notDeployed" || mod.deployment.status === "unavailable") {
+    return "neutral";
+  }
+  return "warning";
+}
+
+function legacyBoxRecordLabel(mod: LegacyBoxMod) {
+  return mod.boxEnabled ? "盒子记录：已启用" : "盒子记录：未启用";
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 const previewedFiles = computed(() => importPreview.value?.files.slice(0, 12) ?? []);
 const installedFiles = computed(() => installResult.value?.files.slice(0, 12) ?? []);
+const selectedLegacyBoxMod = computed<LegacyBoxMod | null>(() => {
+  const selectedModuleId = selectedLegacyBoxModuleId.value;
+  return legacyBoxScan.value?.mods.find((mod) => mod.moduleId === selectedModuleId) ?? null;
+});
+const previewedLegacyBoxFiles = computed(() => selectedLegacyBoxMod.value?.files.slice(0, 80) ?? []);
+const selectedLegacyBoxModCount = computed(() => selectedLegacyBoxModuleIds.value.length);
 const installedMods = computed(() => installedModList.value?.mods ?? []);
 const isOperationInProgress = computed(
   () => activeOperation.value !== null && !activeOperation.value.terminal,
@@ -757,11 +842,14 @@ async function renameCategory(categoryId: string, name: string) {
 
 async function deleteCategory(category: ModCategory) {
   const hasChildren = modCategories.value.some((candidate) => candidate.parentId === category.id);
-  const shouldDelete = window.confirm(
-    hasChildren
-      ? `删除分类“${categoryLabel(category)}”后，使用它的 MOD 将移除此分类；其子分类会保留并成为顶级分类。是否继续？`
-      : `删除分类“${categoryLabel(category)}”后，使用它的 MOD 将移除此分类。是否继续？`,
-  );
+  const shouldDelete = await requestConfirmation({
+    title: "删除分类",
+    message: hasChildren
+      ? `删除“${categoryLabel(category)}”后，使用它的 MOD 将移除此分类；其子分类会保留并成为顶级分类。`
+      : `删除“${categoryLabel(category)}”后，使用它的 MOD 将移除此分类。`,
+    confirmLabel: "删除分类",
+    tone: "danger",
+  });
   if (!shouldDelete) {
     return;
   }
@@ -886,9 +974,11 @@ async function previewImportPath(allowGameRoot = false) {
     importError.value = "";
 
     if (preview.requiresGameRootConfirmation) {
-      const shouldUseGameRoot = window.confirm(
-        "未识别到 nativePC 或常见 nativePC 内部目录。这个 MOD 可能需要安装到游戏根目录，是否继续识别？",
-      );
+      const shouldUseGameRoot = await requestConfirmation({
+        title: "确认游戏根目录导入",
+        message: "未识别到 nativePC 或常见 nativePC 内部目录。这个 MOD 可能需要安装到游戏根目录。",
+        confirmLabel: "继续识别",
+      });
 
       if (shouldUseGameRoot) {
         await previewImportPath(true);
@@ -978,6 +1068,48 @@ async function installSelectedCandidate() {
   }
 }
 
+async function scanLegacyBox() {
+  isScanningLegacyBox.value = true;
+
+  try {
+    // 盒子扫描只读取其配置、info.xml 和文件内容；实际部署状态不能直接改变 Acumod 的启用状态。
+    const scan = await scanLegacyBoxMods(legacyBoxPath.value);
+    legacyBoxScan.value = scan;
+    legacyBoxImportResult.value = null;
+    selectedLegacyBoxModuleIds.value = scan.mods
+      .filter((mod) => mod.boxEnabled)
+      .map((mod) => mod.moduleId);
+    selectedLegacyBoxModuleId.value = scan.mods[0]?.moduleId ?? "";
+    legacyBoxError.value = "";
+  } catch (error) {
+    legacyBoxError.value = userFacingError(error);
+  } finally {
+    isScanningLegacyBox.value = false;
+  }
+}
+
+async function importSelectedLegacyBoxMods() {
+  if (!legacyBoxScan.value || !selectedLegacyBoxModuleIds.value.length) {
+    return;
+  }
+
+  isImportingLegacyBox.value = true;
+  try {
+    // 导入只复制盒子 files 目录到本地库；接管现有游戏部署会在下一切片单独处理。
+    legacyBoxImportResult.value = await importLegacyBoxMods(
+      legacyBoxScan.value.boxPath,
+      selectedLegacyBoxModuleIds.value,
+    );
+    legacyBoxError.value = "";
+    await loadModLibraryStatus();
+    await refreshModViews();
+  } catch (error) {
+    legacyBoxError.value = userFacingError(error);
+  } finally {
+    isImportingLegacyBox.value = false;
+  }
+}
+
 function handleDroppedPaths(paths: string[]) {
   isDragActive.value = false;
   dragError.value = "";
@@ -1028,22 +1160,8 @@ async function enableInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
 
   try {
-    const plan = await previewEnableMod(mod.id);
     deploymentError.value = "";
-
-    let confirmOverwrite = false;
-
-    if (plan.requiresOverwriteConfirmation) {
-      confirmOverwrite = window.confirm(
-        `启用 ${mod.name} 会覆盖 ${plan.fileCount} 个目标文件中的已有文件。是否继续？`,
-      );
-
-      if (!confirmOverwrite) {
-        return;
-      }
-    }
-
-    await enableMod(mod.id, confirmOverwrite);
+    await enableMod(mod.id, true);
     await refreshModViews();
   } catch (error) {
     deploymentError.value = userFacingError(error);
@@ -1056,17 +1174,7 @@ async function disableInstalledMod(mod: InstalledModSummary) {
   activeModAction.value = mod.id;
 
   try {
-    const plan = await previewDisableMod(mod.id);
     deploymentError.value = "";
-
-    const shouldDisable = window.confirm(
-      `禁用 ${mod.name} 会删除游戏目录中已记录的 ${plan.fileCount} 个部署文件，MOD 库内副本会保留。是否继续？`,
-    );
-
-    if (!shouldDisable) {
-      return;
-    }
-
     await disableMod(mod.id);
     await refreshModViews();
   } catch (error) {
@@ -1217,11 +1325,16 @@ async function applySelectedRemap() {
       requestedRemapTargetId(),
     );
     remapSaveWarnings.value = plan.warnings;
-    if (
-      plan.warnings.length &&
-      !window.confirm(`${plan.warnings.join("\n")}\n\n仍要保存这次修改吗？`)
-    ) {
-      return;
+    if (plan.warnings.length) {
+      const shouldSave = await requestConfirmation({
+        title: "确认保存模型修改",
+        message: "此修改需要在游戏中确认相关效果是否正常。",
+        details: plan.warnings,
+        confirmLabel: "仍要保存",
+      });
+      if (!shouldSave) {
+        return;
+      }
     }
     await applyModRemap(details.modId, group.groupKey, plan.targetId);
     await refreshModViews();
@@ -1240,13 +1353,16 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
     const plan = await previewUninstallMod(mod.id);
     deploymentError.value = "";
 
-    const shouldUninstall = window.confirm(
-      `卸载 ${mod.name} 会删除 Acumod 本地 MOD 库副本 ${plan.libraryFileCount} 个文件` +
+    const shouldUninstall = await requestConfirmation({
+      title: "确认卸载 MOD",
+      message:
+        `卸载“${mod.name}”会删除 Acumod 本地 MOD 库副本 ${plan.libraryFileCount} 个文件` +
         (plan.deployedFileCount > 0
           ? `，并先清理游戏目录中已记录的 ${plan.deployedFileCount} 个部署文件。`
-          : "。") +
-        "是否继续？",
-    );
+          : "。"),
+      confirmLabel: "卸载 MOD",
+      tone: "danger",
+    });
 
     if (!shouldUninstall) {
       return;
@@ -1273,9 +1389,12 @@ async function restoreAllInstalledMods() {
       return;
     }
 
-    const shouldRestore = window.confirm(
-      `一键还原会禁用 ${plan.affectedModCount} 个 MOD，并删除 ${plan.deployedFileCount} 个由 Acumod 记录的部署文件。是否继续？`,
-    );
+    const shouldRestore = await requestConfirmation({
+      title: "确认一键还原",
+      message: `一键还原会禁用 ${plan.affectedModCount} 个 MOD，并删除 ${plan.deployedFileCount} 个由 Acumod 记录的部署文件。`,
+      confirmLabel: "一键还原",
+      tone: "danger",
+    });
 
     if (!shouldRestore) {
       return;
@@ -1326,11 +1445,13 @@ async function applySelectedConflictOrder() {
       return;
     }
 
-    const shouldApply = window.confirm(
-      plan.requiresOverwriteConfirmation
-        ? "目标文件不是 Acumod 已记录的文件，将被覆盖。是否继续？"
-        : `应用当前优先级，并更新 ${plan.applicableFileCount} 个冲突文件，是否继续？`,
-    );
+    const shouldApply = await requestConfirmation({
+      title: "确认应用冲突优先级",
+      message: plan.requiresOverwriteConfirmation
+        ? "目标文件不是 Acumod 已记录的文件，将被覆盖。"
+        : `应用当前优先级，并更新 ${plan.applicableFileCount} 个冲突文件。`,
+      confirmLabel: "应用优先级",
+    });
 
     if (!shouldApply) {
       return;
@@ -1385,6 +1506,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  finishConfirmation(false);
   stopDragListener?.();
   stopOperationProgressListener?.();
   if (clearOperationStatusTimer) {
@@ -1539,6 +1661,153 @@ onBeforeUnmount(() => {
         </div>
         <p class="hint">支持 .zip / .7z / .rar；通过 Acumod 内置解包组件处理。</p>
       </form>
+
+      <section class="legacy-box-import">
+        <div class="section-title-row">
+          <div>
+            <h3>从狩技 MOD 盒子导入</h3>
+            <p class="hint">扫描只读取盒子记录和游戏文件；导入仅复制到本地 MOD 库，不会接管或改写游戏目录。</p>
+          </div>
+        </div>
+
+        <form class="path-form compact-path-form" @submit.prevent="scanLegacyBox">
+          <label for="legacy-box-path">狩技 MOD 盒子目录</label>
+          <div class="path-row">
+            <input
+              id="legacy-box-path"
+              v-model.trim="legacyBoxPath"
+              type="text"
+              autocomplete="off"
+              placeholder="E:\Games\MHWI\狩技MOD盒子"
+            />
+            <button type="submit" :disabled="isScanningLegacyBox || !legacyBoxPath">
+              {{ isScanningLegacyBox ? "扫描中" : "扫描盒子" }}
+            </button>
+          </div>
+        </form>
+
+        <p v-if="legacyBoxError" class="error">{{ legacyBoxError }}</p>
+
+        <dl v-if="legacyBoxScan" class="facts compact-facts">
+          <div>
+            <dt>盒子游戏目录</dt>
+            <dd>{{ legacyBoxScan.boxGamePath ?? "未记录" }}</dd>
+          </div>
+          <div>
+            <dt>目录核验</dt>
+            <dd>{{ legacyBoxScan.isBoxGamePathValid ? "可用" : "不可用，未核验游戏文件" }}</dd>
+          </div>
+          <div>
+            <dt>与 Acumod 设置</dt>
+            <dd>
+              {{ legacyBoxScan.gamePathsMatch === true ? "游戏目录一致" : legacyBoxScan.gamePathsMatch === false ? "游戏目录不同" : "未设置 Acumod 游戏目录" }}
+            </dd>
+          </div>
+          <div>
+            <dt>盒子 MOD</dt>
+            <dd>{{ legacyBoxScan.mods.length }} 个</dd>
+          </div>
+        </dl>
+
+        <div v-if="legacyBoxScan" class="preview-block">
+          <div class="section-title-row">
+            <h3>选择要导入的 MOD</h3>
+            <div class="section-actions">
+              <span class="selection-count">已选择 {{ selectedLegacyBoxModCount }} 个</span>
+              <button
+                type="button"
+                class="secondary-button"
+                :disabled="isImportingLegacyBox || !selectedLegacyBoxModCount"
+                @click="importSelectedLegacyBoxMods"
+              >
+                {{ isImportingLegacyBox ? "导入中" : "导入到 MOD 库" }}
+              </button>
+            </div>
+          </div>
+
+          <div class="legacy-box-table-wrap">
+            <table class="legacy-box-table">
+              <thead>
+                <tr>
+                  <th scope="col">导入</th>
+                  <th scope="col">名称</th>
+                  <th scope="col">盒子记录</th>
+                  <th scope="col">游戏目录实际状态</th>
+                  <th scope="col">文件</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="mod in legacyBoxScan.mods"
+                  :key="mod.moduleId"
+                  :class="{ selected: selectedLegacyBoxModuleId === mod.moduleId }"
+                  @click="selectedLegacyBoxModuleId = mod.moduleId"
+                >
+                  <td @click.stop>
+                    <input
+                      v-model="selectedLegacyBoxModuleIds"
+                      class="legacy-box-checkbox"
+                      type="checkbox"
+                      :value="mod.moduleId"
+                      :aria-label="`选择 ${mod.name}`"
+                    />
+                  </td>
+                  <td>
+                    <strong>{{ mod.name }}</strong>
+                    <small v-if="mod.modType">{{ mod.modType }}</small>
+                  </td>
+                  <td>{{ legacyBoxRecordLabel(mod) }}</td>
+                  <td>
+                    <span class="legacy-box-status" :class="legacyBoxDeploymentClass(mod)">
+                      {{ legacyBoxDeploymentLabel(mod) }}
+                    </span>
+                    <small>
+                      一致 {{ mod.deployment.matchingFileCount }} / {{ mod.deployment.totalFileCount }}
+                    </small>
+                  </td>
+                  <td>{{ mod.fileCount }} 个 · {{ formatFileSize(mod.totalSizeBytes) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div v-if="selectedLegacyBoxMod" class="preview-block">
+          <div class="section-title-row">
+            <h3>安装文件：{{ selectedLegacyBoxMod.name }}</h3>
+            <span class="selection-count">共 {{ selectedLegacyBoxMod.fileCount }} 个</span>
+          </div>
+          <ul class="file-preview legacy-box-file-preview">
+            <li v-for="file in previewedLegacyBoxFiles" :key="file.sourceRelativePath">
+              <span>{{ file.sourceRelativePath }}</span>
+              <strong>{{ formatFileSize(file.fileSizeBytes) }}</strong>
+            </li>
+          </ul>
+          <p v-if="selectedLegacyBoxMod.fileCount > previewedLegacyBoxFiles.length" class="hint">
+            当前显示前 {{ previewedLegacyBoxFiles.length }} 个安装文件。
+          </p>
+        </div>
+
+        <div v-if="legacyBoxImportResult" class="preview-block">
+          <h3>盒子导入结果</h3>
+          <p class="hint">{{ legacyBoxImportResult.message }}</p>
+          <ul class="compact-list">
+            <li v-for="item in legacyBoxImportResult.items" :key="item.moduleId">
+              <strong>{{ item.name }}</strong>
+              <span>{{ item.message }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="legacyBoxScan?.warnings.length" class="preview-block">
+          <h3>盒子扫描提示</h3>
+          <ul class="compact-list">
+            <li v-for="warning in legacyBoxScan.warnings" :key="warning">
+              <span>{{ warning }}</span>
+            </li>
+          </ul>
+        </div>
+      </section>
 
       <div
         v-if="importPreview?.requiresGameRootConfirmation"
@@ -1999,6 +2268,40 @@ onBeforeUnmount(() => {
     </section>
   </div>
 
+  <div
+    v-if="confirmationRequest"
+    class="dialog-backdrop confirmation-backdrop"
+    role="presentation"
+    @mousedown.self="finishConfirmation(false)"
+  >
+    <section
+      class="confirm-dialog action-confirm-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="action-confirm-title"
+      tabindex="-1"
+      @keydown.esc.prevent="finishConfirmation(false)"
+    >
+      <h2 id="action-confirm-title">{{ confirmationRequest.title }}</h2>
+      <p class="confirmation-message">{{ confirmationRequest.message }}</p>
+      <ul v-if="confirmationRequest.details?.length" class="compact-list confirmation-details">
+        <li v-for="detail in confirmationRequest.details" :key="detail">{{ detail }}</li>
+      </ul>
+      <div class="section-actions">
+        <button ref="confirmationCancelButton" type="button" class="secondary-button" @click="finishConfirmation(false)">
+          暂不操作
+        </button>
+        <button
+          type="button"
+          :class="{ danger: confirmationRequest.tone === 'danger' }"
+          @click="finishConfirmation(true)"
+        >
+          {{ confirmationRequest.confirmLabel }}
+        </button>
+      </div>
+    </section>
+  </div>
+
   <div v-if="isDragActive" class="drag-overlay">
     <div>
       <strong>{{ isHandlingDrop ? "正在处理导入" : "释放以导入 MOD" }}</strong>
@@ -2130,6 +2433,16 @@ h2 {
   display: grid;
   gap: 10px;
   margin-top: 24px;
+}
+
+.compact-path-form {
+  margin-top: 14px;
+}
+
+.legacy-box-import {
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid #dfe8e4;
 }
 
 label,
@@ -2276,6 +2589,12 @@ dd {
   justify-content: flex-end;
 }
 
+.selection-count {
+  color: #52645f;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
 .mod-browser-controls label > span {
   color: #61756f;
   font-size: 0.74rem;
@@ -2363,6 +2682,113 @@ dd {
 
 .candidate-list small {
   color: #61756f;
+}
+
+.legacy-box-table-wrap {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid #dfe8e4;
+  border-radius: 6px;
+}
+
+.legacy-box-table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.legacy-box-table th,
+.legacy-box-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e7eeeb;
+  color: #334b44;
+  font-size: 0.87rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.legacy-box-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: #52645f;
+  background: #f6faf8;
+  font-weight: 700;
+}
+
+.legacy-box-table th:nth-child(1),
+.legacy-box-table td:nth-child(1) {
+  width: 56px;
+  text-align: center;
+}
+
+.legacy-box-table th:nth-child(2) {
+  width: 35%;
+}
+
+.legacy-box-table th:nth-child(3) {
+  width: 15%;
+}
+
+.legacy-box-table th:nth-child(4) {
+  width: 25%;
+}
+
+.legacy-box-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.legacy-box-table tbody tr {
+  cursor: pointer;
+}
+
+.legacy-box-table tbody tr:hover,
+.legacy-box-table tbody tr.selected {
+  background: #f2f8f5;
+}
+
+.legacy-box-table td strong,
+.legacy-box-table td small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.legacy-box-table td small {
+  margin-top: 3px;
+  color: #61756f;
+}
+
+.legacy-box-checkbox {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: #24745b;
+}
+
+.legacy-box-status {
+  display: inline-block;
+  color: #52645f;
+  font-weight: 700;
+}
+
+.legacy-box-status.success {
+  color: #17613f;
+}
+
+.legacy-box-status.warning {
+  color: #a15c00;
+}
+
+.legacy-box-status.neutral {
+  color: #52645f;
+}
+
+.legacy-box-file-preview {
+  max-height: 320px;
+  overflow: auto;
 }
 
 .model-replacement-list li {
@@ -2707,6 +3133,43 @@ dd {
   border-radius: 6px;
   background: #fbfdfc;
   overflow-wrap: anywhere;
+}
+
+.confirmation-backdrop {
+  z-index: 30;
+}
+
+.action-confirm-dialog {
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  outline: none;
+}
+
+.confirmation-message {
+  white-space: pre-line;
+}
+
+.confirmation-details {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: #52645f;
+}
+
+.confirmation-details li::marker {
+  color: #24745b;
+}
+
+button.danger {
+  border-color: #b9493b;
+  color: #ffffff;
+  background: #b9493b;
+}
+
+button.danger:hover {
+  border-color: #943a2f;
+  background: #943a2f;
 }
 
 .remap-dialog {

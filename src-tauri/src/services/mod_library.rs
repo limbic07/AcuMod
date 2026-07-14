@@ -17,6 +17,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::operations::OperationReporter;
 use crate::storage::config;
 
+use super::legacy_box::{self, LegacyBoxImportItem, LegacyBoxImportResult};
 use super::model_recognition::{
     recognize_model_replacements, recognize_model_replacements_with_evam, EvamRecognitionFile,
     ModelReplacement,
@@ -815,6 +816,87 @@ pub fn install_mod_from_candidate_with_progress(
         }
         Err(error) => Err(error),
     }
+}
+
+/// 将狩技 MOD 盒子中的所选模块复制到 Acumod 本地库，不修改游戏目录或盒子目录。
+pub fn import_legacy_box_mods_with_progress(
+    app: &tauri::AppHandle,
+    box_path: String,
+    module_ids: Vec<String>,
+    progress: &OperationReporter,
+) -> Result<LegacyBoxImportResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let sources = legacy_box::load_legacy_box_import_sources(&box_path, &module_ids)?;
+    let total = sources.len();
+    let mut items = Vec::with_capacity(total);
+    let mut imported_count = 0;
+    let mut already_installed_count = 0;
+
+    for (index, source) in sources.into_iter().enumerate() {
+        progress.report(
+            "正在导入狩技 MOD 盒子内容",
+            index,
+            Some(total),
+            Some(legacy_box::import_source_name(&source).to_string()),
+        );
+        let module_id = legacy_box::import_source_module_id(&source).to_string();
+        let name = legacy_box::import_source_name(&source).to_string();
+        // 仍复用普通文件夹导入：它会重新识别 nativePC、生成模型识别与初始分类。
+        let result = install_mod_from_folder_into_with_options_and_progress(
+            path_to_string(legacy_box::import_source_files_path(&source)),
+            false,
+            &paths.installed_path,
+            Some(name.clone()),
+            Some(path_to_string(legacy_box::import_source_module_path(
+                &source,
+            ))),
+            progress,
+        );
+
+        match result {
+            Ok(result) if result.already_installed => {
+                already_installed_count += 1;
+                items.push(LegacyBoxImportItem {
+                    module_id,
+                    name,
+                    status: "alreadyInstalled".to_string(),
+                    mod_id: Some(result.mod_id),
+                    message: "本地 MOD 库中已有同名 MOD，未重复导入。".to_string(),
+                });
+            }
+            Ok(result) => {
+                imported_count += 1;
+                items.push(LegacyBoxImportItem {
+                    module_id,
+                    name,
+                    status: "imported".to_string(),
+                    mod_id: Some(result.mod_id),
+                    message: "已复制到 Acumod 本地 MOD 库，初始保持未启用。".to_string(),
+                });
+            }
+            Err(error) => items.push(LegacyBoxImportItem {
+                module_id,
+                name,
+                status: "failed".to_string(),
+                mod_id: None,
+                message: error,
+            }),
+        }
+        progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
+    }
+
+    let failed_count = items.iter().filter(|item| item.status == "failed").count();
+    let message = format!(
+        "狩技 MOD 盒子导入完成：新增 {imported_count} 个，已存在 {already_installed_count} 个，失败 {failed_count} 个。"
+    );
+    Ok(LegacyBoxImportResult {
+        items,
+        imported_count,
+        already_installed_count,
+        failed_count,
+        message,
+    })
 }
 
 #[cfg(test)]

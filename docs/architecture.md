@@ -192,6 +192,31 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 `staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`staging/downloads` 后续只保存 Nexus 下载中的 `.part` 文件和等待用户确认导入的归档。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
+## 狩技 MOD 盒子导入
+
+狩技 MOD 盒子是外部管理器，不纳入 Acumod 的文件所有权模型。第一切片链路如下：
+
+```text
+导入页输入盒子目录
+  -> scanLegacyBoxMods()
+  -> scan_legacy_box_mods command + 后台任务
+  -> legacy_box service
+  -> 读取 config.ini / info.xml / files
+  -> 返回盒子记录、完整文件清单和游戏目录比对 DTO
+
+用户勾选 MOD
+  -> importLegacyBoxMods()
+  -> import_legacy_box_mods command + 后台任务
+  -> 复用 mod_library 文件夹导入
+  -> AcumodData/mods/installed/<mod_id>/content
+```
+
+- `legacy_box` service 只读取用户选择目录内的 `Mods_582010/<数字模块 ID>/info.xml` 和 `files/`；忽略 `Backup_582010`、下载、存档和临时目录。
+- `quick-xml` 只用于结构化解析第三方 `info.xml`，避免按字符串截取 XML；不涉及网络或游戏运行时依赖。
+- 实际状态按盒子 `config.ini` 的 `[582010].gamepath` 逐文件流式比对：`文件完全一致`、`部分文件一致`、`未检测到部署`、`文件不一致` 或 `无法核验`。这与 `info.xml.enable` 的盒子记录状态并列展示。
+- 导入阶段复用标准目录识别、同名去重、模型替换识别和分类生成，但所有导入结果的 Acumod `enabled` 都为 `false`。
+- 文件内容一致只证明当前游戏目录符合某个源文件，不能证明唯一归属。因此第一切片不写入 `deployedFiles`、不更改冲突优先级，也不删除或覆盖游戏文件。
+
 `AcumodData/mods/categories.json` 使用 schema 3 保存统一的全局分类定义。公开字段包括稳定 ID、名称、可选 `parentId` 和创建时间；只支持顶级加一层子分类。内部 `recognitionKeys` 用于让新导入 MOD 复用识别类别，`suppressedRecognitionKeys` 防止用户删除的识别分类被自动重建。武器识别会创建或复用顶级“武器”及其子分类，例如“太刀”，MOD 实际关联子分类并显示为“武器·太刀”。每个 `installed/<mod_id>/manifest.json` 保存 `categoryIds[]`，一个 MOD 可关联零个或多个分类；若同时选择父分类和子分类，服务层只保存子分类。删除顶级分类时，直接子分类会保留并提升为顶级分类。分类操作不修改 MOD 内容。
 
 ## MOD 导入目录识别
@@ -414,7 +439,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 4. 启用前生成部署计划，列出库内源文件、游戏目录目标文件、目标是否已存在，以及是否由 Acumod 记录为其他 MOD 部署。
 5. 如果目标文件已存在且不是同一个 MOD 的已记录部署，前端必须确认后才调用真正启用。
 6. 启用时从 `AcumodData/mods/installed/<mod_id>/content/` 复制文件到 MHW 游戏目录，并把 `deployedFiles` 写回 manifest。
-7. 禁用前返回实际 `deployedFiles` 供 UI 预览；确认后只按这些记录删除游戏目录文件，然后清空部署记录并标记为未启用。
+7. 禁用按钮直接按实际 `deployedFiles` 记录删除游戏目录文件，然后清空部署记录并标记为未启用；不弹出确认框。
 
 这个切片仍不解决 MOD 之间的最终覆盖顺序；冲突排序会在后续独立切片中实现。当前规则只保证启停链路可用，并且删除动作有明确记录依据。
 

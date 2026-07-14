@@ -26,6 +26,7 @@ pub fn run() {
             commands::mod_library::install_mod_from_archive,
             commands::mod_library::install_mod_from_candidate,
             commands::mod_library::install_mod_from_folder,
+            commands::mod_library::import_legacy_box_mods,
             commands::mod_library::list_installed_mods,
             commands::mod_library::list_mod_categories,
             commands::mod_library::move_conflict_participant,
@@ -40,6 +41,7 @@ pub fn run() {
             commands::mod_library::preview_uninstall_mod,
             commands::mod_library::rename_mod_category,
             commands::mod_library::restore_all_mods,
+            commands::mod_library::scan_legacy_box_mods,
             commands::mod_library::uninstall_mod,
             commands::mod_library::update_mod_metadata,
         ])

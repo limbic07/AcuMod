@@ -88,6 +88,62 @@ export interface ModArchiveImportOutcome {
   message: string;
 }
 
+export interface LegacyBoxModFile {
+  sourceRelativePath: string;
+  fileSizeBytes: number;
+}
+
+export interface LegacyBoxDeploymentStatus {
+  status: "fullyMatched" | "partiallyMatched" | "notDeployed" | "different" | "unavailable";
+  totalFileCount: number;
+  matchingFileCount: number;
+  missingFileCount: number;
+  differentFileCount: number;
+}
+
+export interface LegacyBoxMod {
+  moduleId: string;
+  name: string;
+  boxEnabled: boolean;
+  boxIndex: number | null;
+  modType: string;
+  installTime: string;
+  installSource: string;
+  modulePath: string;
+  filesPath: string;
+  fileCount: number;
+  totalSizeBytes: number;
+  files: LegacyBoxModFile[];
+  deployment: LegacyBoxDeploymentStatus;
+}
+
+export interface LegacyBoxScan {
+  boxPath: string;
+  boxGamePath: string | null;
+  isBoxGamePathValid: boolean;
+  acumodGamePath: string | null;
+  gamePathsMatch: boolean | null;
+  mods: LegacyBoxMod[];
+  warnings: string[];
+  message: string;
+}
+
+export interface LegacyBoxImportItem {
+  moduleId: string;
+  name: string;
+  status: "imported" | "alreadyInstalled" | "failed";
+  modId: string | null;
+  message: string;
+}
+
+export interface LegacyBoxImportResult {
+  items: LegacyBoxImportItem[];
+  importedCount: number;
+  alreadyInstalledCount: number;
+  failedCount: number;
+  message: string;
+}
+
 export interface InstalledModSummary {
   id: string;
   name: string;
@@ -507,6 +563,21 @@ export function installModFromCandidate(
     sourcePath,
     candidateRootPath,
     originalArchivePath,
+  });
+}
+
+// 盒子扫描和导入分别对应 Rust 的只读核验与本地库复制，避免前端误把扫描结果当作接管状态。
+export function scanLegacyBoxMods(boxPath: string): Promise<LegacyBoxScan> {
+  return invoke<LegacyBoxScan>("scan_legacy_box_mods", { boxPath });
+}
+
+export function importLegacyBoxMods(
+  boxPath: string,
+  moduleIds: string[],
+): Promise<LegacyBoxImportResult> {
+  return invoke<LegacyBoxImportResult>("import_legacy_box_mods", {
+    boxPath,
+    moduleIds,
   });
 }
 

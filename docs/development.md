@@ -154,6 +154,12 @@ src/api/modLibrary.ts
   installModFromCandidate(sourcePath, candidateRootPath, originalArchivePath)
   -> invoke<ModInstallResult>("install_mod_from_candidate", { sourcePath, candidateRootPath, originalArchivePath })
 
+  scanLegacyBoxMods(boxPath)
+  -> invoke<LegacyBoxScan>("scan_legacy_box_mods", { boxPath })
+
+  importLegacyBoxMods(boxPath, moduleIds)
+  -> invoke<LegacyBoxImportResult>("import_legacy_box_mods", { boxPath, moduleIds })
+
   previewEnableMod(modId)
   -> invoke<ModDeploymentPlan>("preview_enable_mod", { modId })
 
@@ -196,6 +202,10 @@ src-tauri/src/commands/mod_library.rs
   install_mod_from_archive(app, path, allow_game_root) -> Result<ModArchiveImportOutcome, String>
 
   install_mod_from_candidate(app, source_path, candidate_root_path, original_archive_path) -> Result<ModInstallResult, String>
+
+  scan_legacy_box_mods(app, box_path) -> Result<LegacyBoxScan, String>
+
+  import_legacy_box_mods(app, box_path, module_ids) -> Result<LegacyBoxImportResult, String>
 
   preview_enable_mod(app, mod_id) -> Result<ModDeploymentPlan, String>
 

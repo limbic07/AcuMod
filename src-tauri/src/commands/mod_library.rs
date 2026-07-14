@@ -1,4 +1,5 @@
 use crate::operations::run_blocking_operation;
+use crate::services::legacy_box::{self, LegacyBoxImportResult, LegacyBoxScan};
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, InstalledModList,
     ModArchiveImportOutcome, ModCategory, ModCategoryDeleteResult, ModCategoryList,
@@ -7,6 +8,48 @@ use crate::services::mod_library::{
     ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan, ModUninstallPlan,
     ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
 };
+
+/// 扫描狩技 MOD 盒子记录与其游戏目录中的实际文件状态。
+#[tauri::command]
+pub async fn scan_legacy_box_mods(
+    app: tauri::AppHandle,
+    box_path: String,
+) -> Result<LegacyBoxScan, String> {
+    let acumod_game_path = crate::storage::config::load(&app)?.game_directory;
+    run_blocking_operation(
+        app,
+        "scanLegacyBox",
+        "正在扫描狩技 MOD 盒子",
+        move |progress| {
+            legacy_box::scan_legacy_box_with_progress(box_path, acumod_game_path, &progress)
+        },
+    )
+    .await
+}
+
+/// 将狩技 MOD 盒子的所选 MOD 复制到 Acumod 本地库，初始不接管游戏目录。
+#[tauri::command]
+pub async fn import_legacy_box_mods(
+    app: tauri::AppHandle,
+    box_path: String,
+    module_ids: Vec<String>,
+) -> Result<LegacyBoxImportResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "importLegacyBox",
+        "正在导入狩技 MOD 盒子",
+        move |progress| {
+            mod_library::import_legacy_box_mods_with_progress(
+                &worker_app,
+                box_path,
+                module_ids,
+                &progress,
+            )
+        },
+    )
+    .await
+}
 
 #[tauri::command]
 pub fn get_mod_library_status(app: tauri::AppHandle) -> Result<ModLibraryStatus, String> {

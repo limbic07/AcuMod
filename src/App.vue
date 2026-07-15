@@ -3,11 +3,17 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
+import BranchGroupSuggestionDialog from "./components/BranchGroupSuggestionDialog.vue";
 import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
 import ModCategoryManager from "./components/ModCategoryManager.vue";
 import ModLibraryTable from "./components/ModLibraryTable.vue";
 import ModLibraryToolbar from "./components/ModLibraryToolbar.vue";
 import OperationStatusBar from "./components/OperationStatusBar.vue";
+import {
+  buildBranchGroupSuggestions,
+  type BranchGroupSuggestion,
+  type BranchGroupSuggestionSelection,
+} from "./domain/branchGroupSuggestions";
 import { getAppInfo, type AppInfo } from "./api/app";
 import { listenOperationProgress, type OperationProgress } from "./api/operations";
 import {
@@ -20,6 +26,7 @@ import {
   applyModRemap,
   applyConflictOrder,
   batchUpdateMods,
+  createModBranchGroup,
   createModCategory,
   deleteModCategory,
   disableMod,
@@ -29,11 +36,11 @@ import {
   getModWorkspaceSnapshot,
   refreshModWorkspaceSnapshot,
   installModFromArchive,
-  installModFromCandidate,
+  installModBranches,
   installModFromFolder,
   importLegacyBoxMods,
   moveConflictParticipant,
-  moveModLibraryItem,
+  moveModLibraryItems,
   openInstalledModFolder,
   previewApplyConflictOrder,
   previewModImport,
@@ -41,6 +48,8 @@ import {
   previewRestoreAllMods,
   previewUninstallMod,
   renameModCategory,
+  renameModBranchGroup,
+  removeModsFromBranchGroup,
   refreshGameModStates,
   restoreAllMods,
   scanLegacyBoxMods,
@@ -62,6 +71,7 @@ import {
   type ModelRemapGroup,
   type ModelReplacement,
   type ModCategory,
+  type ModBranchGroup,
 } from "./api/modLibrary";
 
 const MANUAL_SLINGER_TARGET = "__manual_slinger_target__";
@@ -84,6 +94,7 @@ const importPreview = ref<ModImportPreview | null>(null);
 const installResult = ref<ModInstallResult | null>(null);
 const conflictReport = ref<ModConflictReport | null>(null);
 const modCategories = ref<ModCategory[]>([]);
+const modBranchGroups = ref<ModBranchGroup[]>([]);
 const remapDetails = ref<ModRemapDetails | null>(null);
 const selectedRemapGroupKey = ref("");
 const selectedRemapTargetId = ref("");
@@ -101,8 +112,12 @@ const legacyBoxStateSyncResult = ref<ModStateSyncResult | null>(null);
 const selectedLegacyBoxModuleIds = ref<string[]>([]);
 const selectedLegacyBoxModuleId = ref("");
 const candidateImportSourcePath = ref("");
-const candidateOriginalArchivePath = ref<string | null>(null);
-const selectedCandidateRootPath = ref("");
+const candidateOriginalSourcePath = ref<string | null>(null);
+const selectedCandidateRootPaths = ref<string[]>([]);
+const candidateBranchNames = ref<Record<string, string>>({});
+const candidateImportMode = ref<"branchGroup" | "standalone">("branchGroup");
+const candidateGroupName = ref("");
+const candidateSelectionSection = ref<HTMLElement | null>(null);
 const appError = ref("");
 const gameError = ref("");
 const modLibraryError = ref("");
@@ -127,6 +142,10 @@ const openingModFolderId = ref("");
 const metadataSavingModId = ref("");
 const metadataErrorModId = ref("");
 const metadataError = ref("");
+const isUpdatingBranchGroups = ref(false);
+const isBranchSuggestionOpen = ref(false);
+const branchGroupSuggestions = ref<BranchGroupSuggestion[]>([]);
+const branchSuggestionError = ref("");
 const isRestoringAll = ref(false);
 const isApplyingConflict = ref(false);
 const activeView = ref<WorkspaceView>("library");
@@ -350,7 +369,12 @@ const selectedLegacyBoxModCount = computed(() => selectedLegacyBoxModuleIds.valu
 const installedMods = computed(() => installedModList.value?.mods ?? []);
 
 function installedModName(modId: string): string {
-  return installedMods.value.find((mod) => mod.id === modId)?.name ?? modId;
+  const mod = installedMods.value.find((candidate) => candidate.id === modId);
+  if (!mod) {
+    return modId;
+  }
+  const group = modBranchGroups.value.find((candidate) => candidate.modIds.includes(modId));
+  return group ? `${group.name}（${mod.name}）` : mod.name;
 }
 const isOperationInProgress = computed(
   () => activeOperation.value !== null && !activeOperation.value.terminal,
@@ -424,6 +448,7 @@ const filteredInstalledMods = computed(() => {
       installedMod.name,
       installedMod.originalName,
       installedMod.note,
+      modBranchGroups.value.find((group) => group.modIds.includes(installedMod.id))?.name ?? "",
       ...visibleModCategories(installedMod),
       ...installedMod.modelReplacements.flatMap((replacement) => [
         replacement.modelKind,
@@ -474,7 +499,31 @@ const displayedInstalledMods = computed(() => {
     return modSortDirection.value === "asc" ? comparison : -comparison;
   });
 
-  return mods;
+  const groupByModId = new Map<string, string>();
+  for (const group of modBranchGroups.value) {
+    for (const modId of group.modIds) {
+      groupByModId.set(modId, group.id);
+    }
+  }
+  const groupedMods = new Map<string, InstalledModSummary[]>();
+  for (const mod of mods) {
+    const groupId = groupByModId.get(mod.id);
+    if (groupId) {
+      groupedMods.set(groupId, [...(groupedMods.get(groupId) ?? []), mod]);
+    }
+  }
+  const seenGroups = new Set<string>();
+  return mods.flatMap((mod) => {
+    const groupId = groupByModId.get(mod.id);
+    if (!groupId) {
+      return [mod];
+    }
+    if (seenGroups.has(groupId)) {
+      return [];
+    }
+    seenGroups.add(groupId);
+    return groupedMods.get(groupId) ?? [];
+  });
 });
 const enabledModCount = computed(
   () => installedMods.value.filter((installedMod) => installedMod.enabled).length,
@@ -498,9 +547,9 @@ const conflictPartnerNames = computed<Record<string, string[]>>(() => {
       for (const otherParticipant of enabledParticipants) {
         if (
           otherParticipant.modId !== participant.modId &&
-          !partners.includes(otherParticipant.name)
+          !partners.includes(installedModName(otherParticipant.modId))
         ) {
-          partners.push(otherParticipant.name);
+          partners.push(installedModName(otherParticipant.modId));
         }
       }
     }
@@ -707,6 +756,7 @@ async function refreshModViews() {
     installedModList.value = snapshot.installedMods;
     modCategories.value = snapshot.categories.categories;
     conflictReport.value = snapshot.conflictReport;
+    modBranchGroups.value = snapshot.branchGroups;
     modLibraryError.value = "";
     categoryError.value = "";
     syncCategoryFilter();
@@ -725,6 +775,7 @@ async function loadModViewsFromSnapshot() {
     installedModList.value = snapshot.installedMods;
     modCategories.value = snapshot.categories.categories;
     conflictReport.value = snapshot.conflictReport;
+    modBranchGroups.value = snapshot.branchGroups;
     modLibraryError.value = "";
     categoryError.value = "";
     syncCategoryFilter();
@@ -938,18 +989,24 @@ async function deleteCategory(category: ModCategory) {
 }
 
 async function reorderModLibraryItem(
-  mod: InstalledModSummary,
-  target: InstalledModSummary,
+  modIds: string[],
+  targetModIds: string[],
   placeAfter: boolean,
 ) {
-  if (reorderingModId.value || mod.id === target.id) {
+  const sourceIds = new Set(modIds);
+  if (
+    reorderingModId.value ||
+    !modIds.length ||
+    !targetModIds.length ||
+    targetModIds.some((modId) => sourceIds.has(modId))
+  ) {
     return;
   }
 
-  reorderingModId.value = mod.id;
+  reorderingModId.value = modIds[0];
   try {
-    await moveModLibraryItem(mod.id, target.id, placeAfter);
-    reorderInstalledModsInMemory(mod.id, target.id, placeAfter);
+    await moveModLibraryItems(modIds, targetModIds, placeAfter);
+    reorderInstalledModsInMemory(modIds, targetModIds, placeAfter);
     modLibraryError.value = "";
   } catch (error) {
     modLibraryError.value = userFacingError(error);
@@ -958,23 +1015,31 @@ async function reorderModLibraryItem(
   }
 }
 
-function reorderInstalledModsInMemory(modId: string, targetModId: string, placeAfter: boolean) {
+function reorderInstalledModsInMemory(
+  modIds: string[],
+  targetModIds: string[],
+  placeAfter: boolean,
+) {
   const modList = installedModList.value;
   if (!modList) {
     return;
   }
 
-  const mods = [...modList.mods];
-  const sourceIndex = mods.findIndex((mod) => mod.id === modId);
-  const targetIndex = mods.findIndex((mod) => mod.id === targetModId);
-  if (sourceIndex < 0 || targetIndex < 0) {
+  const sourceIds = new Set(modIds);
+  const targetIds = new Set(targetModIds);
+  const movedMods = modList.mods.filter((mod) => sourceIds.has(mod.id));
+  const remainingMods = modList.mods.filter((mod) => !sourceIds.has(mod.id));
+  const targetIndexes = remainingMods
+    .map((mod, index) => (targetIds.has(mod.id) ? index : -1))
+    .filter((index) => index >= 0);
+  if (movedMods.length !== sourceIds.size || targetIndexes.length !== targetIds.size) {
     return;
   }
-
-  const [movedMod] = mods.splice(sourceIndex, 1);
-  const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-  mods.splice(adjustedTargetIndex + (placeAfter ? 1 : 0), 0, movedMod);
-  installedModList.value = { ...modList, mods };
+  const insertIndex = placeAfter
+    ? Math.max(...targetIndexes) + 1
+    : Math.min(...targetIndexes);
+  remainingMods.splice(insertIndex, 0, ...movedMods);
+  installedModList.value = { ...modList, mods: remainingMods };
 }
 
 function openConflictManager() {
@@ -1030,6 +1095,37 @@ function saveManualPath() {
   void runGameAction(() => saveGameDirectory(manualPath.value));
 }
 
+function importSourceDisplayName(path: string) {
+  const pathParts = path.split(/[\\/]/).filter(Boolean);
+  const fileName = pathParts[pathParts.length - 1] ?? "MOD 分支组";
+  return fileName.replace(/\.(zip|7z|rar)$/i, "") || "MOD 分支组";
+}
+
+function prepareCandidateSelection(preview: ModImportPreview | null, originalSourcePath: string | null) {
+  const candidates = preview?.candidates ?? [];
+  selectedCandidateRootPaths.value = candidates.map((candidate) => candidate.rootPath);
+  candidateBranchNames.value = Object.fromEntries(
+    candidates.map((candidate, index) => [
+      candidate.rootPath,
+      candidate.suggestedName || `分支 ${index + 1}`,
+    ]),
+  );
+  candidateImportMode.value = candidates.length > 1 ? "branchGroup" : "standalone";
+  candidateGroupName.value = importSourceDisplayName(originalSourcePath || preview?.sourcePath || "");
+}
+
+async function revealCandidateSelection(preview: ModImportPreview | null) {
+  if (!preview?.candidates.length) {
+    return;
+  }
+
+  // 全局拖拽可能发生在任意工作区；候选生成后必须把用户带到实际可操作的位置。
+  activeView.value = "import";
+  await nextTick();
+  candidateSelectionSection.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+  candidateSelectionSection.value?.focus({ preventScroll: true });
+}
+
 async function previewImportPath(allowGameRoot = false) {
   isPreviewingImport.value = true;
 
@@ -1038,8 +1134,10 @@ async function previewImportPath(allowGameRoot = false) {
     const preview = await previewModImport(importPath.value, allowGameRoot);
     importPreview.value = preview;
     candidateImportSourcePath.value = preview.status === "ambiguous" ? preview.sourcePath : "";
-    candidateOriginalArchivePath.value = null;
-    selectedCandidateRootPath.value = preview.candidates[0]?.rootPath ?? "";
+    candidateOriginalSourcePath.value =
+      preview.status === "ambiguous" ? preview.originalSourcePath : null;
+    prepareCandidateSelection(preview, preview.originalSourcePath);
+    await revealCandidateSelection(preview);
     importError.value = "";
 
     if (preview.requiresGameRootConfirmation) {
@@ -1097,9 +1195,10 @@ async function installArchive() {
     archiveError.value = "";
     importPreview.value = outcome.preview;
     candidateImportSourcePath.value = outcome.status === "ambiguous" ? outcome.sourcePath : "";
-    candidateOriginalArchivePath.value =
+    candidateOriginalSourcePath.value =
       outcome.status === "ambiguous" ? outcome.originalArchivePath : null;
-    selectedCandidateRootPath.value = outcome.preview?.candidates[0]?.rootPath ?? "";
+    prepareCandidateSelection(outcome.preview, outcome.originalArchivePath);
+    await revealCandidateSelection(outcome.preview);
     await loadModLibraryStatus();
     await loadModViewsFromSnapshot();
   } catch (error) {
@@ -1110,30 +1209,171 @@ async function installArchive() {
 }
 
 async function installSelectedCandidate() {
-  if (!candidateImportSourcePath.value || !selectedCandidateRootPath.value) {
+  if (!candidateImportSourcePath.value || !selectedCandidateRootPaths.value.length) {
     return;
+  }
+
+  const selectedRootPaths = new Set(selectedCandidateRootPaths.value);
+  const selectedCandidates = (importPreview.value?.candidates ?? []).filter((candidate) =>
+    selectedRootPaths.has(candidate.rootPath),
+  );
+  const gameRootCandidates = selectedCandidates.filter(
+    (candidate) => candidate.requiresGameRootConfirmation,
+  );
+  if (gameRootCandidates.length) {
+    const shouldContinue = await requestConfirmation({
+      title: "确认游戏根目录分支",
+      message: `所选分支中有 ${gameRootCandidates.length} 个未识别到 nativePC 或常见内部目录，将按游戏根目录相对路径导入。`,
+      details: gameRootCandidates.map(
+        (candidate) => candidateBranchNames.value[candidate.rootPath] || candidate.relativePath,
+      ),
+      confirmLabel: "确认导入",
+    });
+    if (!shouldContinue) {
+      return;
+    }
   }
 
   isInstallingMod.value = true;
 
   try {
-    installResult.value = await installModFromCandidate(
+    const result = await installModBranches(
       candidateImportSourcePath.value,
-      selectedCandidateRootPath.value,
-      candidateOriginalArchivePath.value,
+      selectedCandidateRootPaths.value.map((candidateRootPath) => ({
+        candidateRootPath,
+        branchName: candidateBranchNames.value[candidateRootPath]?.trim() || "未命名分支",
+        allowGameRoot: gameRootCandidates.some(
+          (candidate) => candidate.rootPath === candidateRootPath,
+        ),
+      })),
+      candidateOriginalSourcePath.value,
+      candidateImportMode.value === "branchGroup" ? candidateGroupName.value : null,
+      candidateImportMode.value === "branchGroup",
     );
+    installResult.value = result.installResults[result.installResults.length - 1] ?? null;
     importError.value = "";
     archiveError.value = "";
     importPreview.value = null;
     candidateImportSourcePath.value = "";
-    candidateOriginalArchivePath.value = null;
-    selectedCandidateRootPath.value = "";
+    candidateOriginalSourcePath.value = null;
+    selectedCandidateRootPaths.value = [];
+    candidateBranchNames.value = {};
+    candidateGroupName.value = "";
     await loadModViewsFromSnapshot();
     await loadModLibraryStatus();
   } catch (error) {
     importError.value = userFacingError(error);
   } finally {
     isInstallingMod.value = false;
+  }
+}
+
+async function createBranchGroupFromMods(mods: InstalledModSummary[]) {
+  if (mods.length < 2) {
+    return;
+  }
+  isUpdatingBranchGroups.value = true;
+  try {
+    const modIds = mods.map((mod) => mod.id);
+    const group = await createModBranchGroup(`${mods[0].name} 分支组`, modIds);
+    mergeCreatedBranchGroup(group);
+    deploymentError.value = "";
+  } catch (error) {
+    deploymentError.value = userFacingError(error);
+  } finally {
+    isUpdatingBranchGroups.value = false;
+  }
+}
+
+function mergeCreatedBranchGroup(group: ModBranchGroup) {
+  const selectedIds = new Set(group.modIds);
+  modBranchGroups.value = [
+    ...modBranchGroups.value
+      .map((existing) => ({
+        ...existing,
+        modIds: existing.modIds.filter((modId) => !selectedIds.has(modId)),
+      }))
+      .filter((existing) => existing.modIds.length >= 2),
+    group,
+  ];
+}
+
+function findBranchGroupSuggestions() {
+  branchGroupSuggestions.value = buildBranchGroupSuggestions(
+    installedMods.value,
+    modBranchGroups.value,
+    conflictGroups.value,
+  );
+  branchSuggestionError.value = "";
+  isBranchSuggestionOpen.value = true;
+}
+
+function closeBranchSuggestionDialog() {
+  if (isUpdatingBranchGroups.value) {
+    return;
+  }
+  isBranchSuggestionOpen.value = false;
+  branchSuggestionError.value = "";
+}
+
+async function createSuggestedBranchGroups(
+  selections: BranchGroupSuggestionSelection[],
+) {
+  if (!selections.length || isUpdatingBranchGroups.value) {
+    return;
+  }
+
+  isUpdatingBranchGroups.value = true;
+  branchSuggestionError.value = "";
+  let createdCount = 0;
+  try {
+    // 候选组互不重叠，逐组复用现有命令，确保每次写入都经过 Rust 成员校验和快照更新。
+    for (const selection of selections) {
+      const group = await createModBranchGroup(selection.name, selection.modIds);
+      mergeCreatedBranchGroup(group);
+      createdCount += 1;
+    }
+    batchOperationSummary.value = `已创建 ${createdCount} 个 MOD 分支组。`;
+    isBranchSuggestionOpen.value = false;
+  } catch (error) {
+    branchSuggestionError.value = userFacingError(error);
+    branchGroupSuggestions.value = buildBranchGroupSuggestions(
+      installedMods.value,
+      modBranchGroups.value,
+      conflictGroups.value,
+    );
+  } finally {
+    isUpdatingBranchGroups.value = false;
+  }
+}
+
+async function renameBranchGroup(group: ModBranchGroup, name: string) {
+  isUpdatingBranchGroups.value = true;
+  try {
+    const updated = await renameModBranchGroup(group.id, name);
+    modBranchGroups.value = modBranchGroups.value.map((candidate) =>
+      candidate.id === updated.id ? updated : candidate,
+    );
+    deploymentError.value = "";
+  } catch (error) {
+    deploymentError.value = userFacingError(error);
+  } finally {
+    isUpdatingBranchGroups.value = false;
+  }
+}
+
+async function ungroupInstalledMods(mods: InstalledModSummary[]) {
+  if (!mods.length) {
+    return;
+  }
+  isUpdatingBranchGroups.value = true;
+  try {
+    modBranchGroups.value = await removeModsFromBranchGroup(mods.map((mod) => mod.id));
+    deploymentError.value = "";
+  } catch (error) {
+    deploymentError.value = userFacingError(error);
+  } finally {
+    isUpdatingBranchGroups.value = false;
   }
 }
 
@@ -2187,31 +2427,68 @@ onBeforeUnmount(() => {
         </ul>
       </div>
 
-      <div v-if="importPreview?.candidates.length" class="preview-block">
+      <div
+        v-if="importPreview?.candidates.length"
+        ref="candidateSelectionSection"
+        class="preview-block candidate-selection-section"
+        tabindex="-1"
+      >
         <div class="section-title-row">
-          <h3>选择 MOD 版本</h3>
+          <h3>选择 MOD 分支</h3>
           <button
             type="button"
             class="secondary-button"
-            :disabled="isInstallingMod || !selectedCandidateRootPath"
+            :disabled="isInstallingMod || !selectedCandidateRootPaths.length"
             @click="installSelectedCandidate"
           >
-            {{ isInstallingMod ? "导入中" : "导入所选版本" }}
+            {{ isInstallingMod ? "导入中" : `导入所选 ${selectedCandidateRootPaths.length} 个分支` }}
           </button>
+        </div>
+        <div class="candidate-import-options">
+          <div class="candidate-mode-control" role="radiogroup" aria-label="分支导入方式">
+            <label>
+              <input v-model="candidateImportMode" type="radio" value="branchGroup" />
+              <span>作为分支组导入</span>
+            </label>
+            <label>
+              <input v-model="candidateImportMode" type="radio" value="standalone" />
+              <span>作为独立 MOD 导入</span>
+            </label>
+          </div>
+          <label v-if="candidateImportMode === 'branchGroup' && selectedCandidateRootPaths.length > 1" class="group-name-field">
+            <span>分支组名称</span>
+            <input v-model="candidateGroupName" maxlength="120" />
+          </label>
+          <div class="candidate-selection-actions">
+            <button
+              type="button"
+              class="text-button"
+              @click="selectedCandidateRootPaths = importPreview.candidates.map((candidate) => candidate.rootPath)"
+            >
+              全选
+            </button>
+            <button type="button" class="text-button" @click="selectedCandidateRootPaths = []">清空</button>
+          </div>
         </div>
         <ul class="candidate-list">
           <li v-for="candidate in importPreview.candidates" :key="candidate.rootPath">
-            <label>
+            <label class="candidate-choice">
               <input
-                v-model="selectedCandidateRootPath"
-                type="radio"
-                name="mod-import-candidate"
+                v-model="selectedCandidateRootPaths"
+                type="checkbox"
                 :value="candidate.rootPath"
               />
               <span>
                 <strong>{{ candidate.relativePath || candidate.rootPath }}</strong>
-                <small>{{ candidate.fileCount }} 个文件 / {{ deployRootLabel(candidate.deployRoot) }}</small>
+                <small>
+                  {{ candidate.fileCount }} 个文件 / {{ deployRootLabel(candidate.deployRoot) }}
+                  <template v-if="candidate.requiresGameRootConfirmation"> / 需确认游戏根目录</template>
+                </small>
               </span>
+            </label>
+            <label class="branch-name-field">
+              <span>分支名称</span>
+              <input v-model="candidateBranchNames[candidate.rootPath]" maxlength="120" />
             </label>
           </li>
         </ul>
@@ -2270,8 +2547,13 @@ onBeforeUnmount(() => {
             >
               冲突管理 ({{ conflictGroups.length }})
             </button>
-            <button type="button" class="secondary-button" @click="refreshModViews">
-              刷新
+            <button
+              type="button"
+              class="secondary-button"
+              :disabled="installedMods.length < 2 || isUpdatingBranchGroups"
+              @click="findBranchGroupSuggestions"
+            >
+              自动创建分支组
             </button>
           </div>
         </div>
@@ -2298,6 +2580,8 @@ onBeforeUnmount(() => {
         </p>
         <ModLibraryTable
           :mods="displayedInstalledMods"
+          :all-mods="installedMods"
+          :branch-groups="modBranchGroups"
           :installed-mod-count="installedMods.length"
           :categories="modCategories"
           :conflicting-mod-ids="conflictingModIds"
@@ -2310,6 +2594,7 @@ onBeforeUnmount(() => {
           :metadata-error="metadataError"
           :can-reorder="modSort === 'manual' && !reorderingModId"
           :reordering-mod-id="reorderingModId"
+          :updating-branch-groups="isUpdatingBranchGroups"
           @update-metadata="saveModMetadata"
           @create-category="openCategoryManager"
           @open-folder="showInstalledModFolder"
@@ -2318,6 +2603,9 @@ onBeforeUnmount(() => {
           @batch-enable="enableInstalledModsInBatch"
           @batch-disable="disableInstalledModsInBatch"
           @batch-uninstall="uninstallInstalledModsInBatch"
+          @create-branch-group="createBranchGroupFromMods"
+          @rename-branch-group="renameBranchGroup"
+          @ungroup-mods="ungroupInstalledMods"
           @manage-remap="openRemapManager"
           @reorder="reorderModLibraryItem"
           @uninstall="uninstallInstalledMod"
@@ -2355,7 +2643,7 @@ onBeforeUnmount(() => {
               :class="{ selected: selectedConflictGroupId === group.groupId }"
               @click="selectConflict(group.groupId)"
             >
-              <strong>{{ group.participants.map((participant) => participant.name).join(" / ") }}</strong>
+              <strong>{{ group.participants.map((participant) => installedModName(participant.modId)).join(" / ") }}</strong>
               <span>{{ group.participantCount }} 个 MOD / {{ group.conflictFileCount }} 个冲突文件</span>
             </button>
           </li>
@@ -2366,7 +2654,7 @@ onBeforeUnmount(() => {
         <template v-if="selectedConflictGroup">
           <div class="panel-heading">
             <div>
-              <h2>{{ selectedConflictGroup.participants.map((participant) => participant.name).join(" / ") }}</h2>
+              <h2>{{ selectedConflictGroup.participants.map((participant) => installedModName(participant.modId)).join(" / ") }}</h2>
               <p>从上到下为优先级；最上方且包含该文件的已启用 MOD 最后覆盖并生效。</p>
             </div>
             <button
@@ -2399,7 +2687,7 @@ onBeforeUnmount(() => {
             <li v-for="(participant, index) in selectedConflictGroup.participants" :key="participant.modId">
               <span class="conflict-order-number">{{ participant.order }}</span>
               <div>
-                <strong>{{ participant.name }}</strong>
+                <strong>{{ installedModName(participant.modId) }}</strong>
                 <span>{{ participant.enabled ? "已启用" : "未启用" }}</span>
               </div>
               <div class="section-actions">
@@ -2451,6 +2739,15 @@ onBeforeUnmount(() => {
     @create="createCategory"
     @rename="renameCategory"
     @delete="deleteCategory"
+  />
+
+  <BranchGroupSuggestionDialog
+    :is-open="isBranchSuggestionOpen"
+    :suggestions="branchGroupSuggestions"
+    :is-busy="isUpdatingBranchGroups"
+    :error="branchSuggestionError"
+    @close="closeBranchSuggestionDialog"
+    @confirm="createSuggestedBranchGroups"
   />
 
   <div v-if="remapDetails" class="dialog-backdrop" role="presentation">
@@ -2591,26 +2888,29 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-shell {
   display: grid;
+  height: 100vh;
   grid-template-columns: 188px minmax(0, 1fr);
-  min-height: 100vh;
+  overflow: hidden;
   background: #f4f7f6;
 }
 
 .app-workspace {
-  display: grid;
+  display: block;
+  height: 100vh;
   width: 100%;
   max-width: calc(100vw - 188px);
   min-width: 0;
-  min-height: 100vh;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: auto;
 }
 
 .workspace-content {
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  min-height: 0;
   padding: 20px 24px 44px;
-  overflow: auto;
+  overflow: visible;
 }
 
 .workspace-page {
@@ -2918,7 +3218,7 @@ dd {
   background: #fbfdfc;
 }
 
-.candidate-list label {
+.candidate-list .candidate-choice {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 10px;
@@ -2927,7 +3227,7 @@ dd {
   cursor: pointer;
 }
 
-.candidate-list input {
+.candidate-list .candidate-choice > input {
   width: 18px;
   min-height: 18px;
   margin: 0;
@@ -2935,7 +3235,7 @@ dd {
   accent-color: #24745b;
 }
 
-.candidate-list label > span {
+.candidate-list .candidate-choice > span {
   display: grid;
   gap: 2px;
   min-width: 0;
@@ -2948,6 +3248,58 @@ dd {
 
 .candidate-list small {
   color: #61756f;
+}
+
+.candidate-import-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px 18px;
+  margin-bottom: 12px;
+}
+
+.candidate-selection-section {
+  scroll-margin-top: 84px;
+  outline: none;
+}
+
+.candidate-selection-section:focus-visible {
+  box-shadow: 0 0 0 2px #8ebbaa;
+}
+
+.candidate-mode-control,
+.candidate-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.candidate-mode-control label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-name-field,
+.branch-name-field {
+  display: grid;
+  gap: 5px;
+  color: #536861;
+  font-size: 0.82rem;
+}
+
+.group-name-field {
+  min-width: min(320px, 100%);
+}
+
+.branch-name-field {
+  grid-template-columns: auto minmax(180px, 320px);
+  align-items: center;
+  padding: 0 12px 12px 42px;
+}
+
+.branch-name-field input {
+  min-width: 0;
 }
 
 .legacy-box-table-wrap {
@@ -3560,15 +3912,22 @@ button.danger:hover {
 
 @media (max-width: 760px) {
   .app-shell {
+    height: auto;
+    min-height: 100vh;
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .app-workspace {
+    height: auto;
     max-width: 100vw;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .workspace-content {
     padding: 16px 12px 40px;
+    overflow: visible;
   }
 
   .remap-fields {

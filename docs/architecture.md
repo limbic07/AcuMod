@@ -89,6 +89,24 @@ Rust 后端负责：
 - 根据 MHW 文件 ID 表识别模型替换目标。
 - 生成可预览的操作计划，让用户确认后再执行。
 
+## MOD 分支边界
+
+分支组是 MOD 库的组织层，不是新的部署层：
+
+```text
+branch-groups.json（组名、成员 MOD ID）
+  -> 多个 installed/<mod_id>/manifest.json
+  -> 各分支独立生成有效部署路径
+  -> 复用现有启停、冲突排序、禁用恢复和模型改绑
+```
+
+- `AcumodData/mods/branch-groups.json` 只保存组 ID、组名、成员 ID 和创建时间。
+- 每个分支仍是完整的普通 MOD，具有独立 `content/`、manifest、启用状态和部署记录；允许同时启用多个分支。
+- `workspace-snapshot.json` 缓存分支组 DTO，组关系变化时局部更新；刷新时按实际已安装 ID 清理失效成员，只剩一个成员的组自动拆散。
+- 冲突报告仍使用真实 MOD ID；Vue 展示时组合为“组名（分支名）”，不会把组伪装成可部署 MOD。
+- 自动分组建议只读取工作区快照中的部署路径、原始名称、导入来源、识别目标和冲突报告。两个单文件 MOD 部署到完全相同的路径时直接建立候选关系；多文件 MOD 必须同时达到“共同路径覆盖较小文件集至少 90%”和“共同路径占文件并集至少 75%”，其中双文件 MOD 还需满足名称相似并具有相同来源或共同目标。组装使用完整链接校验，任意新成员必须与组内每个成员都达标，组级真实交集也必须继续满足相同阈值；不使用冲突传递合并，超过 16 项的候选直接抑制。它不扫描磁盘、不自动写入，用户确认后仍逐组调用 `create_mod_branch_group`，由 Rust 校验成员并更新存储和快照。
+- 内嵌压缩包复用随包 7-Zip，最多递归两层和 32 个文件；压缩包直接进入导入暂存，含内嵌包的文件夹先完整复制到导入暂存，每个内嵌包再在隔离子目录解包。候选 DTO 同时保留原始来源路径和压缩包来源链，安装完成后清理暂存，不修改用户原目录。
+
 Rust command 应保持薄：
 
 - 解析参数。
@@ -138,7 +156,7 @@ Vue 操作
 - `OperationReporter` 对目录扫描、压缩包解包、本地库复制、游戏目录复制、删除和游戏实际状态比对发送阶段与真实完成数。扫描总数未知时只展示当前发现项；文件清单确定后展示 `已完成 / 总数`。状态同步必须把“读取清单”“准备有效文件”“逐文件比对”“分析覆盖关系”和“保存状态”分成独立阶段，不能在比对期间停留在清单完成画面。
 - 每个任务结束后把类型、结果和耗时追加到 `AcumodData/logs/operation-timings.log`。该日志用于定位性能问题，不保存凭据或文件内容。
 - 本项目不提供任务取消。复制、删除和 manifest 写入一旦开始必须顺序完成，以保持部署记录与实际游戏目录一致。
-- `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。快照 schema 2 在展示 DTO 之外保存每个 MOD 的有效部署路径和有效识别目标索引。普通导入、启停、卸载、批量操作、模型改绑和冲突应用只重读受影响的 manifest，再基于索引在内存中更新冲突报告；用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
+- `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。快照 schema 4 在展示 DTO 之外保存每个 MOD 的有效部署路径、有效识别目标索引和自动分组需要的原始导入来源。普通导入、启停、卸载、批量操作、模型改绑和冲突应用只重读受影响的 manifest，再基于索引在内存中更新冲突报告；用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
 - 工作区快照只是可丢弃、可重建的读取缓存，不保存独立部署状态。manifest、`conflict-orders.json` 和 `mod-library-order.json` 仍是事实来源。
 - 禁用 MOD 后恢复低优先级版本时，先按索引筛选包含同一有效路径的已启用候选，只加载这些 manifest；冲突预览和应用同样只加载当前冲突组及相关部署记录所有者。索引缺失时回退到全库兼容扫描，不牺牲旧数据可用性。
 
@@ -500,8 +518,9 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 3. Rust service 校验压缩包存在且扩展名受支持。
 4. Rust service 查找 Acumod 随包携带的 7-Zip 解包组件：`resources/unpackers/7zip/7z.exe` 和 `7z.dll`。
 5. Rust service 将压缩包解包到 `AcumodData/mods/staging/imports/<archive>-<stamp>/`。
-6. 解包后的目录继续走文件夹导入识别和本地安装逻辑。
-7. manifest 的 `source_path` 记录原始压缩包路径，`content_root_path` 记录解包后识别出的内容根。
+6. 解包后的目录继续走文件夹导入识别；若包含内嵌压缩包，则在隔离目录递归解包两层并合并候选。
+7. 用户可选择一个或多个候选，编辑分支名并决定作为分支组或独立 MOD 导入；每个候选分别生成普通 MOD manifest。
+8. manifest 的 `source_path` 记录原始压缩包路径，`content_root_path` 记录对应分支识别出的内容根。
 
 当前没有新增 Rust 解包依赖。Acumod 采用随安装包分发解包组件的方式，避免要求用户另行安装 7-Zip；代价是发布包会增加几 MB，并且需要随包保留 7-Zip 许可文件。
 

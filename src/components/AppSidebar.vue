@@ -151,15 +151,21 @@ defineEmits<{
 }
 
 .workspace-nav .conflict-link strong {
-  display: grid;
+  display: inline-flex;
+  width: 22px;
   min-width: 22px;
   height: 22px;
-  place-items: center;
+  padding: 1px 0 0;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #d4ded9;
   border-radius: 50%;
   color: #17613f;
   background: #ffffff;
   font-size: 0.76rem;
+  line-height: 1;
+  text-align: center;
 }
 
 .game-state {

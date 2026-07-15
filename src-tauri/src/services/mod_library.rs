@@ -35,9 +35,13 @@ use super::model_remap::{
 const PREVIEW_FILE_LIMIT: usize = 200;
 const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 16;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 16;
-const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
 const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 1;
+const MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION: u32 = 1;
+const MOD_BRANCH_GROUP_NAME_LIMIT: usize = 120;
+const NESTED_ARCHIVE_MAX_DEPTH: usize = 2;
+const NESTED_ARCHIVE_MAX_COUNT: usize = 32;
 const MOD_CATEGORY_NAME_LIMIT: usize = 40;
 const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
@@ -60,6 +64,7 @@ pub struct ModLibraryStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ModImportPreview {
     pub source_path: String,
+    pub original_source_path: String,
     pub status: String,
     pub detection_method: String,
     pub deploy_root: String,
@@ -84,10 +89,30 @@ pub struct ModImportFilePreview {
 #[serde(rename_all = "camelCase")]
 pub struct ModImportCandidate {
     pub root_path: String,
+    pub source_root_path: String,
     pub relative_path: String,
+    pub suggested_name: String,
+    pub archive_chain: Vec<String>,
+    pub requires_game_root_confirmation: bool,
     pub detection_method: String,
     pub deploy_root: String,
     pub file_count: usize,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModBranchImportSelection {
+    pub candidate_root_path: String,
+    pub branch_name: String,
+    pub allow_game_root: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModBranchImportResult {
+    pub group: Option<ModBranchGroup>,
+    pub install_results: Vec<ModInstallResult>,
+    pub message: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -124,6 +149,15 @@ pub struct ModArchiveImportOutcome {
     pub message: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModBranchGroup {
+    pub id: String,
+    pub name: String,
+    pub mod_ids: Vec<String>,
+    pub created_at_unix_seconds: u64,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledModSummary {
@@ -136,6 +170,7 @@ pub struct InstalledModSummary {
     pub mod_path: String,
     pub content_path: String,
     pub manifest_path: String,
+    pub source_path: String,
     pub file_count: usize,
     pub files: Vec<InstalledModFile>,
     pub enabled: bool,
@@ -215,6 +250,8 @@ pub struct ModWorkspaceSnapshot {
     pub installed_mods: InstalledModList,
     pub categories: ModCategoryList,
     pub conflict_report: ModConflictReport,
+    #[serde(default)]
+    pub branch_groups: Vec<ModBranchGroup>,
 }
 
 #[derive(Clone, Serialize)]
@@ -610,6 +647,15 @@ struct ModLibraryOrderStore {
     mod_ids: Vec<String>,
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModBranchGroupStore {
+    #[serde(default = "default_mod_branch_group_store_schema_version")]
+    schema_version: u32,
+    #[serde(default)]
+    groups: Vec<ModBranchGroup>,
+}
+
 struct ConflictPathGroup {
     deploy_relative_path: String,
     participant_ids: Vec<String>,
@@ -621,6 +667,10 @@ fn default_conflict_order_schema_version() -> u32 {
 
 fn default_mod_library_order_store_schema_version() -> u32 {
     MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION
+}
+
+fn default_mod_branch_group_store_schema_version() -> u32 {
+    MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION
 }
 
 fn default_mod_category_store_schema_version() -> u32 {
@@ -754,6 +804,65 @@ pub fn preview_mod_import_with_progress(
     preview_game_root_fallback(&source_path, allow_game_root, scan.warnings, progress)
 }
 
+/// 文件夹只有在包含内嵌压缩包时才进入隔离暂存；普通文件夹继续使用原有快速预览。
+pub fn preview_mod_import_source_with_nested(
+    app: &tauri::AppHandle,
+    raw_path: String,
+    allow_game_root: bool,
+    progress: &OperationReporter,
+) -> Result<ModImportPreview, String> {
+    let direct_preview =
+        preview_mod_import_with_progress(raw_path.clone(), allow_game_root, progress)?;
+    if direct_preview.status == "invalid" {
+        return Ok(direct_preview);
+    }
+
+    let source = canonical_directory(&normalize_user_path(&raw_path), "MOD source")?;
+    if collect_nested_archives(&source)?.is_empty() {
+        return Ok(direct_preview);
+    }
+
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let import_staging_root = paths.import_staging_path.canonicalize().map_err(|error| {
+        format!(
+            "无法确认导入暂存目录 {}：{error}",
+            paths.import_staging_path.display()
+        )
+    })?;
+    if source.starts_with(&import_staging_root) || import_staging_root.starts_with(&source) {
+        return Err("不能选择 Acumod 导入暂存目录或包含该目录的上级文件夹。".to_string());
+    }
+    initialize_import_staging(&paths)?;
+    clear_import_staging(&paths.import_staging_path)?;
+    let staging_path = paths
+        .import_staging_path
+        .join(unique_mod_id(&derive_mod_name(&source))?);
+    fs::create_dir_all(&staging_path).map_err(|error| {
+        format!(
+            "无法创建文件夹导入暂存目录 {}：{error}",
+            staging_path.display()
+        )
+    })?;
+
+    if let Err(error) = copy_import_source_directory(&source, &staging_path, progress) {
+        let _ = fs::remove_dir_all(&staging_path);
+        return Err(error);
+    }
+    let preview =
+        preview_archive_staging_with_nested(app, &staging_path, allow_game_root, progress);
+    match preview {
+        Ok(mut preview) => {
+            preview.original_source_path = path_to_string(&source);
+            Ok(preview)
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging_path);
+            Err(error)
+        }
+    }
+}
+
 pub fn install_mod_from_folder_with_progress(
     app: &tauri::AppHandle,
     raw_path: String,
@@ -792,17 +901,6 @@ pub fn install_mod_from_archive_with_progress(
     let archive_path = validate_archive_path(&archive_path)?;
     let archive_name = derive_mod_name(&archive_path);
 
-    if let Some(existing) = find_installed_mod_by_name(&paths.installed_path, &archive_name)? {
-        return Ok(ModArchiveImportOutcome {
-            status: "alreadyInstalled".to_string(),
-            source_path: String::new(),
-            original_archive_path: path_to_string(&archive_path),
-            preview: None,
-            install_result: Some(existing),
-            message: "A MOD with the same name is already installed.".to_string(),
-        });
-    }
-
     let staging_path = paths
         .import_staging_path
         .join(unique_mod_id(&archive_name)?);
@@ -821,7 +919,7 @@ pub fn install_mod_from_archive_with_progress(
         return Err(error);
     }
     let preview =
-        preview_mod_import_with_progress(path_to_string(&staging_path), allow_game_root, progress)?;
+        preview_archive_staging_with_nested(app, &staging_path, allow_game_root, progress)?;
 
     if preview.status == "ambiguous" {
         return Ok(ModArchiveImportOutcome {
@@ -877,6 +975,326 @@ pub fn install_mod_from_archive_with_progress(
     }
 }
 
+fn preview_archive_staging_with_nested(
+    app: &tauri::AppHandle,
+    staging_path: &Path,
+    allow_game_root: bool,
+    progress: &OperationReporter,
+) -> Result<ModImportPreview, String> {
+    let outer_preview =
+        preview_mod_import_with_progress(path_to_string(staging_path), allow_game_root, progress)?;
+    let mut candidates = candidates_from_preview(&outer_preview, Vec::new());
+    let mut warnings = outer_preview.warnings.clone();
+    let mut queue = collect_nested_archives(staging_path)?
+        .into_iter()
+        .map(|archive_path| (archive_path, 1_usize, Vec::<String>::new()))
+        .collect::<Vec<_>>();
+    let has_nested_archives = !queue.is_empty();
+    if has_nested_archives
+        && outer_preview.status == "needsGameRootConfirmation"
+        && !contains_non_archive_file(staging_path)?
+    {
+        // 只有内嵌压缩包时，外层目录中的压缩包文件不是可部署的游戏根目录内容。
+        candidates.clear();
+    }
+    let nested_staging_root = staging_path.join(".acumod-nested");
+    let mut processed_count = 0_usize;
+
+    while !queue.is_empty() && processed_count < NESTED_ARCHIVE_MAX_COUNT {
+        let (archive_path, depth, parent_chain) = queue.remove(0);
+        processed_count += 1;
+        let archive_label = archive_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path_to_string(&archive_path));
+        let mut archive_chain = parent_chain;
+        archive_chain.push(archive_label.clone());
+        let destination = nested_staging_root.join(format!(
+            "{:02}-{}",
+            processed_count,
+            unique_mod_id(&derive_mod_name(&archive_path))?
+        ));
+        fs::create_dir_all(&destination).map_err(|error| {
+            format!(
+                "无法创建内嵌压缩包暂存目录 {}：{error}",
+                destination.display()
+            )
+        })?;
+
+        progress.report(
+            "正在识别内嵌压缩包",
+            processed_count,
+            Some(NESTED_ARCHIVE_MAX_COUNT),
+            Some(archive_chain.join(" > ")),
+        );
+        if let Err(error) =
+            extract_archive_with_bundled_7zip(app, &archive_path, &destination, progress)
+        {
+            warnings.push(format!(
+                "无法解开内嵌压缩包 {}，已跳过这个分支：{}",
+                archive_chain.join(" > "),
+                concise_archive_error(&error)
+            ));
+            let _ = fs::remove_dir_all(&destination);
+            continue;
+        }
+
+        let preview =
+            preview_mod_import_with_progress(path_to_string(&destination), false, progress)?;
+        warnings.extend(preview.warnings.clone());
+        candidates.extend(candidates_from_preview(&preview, archive_chain.clone()));
+
+        if depth < NESTED_ARCHIVE_MAX_DEPTH {
+            queue.extend(
+                collect_nested_archives(&destination)?
+                    .into_iter()
+                    .map(|nested| (nested, depth + 1, archive_chain.clone())),
+            );
+        } else if !collect_nested_archives(&destination)?.is_empty() {
+            warnings.push(format!(
+                "{} 内仍包含更深层压缩包，已按两层递归上限停止。",
+                archive_chain.join(" > ")
+            ));
+        }
+    }
+
+    if !queue.is_empty() {
+        warnings.push(format!(
+            "内嵌压缩包超过 {NESTED_ARCHIVE_MAX_COUNT} 个，仅识别了前 {NESTED_ARCHIVE_MAX_COUNT} 个。"
+        ));
+    }
+    if !has_nested_archives && outer_preview.status != "needsGameRootConfirmation" {
+        return Ok(outer_preview);
+    }
+
+    candidates.sort_by(|left, right| {
+        left.archive_chain
+            .cmp(&right.archive_chain)
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    candidates.dedup_by(|left, right| left.root_path.eq_ignore_ascii_case(&right.root_path));
+    if candidates.is_empty() {
+        let mut preview = outer_preview;
+        preview.warnings = warnings;
+        return Ok(preview);
+    }
+
+    Ok(ModImportPreview {
+        source_path: path_to_string(staging_path),
+        original_source_path: path_to_string(staging_path),
+        status: "ambiguous".to_string(),
+        detection_method: "multipleCandidates".to_string(),
+        deploy_root: "unknown".to_string(),
+        content_root_path: None,
+        requires_game_root_confirmation: false,
+        message: format!(
+            "识别到 {} 个可导入分支，请选择一个或多个。",
+            candidates.len()
+        ),
+        file_count: 0,
+        files: Vec::new(),
+        candidates,
+        warnings,
+    })
+}
+
+fn candidates_from_preview(
+    preview: &ModImportPreview,
+    archive_chain: Vec<String>,
+) -> Vec<ModImportCandidate> {
+    if preview.status == "ambiguous" {
+        return preview
+            .candidates
+            .iter()
+            .cloned()
+            .map(|mut candidate| {
+                candidate.source_root_path = preview.source_path.clone();
+                candidate.archive_chain = archive_chain.clone();
+                candidate.suggested_name = suggested_candidate_name(
+                    Path::new(&preview.source_path),
+                    Path::new(&candidate.root_path),
+                );
+                candidate.relative_path =
+                    candidate_display_path(&candidate.archive_chain, &candidate.relative_path);
+                candidate
+            })
+            .collect();
+    }
+    if preview.status != "ready" && preview.status != "needsGameRootConfirmation" {
+        return Vec::new();
+    }
+    let Some(root_path) = preview.content_root_path.clone() else {
+        return Vec::new();
+    };
+    let root = PathBuf::from(&root_path);
+    let relative_path = root
+        .strip_prefix(Path::new(&preview.source_path))
+        .map(path_to_string)
+        .unwrap_or_default();
+    let fallback_name = archive_chain
+        .last()
+        .map(|name| derive_mod_name(Path::new(name)))
+        .unwrap_or_else(|| derive_mod_name(Path::new(&preview.source_path)));
+    vec![ModImportCandidate {
+        root_path,
+        source_root_path: preview.source_path.clone(),
+        relative_path: candidate_display_path(&archive_chain, &relative_path),
+        suggested_name: if !archive_chain.is_empty() || relative_path.is_empty() {
+            fallback_name
+        } else {
+            derive_mod_name(&root)
+        },
+        archive_chain,
+        requires_game_root_confirmation: preview.requires_game_root_confirmation,
+        detection_method: preview.detection_method.clone(),
+        deploy_root: preview.deploy_root.clone(),
+        file_count: preview.file_count,
+    }]
+}
+
+fn candidate_display_path(archive_chain: &[String], relative_path: &str) -> String {
+    let mut parts = archive_chain.to_vec();
+    if !relative_path.is_empty() {
+        parts.push(relative_path.to_string());
+    }
+    parts.join(" > ")
+}
+
+fn suggested_candidate_name(source_root: &Path, candidate_root: &Path) -> String {
+    if file_name_equals(candidate_root, "nativepc") {
+        if let Some(parent) = candidate_root.parent() {
+            if parent != source_root {
+                return derive_mod_name(parent);
+            }
+        }
+    }
+    derive_mod_name(candidate_root)
+}
+
+fn collect_nested_archives(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut archives = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(&directory)
+            .map_err(|error| format!("无法扫描内嵌压缩包目录 {}：{error}", directory.display()))?
+        {
+            let entry = entry.map_err(|error| {
+                format!("无法读取内嵌压缩包目录项 {}：{error}", directory.display())
+            })?;
+            let path = entry.path();
+            if path.is_dir() {
+                if !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == ".acumod-nested")
+                {
+                    stack.push(path);
+                }
+            } else if is_supported_archive_path(&path) {
+                archives.push(path);
+            }
+        }
+    }
+    archives.sort_by_key(|path| path_to_string(path).to_lowercase());
+    Ok(archives)
+}
+
+fn copy_import_source_directory(
+    source_root: &Path,
+    destination_root: &Path,
+    progress: &OperationReporter,
+) -> Result<(), String> {
+    let mut source_files = Vec::new();
+    let mut stack = vec![source_root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(&directory)
+            .map_err(|error| format!("无法读取导入目录 {}：{error}", directory.display()))?
+        {
+            let entry = entry
+                .map_err(|error| format!("无法读取导入目录项 {}：{error}", directory.display()))?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| format!("无法读取导入文件信息 {}：{error}", path.display()))?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                stack.push(path);
+            } else if metadata.is_file() {
+                source_files.push(path);
+            }
+        }
+    }
+    source_files.sort_by_key(|path| path_to_string(path).to_lowercase());
+    let total = source_files.len();
+    progress.report("正在复制文件夹到导入暂存", 0, Some(total), None);
+    for (index, source_path) in source_files.into_iter().enumerate() {
+        let relative_path = source_path.strip_prefix(source_root).map_err(|error| {
+            format!(
+                "无法计算导入文件 {} 的相对路径：{error}",
+                source_path.display()
+            )
+        })?;
+        let destination_path = destination_root.join(relative_path);
+        if let Some(parent) = destination_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("无法创建导入暂存子目录 {}：{error}", parent.display()))?;
+        }
+        fs::copy(&source_path, &destination_path).map_err(|error| {
+            format!(
+                "无法复制 {} 到导入暂存 {}：{error}",
+                source_path.display(),
+                destination_path.display()
+            )
+        })?;
+        progress.report(
+            "正在复制文件夹到导入暂存",
+            index + 1,
+            Some(total),
+            source_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+        );
+    }
+    Ok(())
+}
+
+fn contains_non_archive_file(root: &Path) -> Result<bool, String> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(&directory)
+            .map_err(|error| format!("无法扫描压缩包外层目录 {}：{error}", directory.display()))?
+        {
+            let path = entry
+                .map_err(|error| format!("无法读取压缩包外层目录项：{error}"))?
+                .path();
+            if path.is_dir() {
+                if !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == ".acumod-nested")
+                {
+                    stack.push(path);
+                }
+            } else if path.is_file() && !is_supported_archive_path(&path) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn is_supported_archive_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .is_some_and(|extension| matches!(extension.as_str(), "zip" | "7z" | "rar"))
+}
+
+fn concise_archive_error(error: &str) -> String {
+    error.lines().next().unwrap_or(error).trim().to_string()
+}
+
 pub fn install_mod_from_candidate_with_progress(
     app: &tauri::AppHandle,
     source_path: String,
@@ -926,6 +1344,157 @@ pub fn install_mod_from_candidate_with_progress(
         }
         Err(error) => Err(error),
     }
+}
+
+/// 一次安装一个或多个候选分支；每个分支仍生成独立 manifest，并可独立启停。
+pub fn install_mod_branches_with_progress(
+    app: &tauri::AppHandle,
+    source_path: String,
+    selections: Vec<ModBranchImportSelection>,
+    original_source_path: Option<String>,
+    group_name: Option<String>,
+    as_branch_group: bool,
+    progress: &OperationReporter,
+) -> Result<ModBranchImportResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    if selections.is_empty() {
+        return Err("请至少选择一个要导入的 MOD 分支。".to_string());
+    }
+
+    let source = canonical_directory(&normalize_user_path(&source_path), "candidate source")?;
+    let staging_root = paths.import_staging_path.canonicalize().map_err(|error| {
+        format!(
+            "无法确认导入暂存目录 {}：{error}",
+            paths.import_staging_path.display()
+        )
+    })?;
+    let should_cleanup_staging =
+        original_source_path.is_some() && source.starts_with(&staging_root);
+
+    let original_source = original_source_path
+        .as_deref()
+        .map(normalize_user_path)
+        .unwrap_or_else(|| source.clone());
+    let mut contexts = load_all_installed_manifests(&paths.installed_path)?;
+    let mut results = Vec::new();
+    let mut newly_installed_ids = Vec::new();
+
+    let import_result = (|| -> Result<(), String> {
+        for (index, selection) in selections.into_iter().enumerate() {
+            let branch_name = validate_mod_branch_group_name(&selection.branch_name)?;
+            let candidate = canonical_directory(
+                &normalize_user_path(&selection.candidate_root_path),
+                "candidate content root",
+            )?;
+            if !candidate.starts_with(&source) {
+                return Err("所选分支不属于当前导入来源目录。".to_string());
+            }
+            let mut preview =
+                preview_mod_import_with_progress(path_to_string(&candidate), false, progress)?;
+            if preview.requires_game_root_confirmation && selection.allow_game_root {
+                preview =
+                    preview_mod_import_with_progress(path_to_string(&candidate), true, progress)?;
+            }
+            if preview.status != "ready" {
+                return Err(format!(
+                    "分支“{branch_name}”当前无法导入：{}",
+                    preview.message
+                ));
+            }
+            progress.report("正在导入 MOD 分支", index, None, Some(branch_name.clone()));
+
+            let result = match find_installed_mod_by_content_with_options(
+                &contexts,
+                &candidate,
+                selection.allow_game_root,
+                progress,
+            )? {
+                Some(existing) => existing,
+                None => {
+                    let installed =
+                        install_mod_from_folder_into_with_options_and_progress_allow_same_name(
+                            path_to_string(&candidate),
+                            selection.allow_game_root,
+                            &paths.installed_path,
+                            Some(branch_name),
+                            Some(path_to_string(&original_source)),
+                            progress,
+                        )?;
+                    newly_installed_ids.push(installed.mod_id.clone());
+                    contexts.push(load_installed_manifest(
+                        &paths.installed_path,
+                        &installed.mod_id,
+                    )?);
+                    installed
+                }
+            };
+            results.push(result);
+        }
+        Ok(())
+    })();
+    if let Err(error) = import_result {
+        for mod_id in newly_installed_ids {
+            let _ = fs::remove_dir_all(paths.installed_path.join(mod_id));
+        }
+        invalidate_workspace_snapshot(&paths.installed_path);
+        return Err(error);
+    }
+
+    let result = (|| {
+        let mut unique_mod_ids = Vec::new();
+        let mut seen = HashSet::new();
+        for install_result in &results {
+            if seen.insert(install_result.mod_id.clone()) {
+                unique_mod_ids.push(install_result.mod_id.clone());
+            }
+        }
+        let group = if as_branch_group && unique_mod_ids.len() >= 2 {
+            let fallback_group_name = derive_mod_name(&original_source);
+            let name = validate_mod_branch_group_name(
+                group_name.as_deref().unwrap_or(&fallback_group_name),
+            )?;
+            let (group, groups) =
+                create_mod_branch_group_from(&paths.installed_path, name, unique_mod_ids)?;
+            update_workspace_branch_groups_snapshot(&paths, &groups)?;
+            Some(group)
+        } else {
+            None
+        };
+        for install_result in &results {
+            update_workspace_snapshot_after_import(&paths, &install_result.mod_id)?;
+        }
+        if group.is_some() {
+            let store = read_mod_branch_group_store(&paths.installed_path)?;
+            update_workspace_branch_groups_snapshot(&paths, &store.groups)?;
+        }
+        Ok(ModBranchImportResult {
+            group,
+            message: format!("已处理 {} 个 MOD 分支。", results.len()),
+            install_results: results,
+        })
+    })();
+
+    if result.is_err() {
+        // 分支批量导入失败时只回滚本次新建且尚未部署的本地副本，不碰既有 MOD。
+        for mod_id in newly_installed_ids {
+            let _ = fs::remove_dir_all(paths.installed_path.join(mod_id));
+        }
+        invalidate_workspace_snapshot(&paths.installed_path);
+        return result;
+    }
+
+    let mut result = result?;
+    if should_cleanup_staging {
+        if let Err(error) = fs::remove_dir_all(&source) {
+            if error.kind() != ErrorKind::NotFound {
+                result
+                    .message
+                    .push_str(&format!(" 导入已完成，但暂存目录清理失败：{error}"));
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// 将狩技 MOD 盒子中的所选模块复制到 Acumod 本地库，并自动检测游戏目录实际状态。
@@ -1611,6 +2180,11 @@ fn build_workspace_snapshot_from_contexts(
     let conflict_store = read_conflict_order_store(installed_root)?;
     let conflict_report = build_mod_conflict_report(contexts, &conflict_store)?;
     let categories = sorted_mod_categories(&category_store.categories);
+    let installed_ids = contexts
+        .iter()
+        .map(|context| context.manifest.id.clone())
+        .collect::<HashSet<_>>();
+    let branch_groups = load_normalized_mod_branch_groups(installed_root, &installed_ids)?;
 
     Ok(ModWorkspaceSnapshot {
         installed_mods,
@@ -1619,6 +2193,7 @@ fn build_workspace_snapshot_from_contexts(
             categories,
         },
         conflict_report,
+        branch_groups,
     })
 }
 
@@ -1854,6 +2429,15 @@ fn update_workspace_snapshot_after_mod_changes_inner(
         message: format!("共有 {} 个分类。", categories.len()),
         categories,
     };
+    let installed_ids = stored
+        .snapshot
+        .installed_mods
+        .mods
+        .iter()
+        .map(|mod_summary| mod_summary.id.clone())
+        .collect::<HashSet<_>>();
+    stored.snapshot.branch_groups =
+        load_normalized_mod_branch_groups(&paths.installed_path, &installed_ids)?;
     let conflict_store = read_conflict_order_store(&paths.installed_path)?;
     stored.snapshot.conflict_report =
         build_mod_conflict_report_from_workspace_index(&stored.mod_index, &conflict_store);
@@ -1962,6 +2546,142 @@ pub fn move_mod_library_item(
     ensure_library_directories(&paths)?;
     move_mod_library_item_from(&paths.installed_path, &mod_id, &target_mod_id, place_after)?;
     update_workspace_snapshot_after_mod_changes(&paths, &[], &[])
+}
+
+/// 将一个普通 MOD 或整个分支组作为连续块移动，避免组内成员在持久化顺序中被拆散。
+pub fn move_mod_library_items(
+    app: &tauri::AppHandle,
+    mod_ids: Vec<String>,
+    target_mod_ids: Vec<String>,
+    place_after: bool,
+) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    move_mod_library_items_from(
+        &paths.installed_path,
+        &mod_ids,
+        &target_mod_ids,
+        place_after,
+    )?;
+    update_workspace_snapshot_after_mod_changes(&paths, &[], &[])
+}
+
+/// 将至少两个现有 MOD 组织为一个分支组；MOD 本身仍保持独立部署和冲突记录。
+pub fn create_mod_branch_group(
+    app: &tauri::AppHandle,
+    name: String,
+    mod_ids: Vec<String>,
+) -> Result<ModBranchGroup, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let name = validate_mod_branch_group_name(&name)?;
+    let mod_ids = validate_branch_group_members(&paths.installed_path, mod_ids)?;
+
+    let (group, groups) = create_mod_branch_group_from(&paths.installed_path, name, mod_ids)?;
+    update_workspace_branch_groups_snapshot(&paths, &groups)?;
+    Ok(group)
+}
+
+/// 修改分支组显示名称，不改动任何分支 manifest 或本地 MOD 文件。
+pub fn rename_mod_branch_group(
+    app: &tauri::AppHandle,
+    group_id: String,
+    name: String,
+) -> Result<ModBranchGroup, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let name = validate_mod_branch_group_name(&name)?;
+    let mut store = read_mod_branch_group_store(&paths.installed_path)?;
+    let group = store
+        .groups
+        .iter_mut()
+        .find(|group| group.id == group_id)
+        .ok_or_else(|| "未找到要重命名的 MOD 分支组。".to_string())?;
+    group.name = name;
+    let updated = group.clone();
+    save_mod_branch_group_store(&paths.installed_path, &store)?;
+    update_workspace_branch_groups_snapshot(&paths, &store.groups)?;
+    Ok(updated)
+}
+
+/// 将所选 MOD 移出分支组；只剩一个成员时自动拆散该组。
+pub fn remove_mods_from_branch_group(
+    app: &tauri::AppHandle,
+    mod_ids: Vec<String>,
+) -> Result<Vec<ModBranchGroup>, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let selected = mod_ids
+        .into_iter()
+        .map(|mod_id| {
+            validate_mod_id(&mod_id)?;
+            Ok(mod_id)
+        })
+        .collect::<Result<HashSet<_>, String>>()?;
+    if selected.is_empty() {
+        return Err("请至少选择一个要移出分支组的 MOD。".to_string());
+    }
+
+    let mut store = read_mod_branch_group_store(&paths.installed_path)?;
+    for group in &mut store.groups {
+        group.mod_ids.retain(|mod_id| !selected.contains(mod_id));
+    }
+    store.groups.retain(|group| group.mod_ids.len() >= 2);
+    save_mod_branch_group_store(&paths.installed_path, &store)?;
+    update_workspace_branch_groups_snapshot(&paths, &store.groups)?;
+    Ok(store.groups)
+}
+
+fn validate_branch_group_members(
+    installed_root: &Path,
+    mod_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut unique_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for mod_id in mod_ids {
+        validate_mod_id(&mod_id)?;
+        if seen.insert(mod_id.clone()) {
+            load_installed_manifest(installed_root, &mod_id)?;
+            unique_ids.push(mod_id);
+        }
+    }
+    if unique_ids.len() < 2 {
+        return Err("一个分支组至少需要两个 MOD。".to_string());
+    }
+    Ok(unique_ids)
+}
+
+fn create_mod_branch_group_from(
+    installed_root: &Path,
+    name: String,
+    mod_ids: Vec<String>,
+) -> Result<(ModBranchGroup, Vec<ModBranchGroup>), String> {
+    let mut store = read_mod_branch_group_store(installed_root)?;
+    let selected = mod_ids.iter().cloned().collect::<HashSet<_>>();
+    for group in &mut store.groups {
+        group.mod_ids.retain(|mod_id| !selected.contains(mod_id));
+    }
+    store.groups.retain(|group| group.mod_ids.len() >= 2);
+    let group = ModBranchGroup {
+        id: unique_mod_id(&format!("branch-{name}"))?,
+        name,
+        mod_ids,
+        created_at_unix_seconds: unix_seconds_now()?,
+    };
+    store.groups.push(group.clone());
+    save_mod_branch_group_store(installed_root, &store)?;
+    Ok((group, store.groups))
+}
+
+fn update_workspace_branch_groups_snapshot(
+    paths: &LibraryPaths,
+    groups: &[ModBranchGroup],
+) -> Result<(), String> {
+    let Some(mut stored) = read_stored_workspace_snapshot(&paths.workspace_snapshot_path)? else {
+        return Ok(());
+    };
+    stored.snapshot.branch_groups = groups.to_vec();
+    save_stored_workspace_snapshot(&paths.workspace_snapshot_path, &stored)
 }
 
 pub fn update_mod_metadata(
@@ -2760,18 +3480,25 @@ fn find_installed_mod_by_content(
     source_path: &Path,
     progress: &OperationReporter,
 ) -> Result<Option<ModInstallResult>, String> {
-    let preview = preview_mod_import_with_progress(path_to_string(source_path), false, progress)?;
+    find_installed_mod_by_content_with_options(contexts, source_path, false, progress)
+}
+
+fn find_installed_mod_by_content_with_options(
+    contexts: &[InstalledManifestContext],
+    source_path: &Path,
+    allow_game_root: bool,
+    progress: &OperationReporter,
+) -> Result<Option<ModInstallResult>, String> {
+    let preview =
+        preview_mod_import_with_progress(path_to_string(source_path), allow_game_root, progress)?;
     if preview.status != "ready" {
-        return Err(format!(
-            "狩技 MOD 盒子的文件结构无法导入：{}",
-            preview.message
-        ));
+        return Err(format!("导入来源的文件结构无法导入：{}", preview.message));
     }
     let content_root = preview
         .content_root_path
         .as_deref()
         .map(PathBuf::from)
-        .ok_or_else(|| "无法确定狩技 MOD 盒子的内容根目录。".to_string())?;
+        .ok_or_else(|| "无法确定导入来源的内容根目录。".to_string())?;
     let deploy_root = deploy_root_from_preview(&preview, &content_root)?;
     let source_files = build_file_previews(&content_root, &deploy_root, progress)?;
     let source_files_by_path = file_previews_by_deploy_path(&source_files)?;
@@ -2935,6 +3662,7 @@ fn preview_from_candidates(
 
         return Ok(Some(ModImportPreview {
             source_path: path_to_string(source_path),
+            original_source_path: path_to_string(source_path),
             status: "ambiguous".to_string(),
             detection_method: "multipleCandidates".to_string(),
             deploy_root: "unknown".to_string(),
@@ -2963,6 +3691,7 @@ fn preview_from_candidates(
 
     Ok(Some(ModImportPreview {
         source_path: path_to_string(source_path),
+        original_source_path: path_to_string(source_path),
         status: "ready".to_string(),
         detection_method: candidate.detection_method.to_string(),
         deploy_root: deploy_root_label(&candidate.deploy_root).to_string(),
@@ -2988,6 +3717,7 @@ fn preview_game_root_fallback(
     if file_count == 0 {
         return Ok(ModImportPreview {
             source_path: path_to_string(source_path),
+            original_source_path: path_to_string(source_path),
             status: "invalid".to_string(),
             detection_method: "emptyDirectory".to_string(),
             deploy_root: "unknown".to_string(),
@@ -3010,6 +3740,7 @@ fn preview_game_root_fallback(
     if allow_game_root {
         Ok(ModImportPreview {
             source_path: path_to_string(source_path),
+            original_source_path: path_to_string(source_path),
             status: "ready".to_string(),
             detection_method: "userConfirmedGameRoot".to_string(),
             deploy_root: deploy_root_label(&DeployRoot::GameRoot).to_string(),
@@ -3025,6 +3756,7 @@ fn preview_game_root_fallback(
     } else {
         Ok(ModImportPreview {
             source_path: path_to_string(source_path),
+            original_source_path: path_to_string(source_path),
             status: "needsGameRootConfirmation".to_string(),
             detection_method: "unrecognizedRoot".to_string(),
             deploy_root: deploy_root_label(&DeployRoot::GameRoot).to_string(),
@@ -3042,6 +3774,7 @@ fn preview_game_root_fallback(
 fn invalid_preview(source_path: PathBuf, message: &str) -> ModImportPreview {
     ModImportPreview {
         source_path: path_to_string(&source_path),
+        original_source_path: path_to_string(&source_path),
         status: "invalid".to_string(),
         detection_method: "invalidSource".to_string(),
         deploy_root: "unknown".to_string(),
@@ -3127,6 +3860,13 @@ fn scan_directories(root: &Path, progress: &OperationReporter) -> Result<ScanRes
             }
 
             if metadata.is_dir() {
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == ".acumod-nested")
+                {
+                    continue;
+                }
                 directories.push(path.clone());
                 stack.push(path);
             }
@@ -3151,11 +3891,15 @@ fn build_candidate_dtos(
     for candidate in candidates {
         dtos.push(ModImportCandidate {
             root_path: path_to_string(&candidate.root_path),
+            source_root_path: path_to_string(source_path),
             relative_path: candidate
                 .root_path
                 .strip_prefix(source_path)
                 .map(path_to_string)
                 .unwrap_or_else(|_| path_to_string(&candidate.root_path)),
+            suggested_name: suggested_candidate_name(source_path, &candidate.root_path),
+            archive_chain: Vec::new(),
+            requires_game_root_confirmation: false,
             detection_method: candidate.detection_method.to_string(),
             deploy_root: deploy_root_label(&candidate.deploy_root).to_string(),
             file_count: build_file_previews(
@@ -3210,6 +3954,13 @@ fn collect_file_previews(
         }
 
         if metadata.is_dir() {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == ".acumod-nested")
+            {
+                continue;
+            }
             collect_file_previews(root, &path, deploy_root, files, progress)?;
             continue;
         }
@@ -3391,6 +4142,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             mod_path: path_to_string(&mod_path),
             content_path: path_to_string(&mod_path.join("content")),
             manifest_path: path_to_string(&manifest_path),
+            source_path: manifest.source_path,
             file_count: manifest.file_count,
             files: manifest.files,
             enabled: manifest.enabled,
@@ -3476,6 +4228,7 @@ fn installed_mod_list_from_contexts(
             mod_path: path_to_string(&context.mod_path),
             content_path: path_to_string(&context.content_path),
             manifest_path: path_to_string(&context.manifest_path),
+            source_path: manifest.source_path.clone(),
             file_count: manifest.file_count,
             files: manifest.files.clone(),
             enabled: manifest.enabled,
@@ -6363,6 +7116,75 @@ fn sort_participants_by_conflict_order(
     }
 }
 
+fn mod_branch_group_store_path(installed_root: &Path) -> PathBuf {
+    let is_standard_installed_root = installed_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("installed"));
+    if is_standard_installed_root {
+        return installed_root
+            .parent()
+            .map(|mods_path| mods_path.join("branch-groups.json"))
+            .unwrap_or_else(|| installed_root.join(".branch-groups.json"));
+    }
+    installed_root.join(".branch-groups.json")
+}
+
+fn read_mod_branch_group_store(installed_root: &Path) -> Result<ModBranchGroupStore, String> {
+    let path = mod_branch_group_store_path(installed_root);
+    if !path.is_file() {
+        return Ok(ModBranchGroupStore {
+            schema_version: MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION,
+            groups: Vec::new(),
+        });
+    }
+    let json = fs::read_to_string(&path)
+        .map_err(|error| format!("无法读取 MOD 分支组文件 {}：{error}", path.display()))?;
+    serde_json::from_str(&json)
+        .map_err(|error| format!("无法解析 MOD 分支组文件 {}：{error}", path.display()))
+}
+
+fn save_mod_branch_group_store(
+    installed_root: &Path,
+    store: &ModBranchGroupStore,
+) -> Result<(), String> {
+    let path = mod_branch_group_store_path(installed_root);
+    let mut store = store.clone();
+    store.schema_version = MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION;
+    let json = serde_json::to_string_pretty(&store)
+        .map_err(|error| format!("无法序列化 MOD 分支组：{error}"))?;
+    write_text_atomically(&path, &json, "MOD 分支组文件")
+}
+
+fn normalize_mod_branch_group_store(
+    store: &mut ModBranchGroupStore,
+    installed_ids: &HashSet<String>,
+) -> bool {
+    let previous = store.groups.clone();
+    let schema_changed = store.schema_version != MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION;
+    let mut assigned_ids = HashSet::new();
+    for group in &mut store.groups {
+        group
+            .mod_ids
+            .retain(|mod_id| installed_ids.contains(mod_id) && assigned_ids.insert(mod_id.clone()));
+    }
+    // 单个 MOD 不构成分支组；卸载或移出分支后自动拆散残余单例。
+    store.groups.retain(|group| group.mod_ids.len() >= 2);
+    store.schema_version = MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION;
+    schema_changed || store.groups != previous
+}
+
+fn load_normalized_mod_branch_groups(
+    installed_root: &Path,
+    installed_ids: &HashSet<String>,
+) -> Result<Vec<ModBranchGroup>, String> {
+    let mut store = read_mod_branch_group_store(installed_root)?;
+    if normalize_mod_branch_group_store(&mut store, installed_ids) {
+        save_mod_branch_group_store(installed_root, &store)?;
+    }
+    Ok(store.groups)
+}
+
 fn mod_library_order_store_path(installed_root: &Path) -> PathBuf {
     let is_standard_installed_root = installed_root
         .file_name()
@@ -6491,19 +7313,42 @@ fn move_mod_library_item_from(
     target_mod_id: &str,
     place_after: bool,
 ) -> Result<(), String> {
-    validate_mod_id(mod_id)?;
-    validate_mod_id(target_mod_id)?;
-    if mod_id == target_mod_id {
+    move_mod_library_items_from(
+        installed_root,
+        &[mod_id.to_string()],
+        &[target_mod_id.to_string()],
+        place_after,
+    )
+}
+
+fn move_mod_library_items_from(
+    installed_root: &Path,
+    mod_ids: &[String],
+    target_mod_ids: &[String],
+    place_after: bool,
+) -> Result<(), String> {
+    if mod_ids.is_empty() || target_mod_ids.is_empty() {
+        return Err("排序来源和目标不能为空。".to_string());
+    }
+    let source_ids = mod_ids.iter().cloned().collect::<HashSet<_>>();
+    let target_ids = target_mod_ids.iter().cloned().collect::<HashSet<_>>();
+    if source_ids.len() != mod_ids.len() || target_ids.len() != target_mod_ids.len() {
+        return Err("排序来源或目标包含重复 MOD。".to_string());
+    }
+    if source_ids.iter().any(|mod_id| target_ids.contains(mod_id)) {
         return Ok(());
+    }
+    for mod_id in source_ids.iter().chain(target_ids.iter()) {
+        validate_mod_id(mod_id)?;
+        load_installed_manifest(installed_root, mod_id)?;
     }
 
     let mut store = read_mod_library_order_store(installed_root)?;
-    let has_source_and_target = store.mod_ids.iter().any(|current_id| current_id == mod_id)
-        && store
-            .mod_ids
-            .iter()
-            .any(|current_id| current_id == target_mod_id);
-    let mut order = if has_source_and_target {
+    let has_all_items = source_ids
+        .iter()
+        .chain(target_ids.iter())
+        .all(|mod_id| store.mod_ids.iter().any(|stored_id| stored_id == mod_id));
+    let mut order = if has_all_items {
         // The list view persists a complete order. Reuse it so one drag does not
         // rescan every installed MOD and its model-recognition data.
         store.mod_ids.clone()
@@ -6511,29 +7356,29 @@ fn move_mod_library_item_from(
         let installed_mods = list_installed_mods_from(installed_root)?.mods;
         normalized_mod_library_order(&store, &installed_mods)
     };
-    load_installed_manifest(installed_root, mod_id)?;
-    load_installed_manifest(installed_root, target_mod_id)?;
-    let source_index = order
+    let moved_mod_ids = order
         .iter()
-        .position(|current_id| current_id == mod_id)
-        .ok_or_else(|| format!("未找到需要排序的 MOD：{mod_id}"))?;
-    let target_index = order
+        .filter(|mod_id| source_ids.contains(*mod_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if moved_mod_ids.len() != source_ids.len() {
+        return Err("未能在 MOD 库顺序中找到全部排序来源。".to_string());
+    }
+    order.retain(|mod_id| !source_ids.contains(mod_id));
+    let target_positions = order
         .iter()
-        .position(|current_id| current_id == target_mod_id)
-        .ok_or_else(|| format!("未找到排序目标 MOD：{target_mod_id}"))?;
-
-    let moved_mod_id = order.remove(source_index);
-    let adjusted_target_index = if source_index < target_index {
-        target_index - 1
-    } else {
-        target_index
-    };
+        .enumerate()
+        .filter_map(|(index, mod_id)| target_ids.contains(mod_id).then_some(index))
+        .collect::<Vec<_>>();
+    if target_positions.len() != target_ids.len() {
+        return Err("未能在 MOD 库顺序中找到全部排序目标。".to_string());
+    }
     let insert_index = if place_after {
-        adjusted_target_index + 1
+        target_positions.iter().max().copied().unwrap_or(0) + 1
     } else {
-        adjusted_target_index
+        target_positions.iter().min().copied().unwrap_or(0)
     };
-    order.insert(insert_index, moved_mod_id);
+    order.splice(insert_index..insert_index, moved_mod_ids);
     store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
     store.mod_ids = order;
     save_mod_library_order_store(installed_root, &store)
@@ -6809,6 +7654,19 @@ fn validate_mod_note(note: &str) -> Result<String, String> {
         return Err("MOD note must contain at most 800 characters.".to_string());
     }
     Ok(note.to_string())
+}
+
+fn validate_mod_branch_group_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("分支组名称不能为空。".to_string());
+    }
+    if name.chars().count() > MOD_BRANCH_GROUP_NAME_LIMIT {
+        return Err(format!(
+            "分支组名称不能超过 {MOD_BRANCH_GROUP_NAME_LIMIT} 个字符。"
+        ));
+    }
+    Ok(name.to_string())
 }
 
 fn validate_mod_category_id(category_id: &str) -> Result<(), String> {
@@ -7762,6 +8620,7 @@ fn remove_mod_from_conflict_orders(installed_root: &Path, mod_id: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         env, fs,
         path::{Path, PathBuf},
         process,
@@ -7771,11 +8630,13 @@ mod tests {
     use super::{
         apply_conflict_order_from, apply_mod_remap_from, armor_set_label,
         build_mod_conflict_report_from_workspace_index, build_workspace_mod_index,
-        clear_import_staging, disable_mod_from, enable_mod_from, find_installed_mod_by_content,
-        get_mod_conflict_report_from, install_mod_from_candidate_into,
-        install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
-        load_all_installed_manifests, load_or_initialize_mod_category_store_for_installed_root,
-        move_conflict_participant_from, move_mod_library_item_from, preview_disable_mod_from,
+        clear_import_staging, collect_nested_archives, copy_import_source_directory,
+        create_mod_branch_group_from, disable_mod_from, enable_mod_from,
+        find_installed_mod_by_content, get_mod_conflict_report_from,
+        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
+        list_installed_mods_from, load_all_installed_manifests, load_normalized_mod_branch_groups,
+        load_or_initialize_mod_category_store_for_installed_root, move_conflict_participant_from,
+        move_mod_library_item_from, move_mod_library_items_from, preview_disable_mod_from,
         preview_enable_mod_from, preview_mod_import, preview_mod_remap_from,
         preview_restore_all_mods_from, preview_uninstall_mod_from, read_conflict_order_store,
         remove_category_from_manifests, remove_mod_from_conflict_orders, restore_all_mods_from,
@@ -7798,6 +8659,76 @@ mod tests {
             armor_set_label(&display_names, "pl105_0000"),
             "【冰狼】服装"
         );
+    }
+
+    #[test]
+    fn persists_branch_groups_and_removes_single_member_remainders() {
+        let root = temp_root("branch_groups");
+        let installed_root = root.join("installed");
+        let first_source = root.join("first");
+        let second_source = root.join("second");
+        write_file(&first_source.join("nativePC").join("wp").join("first.mod3"));
+        write_file(
+            &second_source
+                .join("nativePC")
+                .join("wp")
+                .join("second.mod3"),
+        );
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+
+        let (group, _) = create_mod_branch_group_from(
+            &installed_root,
+            "外观版本".to_string(),
+            vec![first.mod_id.clone(), second.mod_id.clone()],
+        )
+        .unwrap();
+        assert_eq!(group.mod_ids.len(), 2);
+
+        fs::remove_dir_all(installed_root.join(&second.mod_id)).unwrap();
+        let installed_ids = HashSet::from([first.mod_id]);
+        let groups = load_normalized_mod_branch_groups(&installed_root, &installed_ids).unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn finds_supported_nested_archives_without_rescanning_nested_staging() {
+        let root = temp_root("nested_archives");
+        write_file(&root.join("versions").join("red.zip"));
+        write_file(&root.join("versions").join("blue.7z"));
+        write_file(&root.join("versions").join("readme.txt"));
+        write_file(&root.join(".acumod-nested").join("ignored.rar"));
+
+        let archives = collect_nested_archives(&root).unwrap();
+        let names = archives
+            .iter()
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["blue.7z", "red.zip"]);
+    }
+
+    #[test]
+    fn copies_folder_with_nested_archive_into_isolated_staging() {
+        let root = temp_root("folder_nested_staging");
+        let source = root.join("source");
+        let staging = root.join("staging");
+        write_file(&source.join("nativePC").join("wp").join("base.mod3"));
+        write_file(&source.join("versions").join("alternate.zip"));
+
+        copy_import_source_directory(&source, &staging, &OperationReporter::default()).unwrap();
+
+        assert!(source.join("versions").join("alternate.zip").is_file());
+        assert!(staging
+            .join("nativePC")
+            .join("wp")
+            .join("base.mod3")
+            .is_file());
+        assert!(staging.join("versions").join("alternate.zip").is_file());
     }
 
     #[test]
@@ -8987,6 +9918,10 @@ mod tests {
         assert_eq!(list.mods[0].name, "测试显示名称");
         assert_eq!(list.mods[0].original_name, result.name);
         assert_eq!(list.mods[0].note, "用于回归测试的备注");
+        assert_eq!(
+            list.mods[0].source_path,
+            manifest["sourcePath"].as_str().unwrap()
+        );
 
         cleanup(source_root);
         cleanup(installed_root);
@@ -9033,6 +9968,53 @@ mod tests {
 
         cleanup(first_source);
         cleanup(second_source);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn moves_branch_group_members_as_one_library_order_block() {
+        let sources_root = temp_root("branch_group_order_sources");
+        let installed_root = temp_root("branch_group_order_installed");
+        for index in 0..4 {
+            let source_root = sources_root.join(format!("source_{index}"));
+            write_file(
+                &source_root
+                    .join("nativePC")
+                    .join("weapon")
+                    .join(format!("weapon_{index}.mod3")),
+            );
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        }
+
+        let initial_ids = list_installed_mods_from(&installed_root)
+            .unwrap()
+            .mods
+            .into_iter()
+            .map(|installed_mod| installed_mod.id)
+            .collect::<Vec<_>>();
+        let source_ids = vec![initial_ids[1].clone(), initial_ids[2].clone()];
+        let target_ids = vec![initial_ids[3].clone()];
+
+        move_mod_library_items_from(&installed_root, &source_ids, &target_ids, true).unwrap();
+
+        let ordered_ids = list_installed_mods_from(&installed_root)
+            .unwrap()
+            .mods
+            .into_iter()
+            .map(|installed_mod| installed_mod.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_ids,
+            vec![
+                initial_ids[0].clone(),
+                initial_ids[3].clone(),
+                initial_ids[1].clone(),
+                initial_ids[2].clone(),
+            ]
+        );
+
+        cleanup(sources_root);
         cleanup(installed_root);
     }
 

@@ -2,6 +2,7 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import type {
   InstalledModSummary,
+  ModBranchGroup,
   ModCategory,
   ModMetadataPatch,
   ModelReplacement,
@@ -15,14 +16,18 @@ interface ModDraft {
 }
 
 interface PointerReorderState {
-  sourceModId: string;
+  sourceItemKey: string;
+  sourceModIds: string[];
   pointerId: number;
-  targetModId: string;
+  targetItemKey: string;
+  targetModIds: string[];
   placeAfter: boolean;
 }
 
 const props = defineProps<{
   mods: InstalledModSummary[];
+  allMods: InstalledModSummary[];
+  branchGroups: ModBranchGroup[];
   installedModCount: number;
   categories: ModCategory[];
   conflictingModIds: Set<string>;
@@ -35,6 +40,7 @@ const props = defineProps<{
   canReorder: boolean;
   reorderingModId: string;
   activeBatchAction: string;
+  updatingBranchGroups: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -45,10 +51,13 @@ const emit = defineEmits<{
   disable: [mod: InstalledModSummary];
   uninstall: [mod: InstalledModSummary];
   manageRemap: [mod: InstalledModSummary];
-  reorder: [mod: InstalledModSummary, target: InstalledModSummary, placeAfter: boolean];
+  reorder: [modIds: string[], targetModIds: string[], placeAfter: boolean];
   batchEnable: [mods: InstalledModSummary[]];
   batchDisable: [mods: InstalledModSummary[]];
   batchUninstall: [mods: InstalledModSummary[]];
+  createBranchGroup: [mods: InstalledModSummary[]];
+  renameBranchGroup: [group: ModBranchGroup, name: string];
+  ungroupMods: [mods: InstalledModSummary[]];
 }>();
 
 const editingCell = ref<{ modId: string; field: EditableField } | null>(null);
@@ -56,12 +65,25 @@ const editingCategoryModId = ref("");
 const editingInputs = ref<HTMLInputElement[]>([]);
 const drafts = reactive<Record<string, ModDraft>>({});
 const expandedModIds = ref(new Set<string>());
-const draggedModId = ref("");
-const dropTargetModId = ref("");
+const draggedItemKey = ref("");
+const dropTargetItemKey = ref("");
 const pointerReorderState = ref<PointerReorderState | null>(null);
 const modTableScroll = ref<HTMLElement | null>(null);
 const reorderIndicatorTop = ref<number | null>(null);
 const selectedModIds = ref(new Set<string>());
+const expandedBranchGroupIds = ref(new Set<string>());
+const editingBranchGroupId = ref("");
+const branchGroupNameDraft = ref("");
+
+const branchGroupByModId = computed(() => {
+  const byModId = new Map<string, ModBranchGroup>();
+  for (const group of props.branchGroups) {
+    for (const modId of group.modIds) {
+      byModId.set(modId, group);
+    }
+  }
+  return byModId;
+});
 
 const selectedMods = computed(() =>
   props.mods.filter((mod) => selectedModIds.value.has(mod.id)),
@@ -74,6 +96,158 @@ const allVisibleModsSelected = computed(
 const someVisibleModsSelected = computed(
   () => selectedMods.value.length > 0 && !allVisibleModsSelected.value,
 );
+const selectedGroupedMods = computed(() =>
+  selectedMods.value.filter((mod) => branchGroupByModId.value.has(mod.id)),
+);
+
+function branchGroupForMod(mod: InstalledModSummary) {
+  return branchGroupByModId.value.get(mod.id) ?? null;
+}
+
+function branchGroupForRow(mod: InstalledModSummary) {
+  const group = branchGroupByModId.value.get(mod.id);
+  if (!group) {
+    throw new Error(`MOD ${mod.id} 不属于分支组。`);
+  }
+  return group;
+}
+
+function isFirstVisibleBranch(mod: InstalledModSummary, index: number) {
+  const group = branchGroupForMod(mod);
+  if (!group) {
+    return false;
+  }
+  return !props.mods.slice(0, index).some((candidate) => group.modIds.includes(candidate.id));
+}
+
+function isBranchVisible(mod: InstalledModSummary) {
+  const group = branchGroupForMod(mod);
+  return !group || expandedBranchGroupIds.value.has(group.id);
+}
+
+function branchGroupMembers(group: ModBranchGroup) {
+  const membersById = new Map(props.allMods.map((mod) => [mod.id, mod]));
+  return group.modIds
+    .map((modId) => membersById.get(modId))
+    .filter((mod): mod is InstalledModSummary => Boolean(mod));
+}
+
+function visibleBranchGroupMembers(group: ModBranchGroup) {
+  return props.mods.filter((mod) => group.modIds.includes(mod.id));
+}
+
+function libraryItemKeyForMod(mod: InstalledModSummary) {
+  const group = branchGroupForMod(mod);
+  return group ? `group:${group.id}` : `mod:${mod.id}`;
+}
+
+function libraryItemModIds(itemKey: string) {
+  if (itemKey.startsWith("group:")) {
+    const groupId = itemKey.slice("group:".length);
+    return props.branchGroups.find((group) => group.id === groupId)?.modIds ?? [];
+  }
+  return itemKey.startsWith("mod:") ? [itemKey.slice("mod:".length)] : [];
+}
+
+function libraryItemIndex(index: number) {
+  let itemCount = 0;
+  const seenGroupIds = new Set<string>();
+  for (const candidate of props.mods.slice(0, index + 1)) {
+    const group = branchGroupForMod(candidate);
+    if (!group) {
+      itemCount += 1;
+    } else if (!seenGroupIds.has(group.id)) {
+      seenGroupIds.add(group.id);
+      itemCount += 1;
+    }
+  }
+  return itemCount;
+}
+
+function branchDisplayIndex(mod: InstalledModSummary, index: number) {
+  const group = branchGroupForRow(mod);
+  const branchIndex = visibleBranchGroupMembers(group).findIndex((candidate) => candidate.id === mod.id);
+  return `${libraryItemIndex(index)}.${branchIndex + 1}`;
+}
+
+function isLastVisibleBranch(mod: InstalledModSummary, index: number) {
+  const group = branchGroupForMod(mod);
+  if (!group) {
+    return false;
+  }
+  return !props.mods.slice(index + 1).some((candidate) => group.modIds.includes(candidate.id));
+}
+
+function branchGroupCategoryTags(group: ModBranchGroup) {
+  const categories = new Map<string, ModCategory>();
+  for (const mod of branchGroupMembers(group)) {
+    for (const category of mod.categories) {
+      categories.set(category.id, category);
+    }
+  }
+  return [...categories.values()]
+    .map((category) => ({ ...category, name: categoryDisplayName(category) }))
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+}
+
+function branchGroupReplacementLabels(group: ModBranchGroup) {
+  const labels = new Set<string>();
+  for (const mod of branchGroupMembers(group)) {
+    for (const replacement of mod.modelReplacements) {
+      labels.add(`${modelKindLabel(replacement.modelKind)} · ${replacementTargetLabel(replacement)}`);
+    }
+  }
+  return [...labels];
+}
+
+function branchGroupSelectionState(group: ModBranchGroup) {
+  const members = visibleBranchGroupMembers(group);
+  const selectedCount = members.filter((mod) => selectedModIds.value.has(mod.id)).length;
+  return {
+    checked: members.length > 0 && selectedCount === members.length,
+    indeterminate: selectedCount > 0 && selectedCount < members.length,
+  };
+}
+
+function toggleBranchGroupSelection(group: ModBranchGroup, event: Event) {
+  const nextSelectedIds = new Set(selectedModIds.value);
+  for (const mod of visibleBranchGroupMembers(group)) {
+    if ((event.target as HTMLInputElement).checked) {
+      nextSelectedIds.add(mod.id);
+    } else {
+      nextSelectedIds.delete(mod.id);
+    }
+  }
+  selectedModIds.value = nextSelectedIds;
+}
+
+function toggleBranchGroup(group: ModBranchGroup) {
+  const next = new Set(expandedBranchGroupIds.value);
+  if (next.has(group.id)) {
+    next.delete(group.id);
+  } else {
+    next.add(group.id);
+  }
+  expandedBranchGroupIds.value = next;
+}
+
+function beginBranchGroupRename(group: ModBranchGroup) {
+  editingBranchGroupId.value = group.id;
+  branchGroupNameDraft.value = group.name;
+  void nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>(`[data-branch-group-input="${group.id}"]`);
+    input?.focus();
+    input?.select();
+  });
+}
+
+function commitBranchGroupRename(group: ModBranchGroup) {
+  const name = branchGroupNameDraft.value.trim();
+  editingBranchGroupId.value = "";
+  if (name && name !== group.name) {
+    emit("renameBranchGroup", group, name);
+  }
+}
 
 function setSelectedModIds(modIds: Iterable<string>) {
   selectedModIds.value = new Set(modIds);
@@ -342,43 +516,51 @@ function updatePointerReorderTarget(event: PointerEvent) {
   }
 
   const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLTableRowElement>(
-    "tr[data-mod-id]",
+    "tr[data-library-item-key]",
   );
-  const targetModId = row?.dataset.modId ?? "";
-  if (!row || !targetModId || targetModId === reorderState.sourceModId) {
-    reorderState.targetModId = "";
-    dropTargetModId.value = "";
+  const targetItemKey = row?.dataset.libraryItemKey ?? "";
+  if (!row || !targetItemKey || targetItemKey === reorderState.sourceItemKey) {
+    reorderState.targetItemKey = "";
+    reorderState.targetModIds = [];
+    dropTargetItemKey.value = "";
     reorderIndicatorTop.value = null;
     return;
   }
 
-  const bounds = row.getBoundingClientRect();
+  const itemRows = [...(modTableScroll.value?.querySelectorAll<HTMLTableRowElement>(
+    "tr[data-library-item-key]",
+  ) ?? [])].filter((candidate) => candidate.dataset.libraryItemKey === targetItemKey);
+  const firstBounds = itemRows[0]?.getBoundingClientRect() ?? row.getBoundingClientRect();
+  const lastBounds = itemRows[itemRows.length - 1]?.getBoundingClientRect() ?? firstBounds;
   const scrollBounds = modTableScroll.value?.getBoundingClientRect();
-  reorderState.targetModId = targetModId;
-  reorderState.placeAfter = event.clientY >= bounds.top + bounds.height / 2;
-  dropTargetModId.value = targetModId;
+  reorderState.targetItemKey = targetItemKey;
+  reorderState.targetModIds = libraryItemModIds(targetItemKey);
+  reorderState.placeAfter = event.clientY >= (firstBounds.top + lastBounds.bottom) / 2;
+  dropTargetItemKey.value = targetItemKey;
   reorderIndicatorTop.value = scrollBounds
     ? Math.round(
-        (reorderState.placeAfter ? bounds.bottom : bounds.top) -
+        (reorderState.placeAfter ? lastBounds.bottom : firstBounds.top) -
           scrollBounds.top +
           (modTableScroll.value?.scrollTop ?? 0),
       )
     : null;
 }
 
-function startPointerReordering(mod: InstalledModSummary, event: PointerEvent) {
+function startPointerReordering(itemKey: string, modIds: string[], event: PointerEvent) {
   if (!props.canReorder || isRowActionDisabled() || event.button !== 0) {
     return;
   }
 
   const dragHandle = event.currentTarget as HTMLElement;
   dragHandle.setPointerCapture(event.pointerId);
-  draggedModId.value = mod.id;
-  dropTargetModId.value = "";
+  draggedItemKey.value = itemKey;
+  dropTargetItemKey.value = "";
   pointerReorderState.value = {
-    sourceModId: mod.id,
+    sourceItemKey: itemKey,
+    sourceModIds: modIds,
     pointerId: event.pointerId,
-    targetModId: "",
+    targetItemKey: "",
+    targetModIds: [],
     placeAfter: false,
   };
 }
@@ -393,8 +575,8 @@ function trackPointerReordering(event: PointerEvent) {
 }
 
 function clearPointerReordering() {
-  draggedModId.value = "";
-  dropTargetModId.value = "";
+  draggedItemKey.value = "";
+  dropTargetItemKey.value = "";
   pointerReorderState.value = null;
   reorderIndicatorTop.value = null;
 }
@@ -415,10 +597,13 @@ function finishPointerReordering(event: PointerEvent) {
     dragHandle.releasePointerCapture(event.pointerId);
   }
 
-  const sourceMod = props.mods.find((mod) => mod.id === reorderState.sourceModId);
-  const targetMod = props.mods.find((mod) => mod.id === reorderState.targetModId);
-  if (sourceMod && targetMod) {
-    emit("reorder", sourceMod, targetMod, reorderState.placeAfter);
+  if (reorderState.sourceModIds.length && reorderState.targetModIds.length) {
+    emit(
+      "reorder",
+      reorderState.sourceModIds,
+      reorderState.targetModIds,
+      reorderState.placeAfter,
+    );
   }
   clearPointerReordering();
 }
@@ -469,7 +654,8 @@ function isRowActionDisabled() {
     props.activeBatchAction ||
       props.activeModAction ||
       props.metadataSavingModId ||
-      props.reorderingModId,
+      props.reorderingModId ||
+      props.updatingBranchGroups,
   );
 }
 
@@ -538,6 +724,22 @@ watch(
         </button>
         <button
           type="button"
+          class="batch-action-button"
+          :disabled="selectedMods.length < 2 || isRowActionDisabled()"
+          @click="$emit('createBranchGroup', selectedMods)"
+        >
+          创建分支组
+        </button>
+        <button
+          type="button"
+          class="batch-action-button"
+          :disabled="!selectedGroupedMods.length || isRowActionDisabled()"
+          @click="$emit('ungroupMods', selectedGroupedMods)"
+        >
+          移出分支组
+        </button>
+        <button
+          type="button"
           class="batch-action-button danger"
           :disabled="!selectedMods.length || isRowActionDisabled()"
           @click="$emit('batchUninstall', selectedMods)"
@@ -599,14 +801,159 @@ watch(
       <tbody>
         <template v-for="(mod, index) in props.mods" :key="mod.id">
           <tr
+            v-if="branchGroupForMod(mod) && isFirstVisibleBranch(mod, index)"
+            class="branch-group-row"
+            :class="{
+              'is-selected': branchGroupSelectionState(branchGroupForRow(mod)).checked,
+              'has-conflict': branchGroupMembers(branchGroupForRow(mod)).some((branch) => props.conflictingModIds.has(branch.id)),
+              'is-dragging': draggedItemKey === libraryItemKeyForMod(mod),
+              'is-drop-target': dropTargetItemKey === libraryItemKeyForMod(mod),
+            }"
+            :data-library-item-key="libraryItemKeyForMod(mod)"
+          >
+            <td class="mod-status branch-group-status">
+              <button
+                type="button"
+                class="branch-group-toggle"
+                :class="{ expanded: expandedBranchGroupIds.has(branchGroupForRow(mod).id) }"
+                :aria-expanded="expandedBranchGroupIds.has(branchGroupForRow(mod).id)"
+                :aria-label="expandedBranchGroupIds.has(branchGroupForRow(mod).id) ? '收起分支组' : '展开分支组'"
+                :data-tooltip="expandedBranchGroupIds.has(branchGroupForRow(mod).id) ? '收起分支' : '展开分支'"
+                @click="toggleBranchGroup(branchGroupForRow(mod))"
+              >
+                <span
+                  class="branch-group-chevron"
+                  :class="{ expanded: expandedBranchGroupIds.has(branchGroupForRow(mod).id) }"
+                  aria-hidden="true"
+                ></span>
+              </button>
+            </td>
+            <td class="mod-selection">
+              <input
+                type="checkbox"
+                :checked="branchGroupSelectionState(branchGroupForRow(mod)).checked"
+                :indeterminate="branchGroupSelectionState(branchGroupForRow(mod)).indeterminate"
+                :disabled="isRowActionDisabled()"
+                :aria-label="`选择分支组 ${branchGroupForRow(mod).name}`"
+                @change="toggleBranchGroupSelection(branchGroupForRow(mod), $event)"
+              />
+            </td>
+            <td class="mod-index">
+              <span class="mod-index-content">
+                <span class="mod-index-number">{{ libraryItemIndex(index) }}</span>
+                <button
+                  v-if="props.canReorder"
+                  type="button"
+                  class="drag-handle"
+                  aria-label="拖拽调整分支组顺序"
+                  title="拖拽调整分支组顺序"
+                  @pointerdown.prevent="startPointerReordering(libraryItemKeyForMod(mod), branchGroupForRow(mod).modIds, $event)"
+                  @pointermove="trackPointerReordering"
+                  @pointerup="finishPointerReordering"
+                  @pointercancel="cancelPointerReordering"
+                >
+                  <span class="drag-grip" aria-hidden="true">
+                    <span v-for="dot in 6" :key="dot"></span>
+                  </span>
+                </button>
+              </span>
+            </td>
+            <td class="mod-name branch-group-name-cell">
+              <div class="branch-group-title">
+                <input
+                  v-if="editingBranchGroupId === branchGroupForRow(mod).id"
+                  v-model="branchGroupNameDraft"
+                  :data-branch-group-input="branchGroupForRow(mod).id"
+                  class="branch-group-name-input"
+                  maxlength="120"
+                  @blur="commitBranchGroupRename(branchGroupForRow(mod))"
+                  @keydown.enter.prevent="commitBranchGroupRename(branchGroupForRow(mod))"
+                  @keydown.esc.prevent="editingBranchGroupId = ''"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="branch-group-name"
+                  :disabled="isRowActionDisabled()"
+                  title="点击修改分支组名称"
+                  @click="beginBranchGroupRename(branchGroupForRow(mod))"
+                >
+                  {{ branchGroupForRow(mod).name }}
+                </button>
+                <span class="branch-group-label">分支组</span>
+              </div>
+            </td>
+            <td class="mod-category branch-group-category">
+              <template v-if="branchGroupCategoryTags(branchGroupForRow(mod)).length">
+                <span
+                  v-for="category in branchGroupCategoryTags(branchGroupForRow(mod)).slice(0, 3)"
+                  :key="category.id"
+                  class="category-tag"
+                >
+                  {{ category.name }}
+                </span>
+                <span v-if="branchGroupCategoryTags(branchGroupForRow(mod)).length > 3" class="category-more">
+                  +{{ branchGroupCategoryTags(branchGroupForRow(mod)).length - 3 }}
+                </span>
+              </template>
+              <span v-else>未分类</span>
+            </td>
+            <td class="replacement-summary branch-group-replacements">
+              <template v-if="branchGroupReplacementLabels(branchGroupForRow(mod)).length">
+                <span
+                  v-for="label in branchGroupReplacementLabels(branchGroupForRow(mod)).slice(0, 2)"
+                  :key="label"
+                >
+                  {{ label }}
+                </span>
+                <span v-if="branchGroupReplacementLabels(branchGroupForRow(mod)).length > 2" class="replacement-more">
+                  +{{ branchGroupReplacementLabels(branchGroupForRow(mod)).length - 2 }}
+                </span>
+              </template>
+              <span v-else>未识别到游戏内替换目标</span>
+            </td>
+            <td class="mod-note branch-group-counts">
+              <strong>{{ branchGroupMembers(branchGroupForRow(mod)).length }} 个分支</strong>
+              <span>已启用 {{ branchGroupMembers(branchGroupForRow(mod)).filter((branch) => branch.enabled).length }} 个</span>
+            </td>
+            <td class="mod-actions">
+              <div class="mod-action-buttons branch-group-actions">
+                <button
+                  type="button"
+                  class="icon-button"
+                  :disabled="!branchGroupMembers(branchGroupForRow(mod)).some((branch) => branch.enabled) || isRowActionDisabled()"
+                  aria-label="禁用全部分支"
+                  data-tooltip="禁用全部分支"
+                  @click="$emit('batchDisable', branchGroupMembers(branchGroupForRow(mod)).filter((branch) => branch.enabled))"
+                >
+                  <span aria-hidden="true">&#9632;</span>
+                </button>
+                <button
+                  type="button"
+                  class="icon-button danger-icon"
+                  :disabled="isRowActionDisabled()"
+                  aria-label="卸载整个分支组"
+                  data-tooltip="卸载整个分支组"
+                  @click="$emit('batchUninstall', branchGroupMembers(branchGroupForRow(mod)))"
+                >
+                  <span aria-hidden="true">&#128465;</span>
+                </button>
+              </div>
+            </td>
+          </tr>
+          <tr
+            v-if="isBranchVisible(mod)"
             :class="{
               'is-enabled': mod.enabled,
+              'is-branch': Boolean(branchGroupForMod(mod)),
+              'is-branch-end': isLastVisibleBranch(mod, index),
               'is-selected': selectedModIds.has(mod.id),
               'has-conflict': props.conflictingModIds.has(mod.id),
-              'is-dragging': draggedModId === mod.id,
-              'is-drop-target': dropTargetModId === mod.id,
+              'is-dragging': draggedItemKey === libraryItemKeyForMod(mod),
+              'is-drop-target': dropTargetItemKey === libraryItemKeyForMod(mod),
             }"
             :data-mod-id="mod.id"
+            :data-library-item-key="libraryItemKeyForMod(mod)"
           >
             <td class="mod-status">
               <button
@@ -651,14 +998,16 @@ watch(
 
             <td class="mod-index">
               <span class="mod-index-content">
-                <span class="mod-index-number">{{ index + 1 }}</span>
+                <span class="mod-index-number">
+                  {{ branchGroupForMod(mod) ? branchDisplayIndex(mod, index) : libraryItemIndex(index) }}
+                </span>
                 <button
-                  v-if="props.canReorder"
+                  v-if="props.canReorder && !branchGroupForMod(mod)"
                   type="button"
                   class="drag-handle"
                   aria-label="拖拽调整 MOD 顺序"
                   title="拖拽调整顺序"
-                  @pointerdown.prevent="startPointerReordering(mod, $event)"
+                  @pointerdown.prevent="startPointerReordering(libraryItemKeyForMod(mod), [mod.id], $event)"
                   @pointermove="trackPointerReordering"
                   @pointerup="finishPointerReordering"
                   @pointercancel="cancelPointerReordering"
@@ -855,7 +1204,12 @@ watch(
             </td>
           </tr>
 
-          <tr v-if="isExpanded(mod.id)" class="mod-details-row">
+          <tr
+            v-if="isBranchVisible(mod) && isExpanded(mod.id)"
+            class="mod-details-row"
+            :class="{ 'is-branch-details': Boolean(branchGroupForMod(mod)) }"
+            :data-library-item-key="libraryItemKeyForMod(mod)"
+          >
             <td colspan="8" class="mod-details-cell">
               <div class="mod-details-grid">
                 <section>
@@ -919,6 +1273,15 @@ watch(
               </details>
             </td>
           </tr>
+
+          <tr
+            v-if="branchGroupForMod(mod) && isBranchVisible(mod) && isLastVisibleBranch(mod, index)"
+            class="branch-group-separator-row"
+            :data-library-item-key="libraryItemKeyForMod(mod)"
+            aria-hidden="true"
+          >
+            <td colspan="8"></td>
+          </tr>
         </template>
       </tbody>
     </table>
@@ -937,12 +1300,20 @@ watch(
 }
 
 .batch-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 7;
   display: flex;
   min-height: 42px;
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 2px 8px;
+  padding: 8px 10px;
+  border: 1px solid #dfe7e3;
+  border-bottom-color: #cbd8d4;
+  border-radius: 6px 6px 0 0;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 5px 12px rgba(28, 55, 46, 0.07);
 }
 
 .batch-selection-summary,
@@ -957,6 +1328,170 @@ watch(
   font-size: 0.82rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.branch-group-row {
+  border-top: 2px solid #86ad9d;
+  border-bottom: 1px solid #bcd3c9 !important;
+}
+
+.branch-group-row td {
+  background: #edf5f1;
+}
+
+.branch-group-row td:first-child,
+.mod-table tbody tr.is-branch td:first-child,
+.mod-details-row.is-branch-details td:first-child {
+  box-shadow: inset 3px 0 0 #5f947f;
+}
+
+.branch-group-toggle,
+.branch-group-name {
+  border: 0;
+  background: transparent;
+  color: #214b3d;
+}
+
+.branch-group-toggle {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin: 0 auto;
+  padding: 0;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.branch-group-status {
+  padding-right: 0 !important;
+  padding-left: 0 !important;
+}
+
+.branch-group-chevron {
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.branch-group-chevron.expanded {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.branch-group-toggle:hover,
+.branch-group-toggle:focus-visible {
+  color: #17613f;
+  background: #dbece4;
+}
+
+.branch-group-title {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.branch-group-name {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-group-label {
+  flex: none;
+  color: #61756f;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.branch-group-name-input {
+  width: min(420px, 100%);
+}
+
+.branch-group-actions {
+  gap: 3px;
+}
+
+.mod-action-buttons.branch-group-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 30px);
+}
+
+.branch-group-actions .icon-button:not(.danger-icon) {
+  grid-column: 2;
+}
+
+.branch-group-actions .danger-icon {
+  grid-column: 3;
+}
+
+.branch-group-category {
+  line-height: 1.8;
+}
+
+.branch-group-category .category-tag {
+  display: inline-block;
+  margin: 2px 3px 2px 0;
+}
+
+.category-more,
+.branch-group-counts span {
+  color: #61756f;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.branch-group-replacements span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-group-counts {
+  line-height: 1.35;
+}
+
+.branch-group-counts strong,
+.branch-group-counts span {
+  display: block;
+}
+
+.branch-group-counts strong {
+  color: #334b44;
+  font-size: 0.8rem;
+}
+
+.mod-table tbody tr.is-branch .mod-name {
+  padding-left: 22px;
+}
+
+.mod-table tbody tr.is-branch {
+  background: #f8fbf9;
+}
+
+.mod-table tbody tr.is-branch:hover {
+  background: #f2f8f5;
+}
+
+.mod-details-row.is-branch-details .mod-details-cell {
+  background: #f8fbf9;
+}
+
+.branch-group-separator-row td {
+  height: 9px;
+  padding: 0 !important;
+  border-top: 2px solid #86ad9d;
+  background: #ffffff;
 }
 
 .batch-selection-summary input,
@@ -1023,7 +1558,8 @@ watch(
   max-width: 100%;
   overflow: auto;
   border: 1px solid #dfe7e3;
-  border-radius: 6px;
+  border-radius: 0 0 6px 6px;
+  border-top: 0;
 }
 
 .mod-table {
@@ -1063,7 +1599,7 @@ watch(
 }
 
 .actions-column {
-  width: 104px;
+  width: 110px;
 }
 
 .mod-table th,

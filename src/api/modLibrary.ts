@@ -18,14 +18,38 @@ export interface ModImportFilePreview {
 
 export interface ModImportCandidate {
   rootPath: string;
+  sourceRootPath: string;
   relativePath: string;
+  suggestedName: string;
+  archiveChain: string[];
+  requiresGameRootConfirmation: boolean;
   detectionMethod: string;
   deployRoot: string;
   fileCount: number;
 }
 
+export interface ModBranchImportSelection {
+  candidateRootPath: string;
+  branchName: string;
+  allowGameRoot: boolean;
+}
+
+export interface ModBranchGroup {
+  id: string;
+  name: string;
+  modIds: string[];
+  createdAtUnixSeconds: number;
+}
+
+export interface ModBranchImportResult {
+  group: ModBranchGroup | null;
+  installResults: ModInstallResult[];
+  message: string;
+}
+
 export interface ModImportPreview {
   sourcePath: string;
+  originalSourcePath: string;
   status: string;
   detectionMethod: string;
   deployRoot: string;
@@ -172,6 +196,7 @@ export interface InstalledModSummary {
   modPath: string;
   contentPath: string;
   manifestPath: string;
+  sourcePath: string;
   fileCount: number;
   files: InstalledModFile[];
   enabled: boolean;
@@ -408,6 +433,7 @@ export interface ModWorkspaceSnapshot {
   installedMods: InstalledModList;
   categories: ModCategoryList;
   conflictReport: ModConflictReport;
+  branchGroups: ModBranchGroup[];
 }
 
 export interface ModConflictMoveResult {
@@ -520,6 +546,18 @@ export function moveModLibraryItem(
   });
 }
 
+export function moveModLibraryItems(
+  modIds: string[],
+  targetModIds: string[],
+  placeAfter: boolean,
+): Promise<void> {
+  return invoke<void>("move_mod_library_items", {
+    modIds,
+    targetModIds,
+    placeAfter,
+  });
+}
+
 export function renameModCategory(
   categoryId: string,
   name: string,
@@ -612,6 +650,40 @@ export function installModFromCandidate(
     candidateRootPath,
     originalArchivePath,
   });
+}
+
+export function installModBranches(
+  sourcePath: string,
+  selections: ModBranchImportSelection[],
+  originalSourcePath: string | null,
+  groupName: string | null,
+  asBranchGroup: boolean,
+): Promise<ModBranchImportResult> {
+  return invoke<ModBranchImportResult>("install_mod_branches", {
+    sourcePath,
+    selections,
+    originalSourcePath,
+    groupName,
+    asBranchGroup,
+  });
+}
+
+export function createModBranchGroup(
+  name: string,
+  modIds: string[],
+): Promise<ModBranchGroup> {
+  return invoke<ModBranchGroup>("create_mod_branch_group", { name, modIds });
+}
+
+export function renameModBranchGroup(
+  groupId: string,
+  name: string,
+): Promise<ModBranchGroup> {
+  return invoke<ModBranchGroup>("rename_mod_branch_group", { groupId, name });
+}
+
+export function removeModsFromBranchGroup(modIds: string[]): Promise<ModBranchGroup[]> {
+  return invoke<ModBranchGroup[]>("remove_mods_from_branch_group", { modIds });
 }
 
 // 盒子扫描和导入分别对应 Rust 的只读核验与本地库复制，避免前端误把扫描结果当作接管状态。

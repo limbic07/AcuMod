@@ -2,12 +2,12 @@ use crate::operations::run_blocking_operation;
 use crate::services::legacy_box::{self, LegacyBoxImportResult, LegacyBoxScan};
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, BatchModAction,
-    BatchModOperationResult, InstalledModList, ModArchiveImportOutcome, ModCategory,
-    ModCategoryDeleteResult, ModCategoryList, ModConflictMoveResult, ModConflictReport,
-    ModDeploymentPlan, ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult,
-    ModLibraryStatus, ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult,
-    ModRemapDetails, ModRemapPlan, ModUninstallPlan, ModUninstallResult, ModWorkspaceSnapshot,
-    RestoreAllPlan, RestoreAllResult,
+    BatchModOperationResult, InstalledModList, ModArchiveImportOutcome, ModBranchGroup,
+    ModBranchImportResult, ModBranchImportSelection, ModCategory, ModCategoryDeleteResult,
+    ModCategoryList, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
+    ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
+    ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan,
+    ModUninstallPlan, ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
 };
 use crate::services::mod_state_sync::ModStateSyncResult;
 
@@ -77,8 +77,14 @@ pub async fn preview_mod_import(
     path: String,
     allow_game_root: bool,
 ) -> Result<ModImportPreview, String> {
+    let worker_app = app.clone();
     run_blocking_operation(app, "importPreview", "正在识别 MOD", move |progress| {
-        mod_library::preview_mod_import_with_progress(path, allow_game_root, &progress)
+        mod_library::preview_mod_import_source_with_nested(
+            &worker_app,
+            path,
+            allow_game_root,
+            &progress,
+        )
     })
     .await
 }
@@ -147,6 +153,65 @@ pub async fn install_mod_from_candidate(
         },
     )
     .await
+}
+
+/// 安装所选的一个或多个候选版本，并可将它们组织为同一个分支组。
+#[tauri::command]
+pub async fn install_mod_branches(
+    app: tauri::AppHandle,
+    source_path: String,
+    selections: Vec<ModBranchImportSelection>,
+    original_source_path: Option<String>,
+    group_name: Option<String>,
+    as_branch_group: bool,
+) -> Result<ModBranchImportResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "importBranches",
+        "正在导入 MOD 分支",
+        move |progress| {
+            mod_library::install_mod_branches_with_progress(
+                &worker_app,
+                source_path,
+                selections,
+                original_source_path,
+                group_name,
+                as_branch_group,
+                &progress,
+            )
+        },
+    )
+    .await
+}
+
+/// 将现有 MOD 组织为新的分支组。
+#[tauri::command]
+pub fn create_mod_branch_group(
+    app: tauri::AppHandle,
+    name: String,
+    mod_ids: Vec<String>,
+) -> Result<ModBranchGroup, String> {
+    mod_library::create_mod_branch_group(&app, name, mod_ids)
+}
+
+/// 修改分支组名称。
+#[tauri::command]
+pub fn rename_mod_branch_group(
+    app: tauri::AppHandle,
+    group_id: String,
+    name: String,
+) -> Result<ModBranchGroup, String> {
+    mod_library::rename_mod_branch_group(&app, group_id, name)
+}
+
+/// 将所选 MOD 移出其分支组。
+#[tauri::command]
+pub fn remove_mods_from_branch_group(
+    app: tauri::AppHandle,
+    mod_ids: Vec<String>,
+) -> Result<Vec<ModBranchGroup>, String> {
+    mod_library::remove_mods_from_branch_group(&app, mod_ids)
 }
 
 #[tauri::command]
@@ -227,6 +292,17 @@ pub fn move_mod_library_item(
     place_after: bool,
 ) -> Result<(), String> {
     mod_library::move_mod_library_item(&app, mod_id, target_mod_id, place_after)
+}
+
+/// 将普通 MOD 或整个分支组作为一个连续块调整浏览顺序。
+#[tauri::command]
+pub fn move_mod_library_items(
+    app: tauri::AppHandle,
+    mod_ids: Vec<String>,
+    target_mod_ids: Vec<String>,
+    place_after: bool,
+) -> Result<(), String> {
+    mod_library::move_mod_library_items(&app, mod_ids, target_mod_ids, place_after)
 }
 
 #[tauri::command]

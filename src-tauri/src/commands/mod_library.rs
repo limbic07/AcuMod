@@ -3,11 +3,12 @@ use crate::services::legacy_box::{self, LegacyBoxImportResult, LegacyBoxScan};
 use crate::services::mod_library::{
     self, ApplyConflictOrderPlan, ApplyConflictOrderResult, BatchModAction,
     BatchModOperationResult, InstalledModList, ModArchiveImportOutcome, ModBranchGroup,
-    ModBranchImportResult, ModBranchImportSelection, ModCategory, ModCategoryDeleteResult,
-    ModCategoryList, ModConflictMoveResult, ModConflictReport, ModDeploymentPlan,
-    ModDeploymentResult, ModDisablePlan, ModImportPreview, ModInstallResult, ModLibraryStatus,
-    ModMetadataPatch, ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan,
-    ModUninstallPlan, ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
+    ModBranchImportResult, ModBranchImportSelection, ModCategory, ModCategoryAssignment,
+    ModCategoryBatchUpdateResult, ModCategoryDeleteResult, ModCategoryList, ModConflictMoveResult,
+    ModConflictReport, ModDeploymentPlan, ModDeploymentResult, ModDisablePlan, ModImportPreview,
+    ModInstallResult, ModLibraryOrderResult, ModLibraryStatus, ModMetadataPatch,
+    ModMetadataUpdateResult, ModRemapApplyResult, ModRemapDetails, ModRemapPlan, ModUninstallPlan,
+    ModUninstallResult, ModWorkspaceSnapshot, RestoreAllPlan, RestoreAllResult,
 };
 use crate::services::mod_state_sync::ModStateSyncResult;
 
@@ -270,6 +271,15 @@ pub fn update_mod_metadata(
     mod_library::update_mod_metadata(&app, mod_id, patch)
 }
 
+/// 批量更新分支组成员分类，避免前端逐个命令刷新快照。
+#[tauri::command]
+pub fn update_mod_categories(
+    app: tauri::AppHandle,
+    assignments: Vec<ModCategoryAssignment>,
+) -> Result<ModCategoryBatchUpdateResult, String> {
+    mod_library::update_mod_categories(&app, assignments)
+}
+
 #[tauri::command]
 pub fn list_mod_categories(app: tauri::AppHandle) -> Result<ModCategoryList, String> {
     mod_library::list_mod_categories(&app)
@@ -303,6 +313,37 @@ pub fn move_mod_library_items(
     place_after: bool,
 ) -> Result<(), String> {
     mod_library::move_mod_library_items(&app, mod_ids, target_mod_ids, place_after)
+}
+
+/// 将当前完整浏览结果保存为新的手动顺序；后台执行以避免大量 MOD 时阻塞界面。
+#[tauri::command]
+pub async fn replace_mod_library_order(
+    app: tauri::AppHandle,
+    mod_ids: Vec<String>,
+) -> Result<ModLibraryOrderResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "replaceModLibraryOrder",
+        "正在保存 MOD 顺序",
+        move |_| mod_library::replace_mod_library_order(&worker_app, mod_ids),
+    )
+    .await
+}
+
+/// 恢复最早导入在上、最新导入在下的原始顺序。
+#[tauri::command]
+pub async fn restore_mod_library_import_order(
+    app: tauri::AppHandle,
+) -> Result<ModLibraryOrderResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "restoreModLibraryOrder",
+        "正在恢复导入顺序",
+        move |_| mod_library::restore_mod_library_import_order(&worker_app),
+    )
+    .await
 }
 
 #[tauri::command]

@@ -102,6 +102,7 @@ branch-groups.json（组名、成员 MOD ID）
 
 - `AcumodData/mods/branch-groups.json` 只保存组 ID、组名、成员 ID 和创建时间。
 - 每个分支仍是完整的普通 MOD，具有独立 `content/`、manifest、启用状态和部署记录；允许同时启用多个分支。
+- 分支组不额外保存一份分类。组行编辑分类时，前端根据各成员当前 `categoryIds[]` 生成批量 assignment，`update_mod_categories` 在写入前统一校验 MOD 与分类 ID，随后一次更新全部成员 manifest 和工作区快照；这样筛选、排序和普通 MOD 分类逻辑仍只有一个数据来源。
 - `workspace-snapshot.json` 缓存分支组 DTO，组关系变化时局部更新；刷新时按实际已安装 ID 清理失效成员，只剩一个成员的组自动拆散。
 - 冲突报告仍使用真实 MOD ID；Vue 展示时组合为“组名（分支名）”，不会把组伪装成可部署 MOD。
 - 自动分组建议只读取工作区快照中的部署路径、原始名称、导入来源、识别目标和冲突报告。两个单文件 MOD 部署到完全相同的路径时直接建立候选关系；多文件 MOD 必须同时达到“共同路径覆盖较小文件集至少 90%”和“共同路径占文件并集至少 75%”，其中双文件 MOD 还需满足名称相似并具有相同来源或共同目标。组装使用完整链接校验，任意新成员必须与组内每个成员都达标，组级真实交集也必须继续满足相同阈值；不使用冲突传递合并，超过 16 项的候选直接抑制。它不扫描磁盘、不自动写入，用户确认后仍逐组调用 `create_mod_branch_group`，由 Rust 校验成员并更新存储和快照。
@@ -158,7 +159,10 @@ Vue 操作
 - 本项目不提供任务取消。复制、删除和 manifest 写入一旦开始必须顺序完成，以保持部署记录与实际游戏目录一致。
 - `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。快照 schema 4 在展示 DTO 之外保存每个 MOD 的有效部署路径、有效识别目标索引和自动分组需要的原始导入来源。普通导入、启停、卸载、批量操作、模型改绑和冲突应用只重读受影响的 manifest，再基于索引在内存中更新冲突报告；用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
 - 工作区快照只是可丢弃、可重建的读取缓存，不保存独立部署状态。manifest、`conflict-orders.json` 和 `mod-library-order.json` 仍是事实来源。
+- `mod-library-order.json` schema 2 同时保存 `manualModIds` 和 `importModIds`。前者只控制 MOD 库手动浏览顺序，后者记录最早导入在上的恢复基准；启停、冲突应用、模型改绑和元数据编辑只能规范化失效 ID，不能重排已有项。旧 schema 1 `modIds` 作为 `manualModIds` 读取并保持原顺序，缺失的导入基准按安装时间和稳定 MOD ID 补建。
+- 排序保存链路为 `ModLibraryToolbar -> App.vue 完整库排序 -> replaceModLibraryOrder typed invoke -> replace_mod_library_order Tauri command -> Rust 顺序校验与存储 -> ModLibraryOrderResult -> Vue 原地重排`。恢复导入顺序使用独立 command；两个命令都通过后台任务执行，优先使用工作区快照校验完整 MOD ID，快照缺失时只读取 manifest，不重新扫描模型或游戏目录。
 - 禁用 MOD 后恢复低优先级版本时，先按索引筛选包含同一有效路径的已启用候选，只加载这些 manifest；冲突预览和应用同样只加载当前冲突组及相关部署记录所有者。索引缺失时回退到全库兼容扫描，不牺牲旧数据可用性。
+- 单项启用预检在 `ModDeploymentPlan.conflicts` 中按已启用 MOD 汇总有效部署路径交集。快照存在时直接使用 `mod_index`，快照缺失时才读取 manifest；前端只在该数组非空时显示可展开的冲突确认框，确认后继续调用原有 `enable_mod`。普通游戏原文件和未跟踪文件不伪装成冲突 MOD。
 
 ## MOD 库和复制式部署
 
@@ -369,6 +373,8 @@ MOD 文件列表
 - 原始目标游戏内名称。
 
 当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型必须命中头盔、铠甲、护手、腰甲和护腿五个标准部位才合并为一个套装 DTO，只有部分部位时继续返回独立 DTO。UI 遇到套装 DTO 时从官方分部位名称提取套装级名称，不得用第一条部位名称作为摘要。
+
+繁体游戏名称使用独立的 `game-text-zh-hant.json`，由 `scripts/build-mhwi-traditional-game-text.mjs` 按 MHW-Editor 成对简体/繁体游戏文本键生成。manifest 和工作区快照继续保存稳定识别 ID 与现有名称；前端 `gameText` 解析层只在展示时替换名称，因此切换 `config.json.gameTextLanguage` 不需要扫描 MOD、迁移 manifest 或重新计算冲突。未收录名称必须回退原文，不能自动逐字转换。
 
 新导入 MOD 使用 manifest schema 16 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]` 和状态同步元数据。旧 manifest 会在读取时按迁移规则保留现有元数据并重新识别缺失或过期的模型结果。模型 ID 和装备部位只从目录组件识别；人物语音与武器语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。武器语音只接受 `wp_<代码>_(cmn|epvsp)` 或 `wpNN_<代码>_(cmn|epvsp)`，并映射到 14 种武器；无法确定武器的公共音频包不猜测分类。`nativePC/plugins` 下的内容统一识别为“插件”。
 

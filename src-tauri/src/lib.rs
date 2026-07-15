@@ -12,7 +12,9 @@ pub fn run() {
             commands::app::get_app_info,
             commands::game::detect_game_directory,
             commands::game::get_game_directory_status,
+            commands::game::get_game_text_settings,
             commands::game::save_game_directory,
+            commands::game::save_game_text_language,
             commands::mod_library::apply_conflict_order,
             commands::mod_library::apply_mod_remap,
             commands::mod_library::batch_update_mods,
@@ -47,11 +49,14 @@ pub fn run() {
             commands::mod_library::rename_mod_category,
             commands::mod_library::rename_mod_branch_group,
             commands::mod_library::remove_mods_from_branch_group,
+            commands::mod_library::replace_mod_library_order,
             commands::mod_library::refresh_game_mod_states,
+            commands::mod_library::restore_mod_library_import_order,
             commands::mod_library::restore_all_mods,
             commands::mod_library::scan_legacy_box_mods,
             commands::mod_library::uninstall_mod,
             commands::mod_library::update_mod_metadata,
+            commands::mod_library::update_mod_categories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

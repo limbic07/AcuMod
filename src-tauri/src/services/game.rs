@@ -6,7 +6,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::storage::config;
+use crate::storage::config::{self, GameTextLanguage};
 
 const MHW_EXECUTABLE: &str = "MonsterHunterWorld.exe";
 const MHW_STEAM_FOLDER: &str = "Monster Hunter World";
@@ -22,6 +22,28 @@ pub struct GameDirectoryStatus {
     pub native_pc_path: Option<String>,
     pub config_path: String,
     pub source: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameTextSettings {
+    pub language: GameTextLanguage,
+}
+
+pub fn get_game_text_settings(app: &tauri::AppHandle) -> Result<GameTextSettings, String> {
+    Ok(GameTextSettings {
+        language: config::load(app)?.game_text_language,
+    })
+}
+
+pub fn save_game_text_language(
+    app: &tauri::AppHandle,
+    language: GameTextLanguage,
+) -> Result<GameTextSettings, String> {
+    let mut app_config = config::load(app)?;
+    app_config.game_text_language = language;
+    config::save(app, &app_config)?;
+    Ok(GameTextSettings { language })
 }
 
 pub fn get_game_directory_status(app: &tauri::AppHandle) -> Result<GameDirectoryStatus, String> {

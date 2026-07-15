@@ -6,6 +6,7 @@ interface CategoryFilterOption {
 
 const props = defineProps<{
   isCategoryAction: boolean;
+  isOrderAction: boolean;
   searchQuery: string;
   categoryFilter: string;
   statusFilter: string;
@@ -23,6 +24,8 @@ const emit = defineEmits<{
   updateConflictFilter: [value: string];
   updateSort: [value: "manual" | "installation" | "name" | "category" | "replacement"];
   updateSortDirection: [value: "asc" | "desc"];
+  applySort: [];
+  restoreImportOrder: [];
 }>();
 
 function updateSearchQuery(event: Event) {
@@ -122,6 +125,24 @@ function toggleSortDirection() {
           <span aria-hidden="true">{{ props.sortDirection === "asc" ? "↑" : "↓" }}</span>
         </button>
       </div>
+      <div class="sort-action-row">
+        <button
+          type="button"
+          class="sort-action-button"
+          :disabled="props.sort === 'manual' || props.isOrderAction"
+          @click="$emit('applySort')"
+        >
+          应用排序
+        </button>
+        <button
+          type="button"
+          class="sort-action-button"
+          :disabled="props.isOrderAction"
+          @click="$emit('restoreImportOrder')"
+        >
+          恢复导入顺序
+        </button>
+      </div>
     </label>
   </div>
 </template>
@@ -170,6 +191,37 @@ function toggleSortDirection() {
   min-height: 42px;
   flex: 0 0 32px;
   font-size: 1rem;
+}
+
+.sort-action-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sort-action-button {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid #cbd8d4;
+  border-radius: 5px;
+  color: #315e52;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sort-action-button:hover:not(:disabled),
+.sort-action-button:focus-visible {
+  border-color: #8cbca8;
+  color: #17613f;
+  background: #edf5f1;
+}
+
+.sort-action-button:disabled {
+  color: #8a9894;
+  background: #f3f6f5;
+  cursor: not-allowed;
 }
 
 input,

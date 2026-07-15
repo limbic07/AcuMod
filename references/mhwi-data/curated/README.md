@@ -42,4 +42,16 @@
 - `armorSlingerBindings[]`：原版防具 EVAM 的逐性别绑定；`slingerId: null` 表示原文件使用 `0xFFFFFFFF`，即没有飞翔爪。
 - `voiceModels[]`：人物语音文件名、性别、角色创建序号和显示名称。
 
+## game-text-zh-hant.json
+
+`game-text-zh-hant.json` 保存当前模型索引会实际展示的繁体中文游戏名称。数据从 [Synthlight/MHW-Editor](https://github.com/Synthlight/MHW-Editor) 固定提交 `a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94` 的成对 `chS_*.json` / `chT_*.json` 游戏文本中，按同一个文本键配对生成，不进行简繁字形转换。武器、防具、随从装备、猎虫、挂件和怪物分别限定在对应文本表内匹配；发型编号、人物语音序号和 Acumod 自己生成的飞翔爪说明使用单独维护的繁中标签。
+
+重新生成命令：
+
+```powershell
+node .\scripts\build-mhwi-traditional-game-text.mjs <MHW-Editor-Assets目录>
+```
+
+生成器会排除同一简体文本对应多个繁体文本的歧义键，并把无法可靠配对的名称写入 `fallbackNames`。运行时这些名称继续显示现有简体文本，不使用自动转换猜测。该仓库当前未见单独的数据许可文件；正式发布前仍需确认这些游戏文本衍生数据的再分发边界。
+
 发型和旧式投射器路径来自社区维护的 Monster Hunter World Modding Wiki；飞翔爪显示名称资料仍保存在 `extended-assets.json`。防具与飞翔爪的运行时关系不再按同号猜测，而是使用原版 EVAM 派生表：当前包含 462 条绑定、234 个防具模型、14 条无飞翔爪记录和 5 个男女绑定不同的模型。防具改绑仅在 MOD 没有自带 EVAM、且确实包含原版配套 `slg` 时使用这张表推导目标路径；MOD EVAM 和用户显式选择始终优先。语音序号映射来自 MIT 许可的 [MHW Voice Changer](https://github.com/NathanCruz98/MHWVoiceChanger)。发布前仍需确认原始数据与 Wiki 衍生索引的再分发许可。

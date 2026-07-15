@@ -7,6 +7,7 @@ import type {
   ModMetadataPatch,
   ModelReplacement,
 } from "../api/modLibrary";
+import { localizeGameText, type GameTextLanguage } from "../domain/gameText";
 
 type EditableField = "name" | "note";
 
@@ -28,6 +29,7 @@ const props = defineProps<{
   mods: InstalledModSummary[];
   allMods: InstalledModSummary[];
   branchGroups: ModBranchGroup[];
+  gameTextLanguage: GameTextLanguage;
   installedModCount: number;
   categories: ModCategory[];
   conflictingModIds: Set<string>;
@@ -46,6 +48,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   updateMetadata: [mod: InstalledModSummary, patch: ModMetadataPatch];
   createCategory: [mod: InstalledModSummary];
+  updateBranchGroupCategory: [group: ModBranchGroup, categoryId: string | null, selected: boolean];
+  createCategoryForBranchGroup: [group: ModBranchGroup];
   openFolder: [mod: InstalledModSummary];
   enable: [mod: InstalledModSummary];
   disable: [mod: InstalledModSummary];
@@ -62,6 +66,7 @@ const emit = defineEmits<{
 
 const editingCell = ref<{ modId: string; field: EditableField } | null>(null);
 const editingCategoryModId = ref("");
+const editingCategoryGroupId = ref("");
 const editingInputs = ref<HTMLInputElement[]>([]);
 const drafts = reactive<Record<string, ModDraft>>({});
 const expandedModIds = ref(new Set<string>());
@@ -74,6 +79,10 @@ const selectedModIds = ref(new Set<string>());
 const expandedBranchGroupIds = ref(new Set<string>());
 const editingBranchGroupId = ref("");
 const branchGroupNameDraft = ref("");
+
+function localizedGameText(value: string) {
+  return localizeGameText(value, props.gameTextLanguage);
+}
 
 const branchGroupByModId = computed(() => {
   const byModId = new Map<string, ModBranchGroup>();
@@ -188,6 +197,47 @@ function branchGroupCategoryTags(group: ModBranchGroup) {
   return [...categories.values()]
     .map((category) => ({ ...category, name: categoryDisplayName(category) }))
     .sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+}
+
+function branchGroupCategorySelectionState(group: ModBranchGroup, categoryId: string) {
+  const members = branchGroupMembers(group);
+  const selectedCount = members.filter((mod) => mod.categoryIds.includes(categoryId)).length;
+  return {
+    checked: members.length > 0 && selectedCount === members.length,
+    indeterminate: selectedCount > 0 && selectedCount < members.length,
+  };
+}
+
+function beginBranchGroupCategoryEditing(group: ModBranchGroup) {
+  if (isRowActionDisabled()) {
+    return;
+  }
+  editingCategoryModId.value = "";
+  editingCategoryGroupId.value = editingCategoryGroupId.value === group.id ? "" : group.id;
+}
+
+function closeBranchGroupCategoryMenuWhenFocusLeaves(group: ModBranchGroup, event: FocusEvent) {
+  const editor = event.currentTarget as HTMLElement;
+  // 点击 label 文字时，复选框取得焦点晚于原按钮的 focusout；等焦点稳定后再判断是否离开菜单。
+  requestAnimationFrame(() => {
+    if (!editor.contains(document.activeElement) && editingCategoryGroupId.value === group.id) {
+      editingCategoryGroupId.value = "";
+    }
+  });
+}
+
+function toggleBranchGroupCategory(group: ModBranchGroup, categoryId: string) {
+  const state = branchGroupCategorySelectionState(group, categoryId);
+  emit("updateBranchGroupCategory", group, categoryId, !state.checked);
+}
+
+function clearBranchGroupCategories(group: ModBranchGroup) {
+  emit("updateBranchGroupCategory", group, null, false);
+}
+
+function createCategoryForBranchGroup(group: ModBranchGroup) {
+  editingCategoryGroupId.value = "";
+  emit("createCategoryForBranchGroup", group);
 }
 
 function branchGroupReplacementLabels(group: ModBranchGroup) {
@@ -341,7 +391,9 @@ function replacementTargetLabel(replacement: ModelReplacement) {
     return armorSetTargetLabel(replacement);
   }
 
-  const displayName = replacement.displayNames[0];
+  const displayName = replacement.displayNames[0]
+    ? localizedGameText(replacement.displayNames[0])
+    : "";
   if (displayName) {
     return displayName;
   }
@@ -352,8 +404,12 @@ function replacementTargetLabel(replacement: ModelReplacement) {
 
 function armorSetTargetLabel(replacement: ModelReplacement) {
   for (const name of replacement.displayNames) {
-    const setName = name.replace(/[·・](?:头部|身体|腕部|腰部|脚部)$/u, "");
-    if (setName !== name && setName) {
+    const localizedName = localizedGameText(name);
+    const setName = localizedName.replace(
+      /[·・‧](?:头部|身体|腕部|腰部|脚部|頭部|身體|腕部|腰部|腳部)$/u,
+      "",
+    );
+    if (setName !== localizedName && setName) {
       return setName;
     }
   }
@@ -364,7 +420,11 @@ function armorSetTargetLabel(replacement: ModelReplacement) {
 function associationLabel(replacement: ModelReplacement) {
   const armorNames = replacement.associations
     .filter((association) => association.modelKind === "armor")
-    .map((association) => association.displayNames[0] ?? association.modelId);
+    .map((association) =>
+      association.displayNames[0]
+        ? localizedGameText(association.displayNames[0])
+        : association.modelId,
+    );
   return armorNames.length ? `关联防具：${armorNames.join("、")}` : "";
 }
 
@@ -486,8 +546,8 @@ function commitEditing(mod: InstalledModSummary, field: EditableField) {
   emit("updateMetadata", mod, patch);
 }
 
-function toggleCategory(mod: InstalledModSummary, categoryId: string, event: Event) {
-  const isSelected = (event.target as HTMLInputElement).checked;
+function toggleCategory(mod: InstalledModSummary, categoryId: string) {
+  const isSelected = !mod.categoryIds.includes(categoryId);
   const categoryIds = new Set(mod.categoryIds);
   if (isSelected) {
     categoryIds.add(categoryId);
@@ -625,14 +685,17 @@ function beginCategoryEditing(mod: InstalledModSummary) {
     return;
   }
 
+  editingCategoryGroupId.value = "";
   editingCategoryModId.value = editingCategoryModId.value === mod.id ? "" : mod.id;
 }
 
 function closeCategoryMenuWhenFocusLeaves(mod: InstalledModSummary, event: FocusEvent) {
   const categoryEditor = event.currentTarget as HTMLElement;
-  if (!categoryEditor.contains(event.relatedTarget as Node | null) && isEditingCategory(mod)) {
-    editingCategoryModId.value = "";
-  }
+  requestAnimationFrame(() => {
+    if (!categoryEditor.contains(document.activeElement) && isEditingCategory(mod)) {
+      editingCategoryModId.value = "";
+    }
+  });
 }
 
 function toggleDetails(modId: string) {
@@ -884,30 +947,88 @@ watch(
               </div>
             </td>
             <td class="mod-category branch-group-category">
-              <template v-if="branchGroupCategoryTags(branchGroupForRow(mod)).length">
-                <span
-                  v-for="category in branchGroupCategoryTags(branchGroupForRow(mod)).slice(0, 3)"
-                  :key="category.id"
-                  class="category-tag"
+              <div
+                class="category-editor"
+                @focusout="closeBranchGroupCategoryMenuWhenFocusLeaves(branchGroupForRow(mod), $event)"
+              >
+                <button
+                  type="button"
+                  class="category-tag-button"
+                  :class="{ active: editingCategoryGroupId === branchGroupForRow(mod).id }"
+                  :disabled="isRowActionDisabled()"
+                  :title="branchGroupCategoryTags(branchGroupForRow(mod)).map((tag) => tag.name).join('、') || '未分类'"
+                  :aria-label="`编辑分支组分类：${branchGroupForRow(mod).name}`"
+                  :aria-expanded="editingCategoryGroupId === branchGroupForRow(mod).id"
+                  @click="beginBranchGroupCategoryEditing(branchGroupForRow(mod))"
                 >
-                  {{ category.name }}
-                </span>
-                <span v-if="branchGroupCategoryTags(branchGroupForRow(mod)).length > 3" class="category-more">
-                  +{{ branchGroupCategoryTags(branchGroupForRow(mod)).length - 3 }}
-                </span>
-              </template>
-              <span v-else>未分类</span>
+                  <template v-if="branchGroupCategoryTags(branchGroupForRow(mod)).length">
+                    <span
+                      v-for="category in branchGroupCategoryTags(branchGroupForRow(mod))"
+                      :key="category.id"
+                      class="category-tag"
+                    >
+                      {{ category.name }}
+                    </span>
+                  </template>
+                  <span v-else class="category-tag unknown-category-tag">未分类</span>
+                </button>
+
+                <div
+                  v-if="editingCategoryGroupId === branchGroupForRow(mod).id"
+                  class="category-menu"
+                  @keydown.esc="editingCategoryGroupId = ''"
+                >
+                  <button
+                    v-for="category in props.categories"
+                    :key="category.id"
+                    type="button"
+                    class="category-option"
+                    role="checkbox"
+                    :aria-checked="
+                      branchGroupCategorySelectionState(branchGroupForRow(mod), category.id).indeterminate
+                        ? 'mixed'
+                        : branchGroupCategorySelectionState(branchGroupForRow(mod), category.id).checked
+                    "
+                    :disabled="isRowActionDisabled()"
+                    @click="toggleBranchGroupCategory(branchGroupForRow(mod), category.id)"
+                  >
+                    <span
+                      class="category-checkbox"
+                      :class="{
+                        checked: branchGroupCategorySelectionState(branchGroupForRow(mod), category.id).checked,
+                        mixed: branchGroupCategorySelectionState(branchGroupForRow(mod), category.id).indeterminate,
+                      }"
+                      aria-hidden="true"
+                    ></span>
+                    <span>{{ categoryDisplayName(category) }}</span>
+                  </button>
+                  <p v-if="!props.categories.length" class="empty-category-options">暂无分类</p>
+                  <div class="category-menu-actions">
+                    <button
+                      type="button"
+                      :disabled="!branchGroupCategoryTags(branchGroupForRow(mod)).length || isRowActionDisabled()"
+                      @click="clearBranchGroupCategories(branchGroupForRow(mod))"
+                    >
+                      清空分类
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="isRowActionDisabled()"
+                      @click="createCategoryForBranchGroup(branchGroupForRow(mod))"
+                    >
+                      新建分类
+                    </button>
+                  </div>
+                </div>
+              </div>
             </td>
             <td class="replacement-summary branch-group-replacements">
               <template v-if="branchGroupReplacementLabels(branchGroupForRow(mod)).length">
                 <span
-                  v-for="label in branchGroupReplacementLabels(branchGroupForRow(mod)).slice(0, 2)"
+                  v-for="label in branchGroupReplacementLabels(branchGroupForRow(mod))"
                   :key="label"
                 >
                   {{ label }}
-                </span>
-                <span v-if="branchGroupReplacementLabels(branchGroupForRow(mod)).length > 2" class="replacement-more">
-                  +{{ branchGroupReplacementLabels(branchGroupForRow(mod)).length - 2 }}
                 </span>
               </template>
               <span v-else>未识别到游戏内替换目标</span>
@@ -1088,15 +1209,23 @@ watch(
                 </button>
 
                 <div v-if="isEditingCategory(mod)" class="category-menu" @keydown.esc="editingCategoryModId = ''">
-                  <label v-for="category in props.categories" :key="category.id" class="category-option">
-                    <input
-                      type="checkbox"
-                      :checked="mod.categoryIds.includes(category.id)"
-                      :disabled="isRowActionDisabled()"
-                      @change="toggleCategory(mod, category.id, $event)"
-                    />
+                  <button
+                    v-for="category in props.categories"
+                    :key="category.id"
+                    type="button"
+                    class="category-option"
+                    role="checkbox"
+                    :aria-checked="mod.categoryIds.includes(category.id)"
+                    :disabled="isRowActionDisabled()"
+                    @click="toggleCategory(mod, category.id)"
+                  >
+                    <span
+                      class="category-checkbox"
+                      :class="{ checked: mod.categoryIds.includes(category.id) }"
+                      aria-hidden="true"
+                    ></span>
                     <span>{{ categoryDisplayName(category) }}</span>
-                  </label>
+                  </button>
                   <p v-if="!props.categories.length" class="empty-category-options">暂无分类</p>
                   <div class="category-menu-actions">
                     <button
@@ -1119,7 +1248,7 @@ watch(
                 class="replacement-entry-button"
                 :disabled="isRowActionDisabled()"
                 :aria-label="mod.enabled ? '查看模型替换目标，修改前需先禁用 MOD' : '修改模型替换目标'"
-                :data-tooltip="mod.enabled ? '查看替换目标，修改前需先禁用' : '修改替换目标'"
+                :title="mod.enabled ? '查看替换目标，修改前需先禁用' : '修改替换目标'"
                 @click="$emit('manageRemap', mod)"
               >
                 <span class="replacement-entry-content">
@@ -1390,20 +1519,22 @@ watch(
 .branch-group-title {
   display: flex;
   gap: 7px;
-  align-items: center;
+  align-items: flex-start;
   min-width: 0;
 }
 
 .branch-group-name {
-  width: fit-content;
+  min-width: 0;
+  width: auto;
   max-width: 100%;
+  flex: 1 1 auto;
   padding: 0;
-  overflow: hidden;
   font-size: 0.95rem;
   font-weight: 800;
+  line-height: 1.45;
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .branch-group-label {
@@ -1436,11 +1567,16 @@ watch(
 
 .branch-group-category {
   line-height: 1.8;
+  overflow-wrap: anywhere;
 }
 
 .branch-group-category .category-tag {
   display: inline-block;
   margin: 2px 3px 2px 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .category-more,
@@ -1452,9 +1588,8 @@ watch(
 
 .branch-group-replacements span {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .branch-group-counts {
@@ -1953,12 +2088,17 @@ watch(
 
 .category-option {
   display: flex;
+  width: 100%;
   min-height: 34px;
   gap: 8px;
   align-items: center;
   padding: 5px 7px;
+  border: 0;
   border-radius: 4px;
   color: #334b44;
+  background: transparent;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -1966,10 +2106,42 @@ watch(
   background: #f0f6f3;
 }
 
-.category-option input {
+.category-checkbox {
+  position: relative;
+  flex: 0 0 auto;
   width: 15px;
   height: 15px;
-  accent-color: #24745b;
+  border: 1px solid #87938f;
+  border-radius: 3px;
+  background: #ffffff;
+}
+
+.category-checkbox.checked,
+.category-checkbox.mixed {
+  border-color: #24745b;
+  background: #24745b;
+}
+
+.category-checkbox.checked::after {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  width: 4px;
+  height: 7px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.category-checkbox.mixed::after {
+  position: absolute;
+  top: 6px;
+  left: 3px;
+  width: 7px;
+  height: 2px;
+  background: #ffffff;
+  content: "";
 }
 
 .empty-category-options {
@@ -2127,8 +2299,7 @@ watch(
   font-size: 1rem;
 }
 
-.icon-button[data-tooltip]::after,
-.replacement-entry-button[data-tooltip]::after {
+.icon-button[data-tooltip]::after {
   position: absolute;
   z-index: 5;
   right: 0;
@@ -2147,9 +2318,7 @@ watch(
 }
 
 .icon-button[data-tooltip]:hover::after,
-.icon-button[data-tooltip]:focus-visible::after,
-.replacement-entry-button[data-tooltip]:hover::after,
-.replacement-entry-button[data-tooltip]:focus-visible::after {
+.icon-button[data-tooltip]:focus-visible::after {
   display: block;
 }
 

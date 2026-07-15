@@ -292,6 +292,12 @@ export interface ModDeploymentPlanFile {
   targetManagedModId: string | null;
 }
 
+export interface ModDeploymentConflict {
+  modId: string;
+  name: string;
+  conflictFiles: string[];
+}
+
 export interface ModDeploymentPlan {
   modId: string;
   name: string;
@@ -299,6 +305,7 @@ export interface ModDeploymentPlan {
   message: string;
   fileCount: number;
   files: ModDeploymentPlanFile[];
+  conflicts: ModDeploymentConflict[];
   warnings: string[];
   requiresOverwriteConfirmation: boolean;
 }
@@ -436,6 +443,13 @@ export interface ModWorkspaceSnapshot {
   branchGroups: ModBranchGroup[];
 }
 
+export interface ModLibraryOrderResult {
+  manualModIds: string[];
+  importModIds: string[];
+  appliedSource: "browseOrder" | "importOrder";
+  message: string;
+}
+
 export interface ModConflictMoveResult {
   groupId: string;
   modId: string;
@@ -477,6 +491,16 @@ export interface ModMetadataPatch {
   displayName?: string;
   note?: string;
   categoryIds?: string[];
+}
+
+export interface ModCategoryAssignment {
+  modId: string;
+  categoryIds: string[];
+}
+
+export interface ModCategoryBatchUpdateResult {
+  mods: ModMetadataUpdateResult[];
+  message: string;
 }
 
 export interface ModCategory {
@@ -523,6 +547,12 @@ export function updateModMetadata(
   });
 }
 
+export function updateModCategories(
+  assignments: ModCategoryAssignment[],
+): Promise<ModCategoryBatchUpdateResult> {
+  return invoke<ModCategoryBatchUpdateResult>("update_mod_categories", { assignments });
+}
+
 export function listModCategories(): Promise<ModCategoryList> {
   return invoke<ModCategoryList>("list_mod_categories");
 }
@@ -556,6 +586,15 @@ export function moveModLibraryItems(
     targetModIds,
     placeAfter,
   });
+}
+
+// 只保存完整的浏览顺序，不修改 MOD 文件、启用状态或冲突优先级。
+export function replaceModLibraryOrder(modIds: string[]): Promise<ModLibraryOrderResult> {
+  return invoke<ModLibraryOrderResult>("replace_mod_library_order", { modIds });
+}
+
+export function restoreModLibraryImportOrder(): Promise<ModLibraryOrderResult> {
+  return invoke<ModLibraryOrderResult>("restore_mod_library_import_order");
 }
 
 export function renameModCategory(

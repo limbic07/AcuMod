@@ -19,9 +19,16 @@ import { listenOperationProgress, type OperationProgress } from "./api/operation
 import {
   detectGameDirectory,
   getGameDirectoryStatus,
+  getGameTextSettings,
   saveGameDirectory,
+  saveGameTextLanguage,
   type GameDirectoryStatus,
 } from "./api/game";
+import {
+  localizeGameText,
+  localizeGameTexts,
+  type GameTextLanguage,
+} from "./domain/gameText";
 import {
   applyModRemap,
   applyConflictOrder,
@@ -43,6 +50,7 @@ import {
   moveModLibraryItems,
   openInstalledModFolder,
   previewApplyConflictOrder,
+  previewEnableMod,
   previewModImport,
   previewModRemap,
   previewRestoreAllMods,
@@ -50,10 +58,13 @@ import {
   renameModCategory,
   renameModBranchGroup,
   removeModsFromBranchGroup,
+  replaceModLibraryOrder,
   refreshGameModStates,
+  restoreModLibraryImportOrder,
   restoreAllMods,
   scanLegacyBoxMods,
   uninstallMod,
+  updateModCategories,
   updateModMetadata,
   type BatchModAction,
   type InstalledModList,
@@ -62,6 +73,7 @@ import {
   type LegacyBoxMod,
   type LegacyBoxScan,
   type ModConflictReport,
+  type ModDeploymentConflict,
   type ModImportPreview,
   type ModInstallResult,
   type ModLibraryStatus,
@@ -71,7 +83,9 @@ import {
   type ModelRemapGroup,
   type ModelReplacement,
   type ModCategory,
+  type ModCategoryAssignment,
   type ModBranchGroup,
+  type ModMetadataUpdateResult,
 } from "./api/modLibrary";
 
 const MANUAL_SLINGER_TARGET = "__manual_slinger_target__";
@@ -82,12 +96,15 @@ interface ConfirmationRequest {
   title: string;
   message: string;
   details?: string[];
+  conflicts?: ModDeploymentConflict[];
   confirmLabel: string;
+  cancelLabel?: string;
   tone?: ConfirmationTone;
 }
 
 const appInfo = ref<AppInfo | null>(null);
 const gameStatus = ref<GameDirectoryStatus | null>(null);
+const gameTextLanguage = ref<GameTextLanguage>("simplifiedChinese");
 const modLibraryStatus = ref<ModLibraryStatus | null>(null);
 const installedModList = ref<InstalledModList | null>(null);
 const importPreview = ref<ModImportPreview | null>(null);
@@ -120,6 +137,7 @@ const candidateGroupName = ref("");
 const candidateSelectionSection = ref<HTMLElement | null>(null);
 const appError = ref("");
 const gameError = ref("");
+const gameTextError = ref("");
 const modLibraryError = ref("");
 const importError = ref("");
 const archiveError = ref("");
@@ -127,6 +145,7 @@ const legacyBoxError = ref("");
 const deploymentError = ref("");
 const isLoadingApp = ref(false);
 const isLoadingGame = ref(false);
+const isSavingGameTextLanguage = ref(false);
 const isLoadingModLibrary = ref(false);
 const isRefreshingModViews = ref(false);
 const isPreviewingImport = ref(false);
@@ -158,15 +177,18 @@ const dragError = ref("");
 const conflictActionError = ref("");
 const isCategoryAction = ref(false);
 const isCategoryManagerOpen = ref(false);
-const pendingCategoryModId = ref("");
+const pendingCategoryModIds = ref<string[]>([]);
 const categoryError = ref("");
 const modSearchQuery = ref("");
 const modCategoryFilter = ref("all");
 const modStatusFilter = ref("all");
 const modConflictFilter = ref("all");
-const modSort = ref<"manual" | "installation" | "name" | "category" | "replacement">("manual");
+type ModSortMode = "manual" | "installation" | "name" | "category" | "replacement";
+
+const modSort = ref<ModSortMode>("manual");
 const modSortDirection = ref<"asc" | "desc">("asc");
 const reorderingModId = ref("");
+const isUpdatingModOrder = ref(false);
 const confirmationRequest = ref<ConfirmationRequest | null>(null);
 const confirmationCancelButton = ref<HTMLButtonElement | null>(null);
 let stopDragListener: (() => void) | undefined;
@@ -239,6 +261,10 @@ const gameStatusMessage = computed(() => {
 
 function gameSourceLabel(source: string) {
   return source === "autoDetection" ? "自动检测" : source === "savedConfig" ? "已保存配置" : "未设置";
+}
+
+function localizedGameText(value: string) {
+  return localizeGameText(value, gameTextLanguage.value);
 }
 
 const importStatusLabel = computed(() => {
@@ -456,9 +482,11 @@ const filteredInstalledMods = computed(() => {
         replacement.modelId,
         ...replacement.gameIds,
         ...replacement.displayNames,
+        ...localizeGameTexts(replacement.displayNames, gameTextLanguage.value),
         ...replacement.associations.flatMap((association) => [
           association.modelId,
           ...association.displayNames,
+          ...localizeGameTexts(association.displayNames, gameTextLanguage.value),
         ]),
       ]),
     ]
@@ -467,38 +495,7 @@ const filteredInstalledMods = computed(() => {
     return searchableText.includes(searchText);
   });
 });
-const displayedInstalledMods = computed(() => {
-  const mods = [...filteredInstalledMods.value];
-
-  mods.sort((left, right) => {
-    if (modSort.value === "manual") {
-      return 0;
-    }
-
-    let comparison = 0;
-    if (modSort.value === "name") {
-      comparison = left.name.localeCompare(right.name, "zh-Hans-CN");
-    } else if (modSort.value === "category") {
-      comparison =
-        visibleModCategories(left)
-          .join("、")
-          .localeCompare(visibleModCategories(right).join("、"), "zh-Hans-CN") ||
-        left.name.localeCompare(right.name, "zh-Hans-CN");
-    } else if (modSort.value === "replacement") {
-      comparison =
-        summarizeModReplacements(left).localeCompare(
-          summarizeModReplacements(right),
-          "zh-Hans-CN",
-        ) || left.name.localeCompare(right.name, "zh-Hans-CN");
-    } else {
-      comparison =
-        left.installedAtUnixSeconds - right.installedAtUnixSeconds ||
-        left.name.localeCompare(right.name, "zh-Hans-CN");
-    }
-
-    return modSortDirection.value === "asc" ? comparison : -comparison;
-  });
-
+function groupModsIntoContiguousBlocks(mods: InstalledModSummary[]) {
   const groupByModId = new Map<string, string>();
   for (const group of modBranchGroups.value) {
     for (const modId of group.modIds) {
@@ -524,6 +521,104 @@ const displayedInstalledMods = computed(() => {
     seenGroups.add(groupId);
     return groupedMods.get(groupId) ?? [];
   });
+}
+
+interface SortableModLibraryItem {
+  groupId: string | null;
+  name: string;
+  categories: string;
+  replacements: string;
+  installedAtUnixSeconds: number;
+  mods: InstalledModSummary[];
+}
+
+function sortInstalledModsForLibrary(
+  sourceMods: InstalledModSummary[],
+  sort: ModSortMode,
+  direction: "asc" | "desc",
+) {
+  if (sort === "manual") {
+    return groupModsIntoContiguousBlocks([...sourceMods]);
+  }
+
+  const sourceIds = new Set(sourceMods.map((mod) => mod.id));
+  const groupedModIds = new Set(modBranchGroups.value.flatMap((group) => group.modIds));
+  const items: SortableModLibraryItem[] = [];
+
+  // 分支组是一级列表项。自动排序时先整理为组，避免按成员排序后把组的位置拆散。
+  for (const group of modBranchGroups.value) {
+    const groupIds = new Set(group.modIds);
+    const visibleMembers = sourceMods.filter(
+      (mod) => sourceIds.has(mod.id) && groupIds.has(mod.id),
+    );
+    if (!visibleMembers.length) {
+      continue;
+    }
+    const allMembers = installedMods.value.filter((mod) => groupIds.has(mod.id));
+    const categories = [...new Set(allMembers.flatMap(visibleModCategories))]
+      .sort((left, right) => left.localeCompare(right, "zh-Hans-CN"))
+      .join("、");
+    const replacements = [...new Set(allMembers.map(summarizeModReplacements).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, "zh-Hans-CN"))
+      .join("、");
+    items.push({
+      groupId: group.id,
+      name: group.name,
+      categories,
+      replacements,
+      installedAtUnixSeconds: Math.min(...allMembers.map((mod) => mod.installedAtUnixSeconds)),
+      mods: visibleMembers,
+    });
+  }
+
+  for (const mod of sourceMods) {
+    if (groupedModIds.has(mod.id)) {
+      continue;
+    }
+    items.push({
+      groupId: null,
+      name: mod.name,
+      categories: visibleModCategories(mod).join("、"),
+      replacements: summarizeModReplacements(mod),
+      installedAtUnixSeconds: mod.installedAtUnixSeconds,
+      mods: [mod],
+    });
+  }
+
+  items.sort((left, right) => {
+    // 分支组外观和操作均不同于普通 MOD，任何自动排序下都固定放在普通 MOD 之前。
+    if (Boolean(left.groupId) !== Boolean(right.groupId)) {
+      return left.groupId ? -1 : 1;
+    }
+
+    let comparison = 0;
+    if (sort === "name") {
+      comparison = left.name.localeCompare(right.name, "zh-Hans-CN");
+    } else if (sort === "category") {
+      comparison =
+        left.categories.localeCompare(right.categories, "zh-Hans-CN") ||
+        left.name.localeCompare(right.name, "zh-Hans-CN");
+    } else if (sort === "replacement") {
+      comparison =
+        left.replacements.localeCompare(right.replacements, "zh-Hans-CN") ||
+        left.name.localeCompare(right.name, "zh-Hans-CN");
+    } else {
+      comparison =
+        left.installedAtUnixSeconds - right.installedAtUnixSeconds ||
+        left.name.localeCompare(right.name, "zh-Hans-CN");
+    }
+    return direction === "asc" ? comparison : -comparison;
+  });
+
+  return items.flatMap((item) => item.mods);
+}
+
+const displayedInstalledMods = computed(() => {
+  return sortInstalledModsForLibrary(
+    filteredInstalledMods.value,
+    modSort.value,
+    modSortDirection.value,
+  );
 });
 const enabledModCount = computed(
   () => installedMods.value.filter((installedMod) => installedMod.enabled).length,
@@ -646,7 +741,9 @@ function summarizeSharedModelTarget(target: {
     return `防具 · ${armorSetTargetLabel(target)}`;
   }
 
-  const name = target.displayNames[0] ?? target.modelId;
+  const name = target.displayNames[0]
+    ? localizedGameText(target.displayNames[0])
+    : target.modelId;
   return `${modelKindLabel(target.modelKind)} · ${target.subKind} · ${name}`;
 }
 
@@ -661,7 +758,10 @@ function summarizeModelNames(replacement: ModelReplacement) {
       : "已识别模型 ID，当前无可用游戏名称";
   }
 
-  const visibleNames = replacement.displayNames.slice(0, 4);
+  const visibleNames = localizeGameTexts(
+    replacement.displayNames.slice(0, 4),
+    gameTextLanguage.value,
+  );
   const remainingCount = replacement.displayNames.length - visibleNames.length;
   return remainingCount > 0
     ? `${visibleNames.join("、")}，另有 ${remainingCount} 个共用模型名称`
@@ -670,8 +770,12 @@ function summarizeModelNames(replacement: ModelReplacement) {
 
 function armorSetTargetLabel(target: { displayNames: string[]; modelId: string }) {
   for (const name of target.displayNames) {
-    const setName = name.replace(/[·・](?:头部|身体|腕部|腰部|脚部)$/u, "");
-    if (setName !== name && setName) {
+    const localizedName = localizedGameText(name);
+    const setName = localizedName.replace(
+      /[·・‧](?:头部|身体|腕部|腰部|脚部|頭部|身體|腕部|腰部|腳部)$/u,
+      "",
+    );
+    if (setName !== localizedName && setName) {
       return setName;
     }
   }
@@ -682,7 +786,11 @@ function armorSetTargetLabel(target: { displayNames: string[]; modelId: string }
 function summarizeModelAssociations(replacement: ModelReplacement) {
   const armorNames = replacement.associations
     .filter((association) => association.modelKind === "armor")
-    .map((association) => association.displayNames[0] ?? association.modelId);
+    .map((association) =>
+      association.displayNames[0]
+        ? localizedGameText(association.displayNames[0])
+        : association.modelId,
+    );
   return armorNames.length ? `关联防具：${armorNames.join("、")}` : "";
 }
 
@@ -732,6 +840,32 @@ async function loadGameStatus() {
     gameError.value = userFacingError(error);
   } finally {
     isLoadingGame.value = false;
+  }
+}
+
+async function loadGameTextSettings() {
+  try {
+    gameTextLanguage.value = (await getGameTextSettings()).language;
+    gameTextError.value = "";
+  } catch (error) {
+    gameTextError.value = userFacingError(error);
+  }
+}
+
+async function updateGameTextLanguage(event: Event) {
+  const language = (event.target as HTMLSelectElement).value as GameTextLanguage;
+  const previousLanguage = gameTextLanguage.value;
+  gameTextLanguage.value = language;
+  isSavingGameTextLanguage.value = true;
+  gameTextError.value = "";
+
+  try {
+    gameTextLanguage.value = (await saveGameTextLanguage(language)).language;
+  } catch (error) {
+    gameTextLanguage.value = previousLanguage;
+    gameTextError.value = userFacingError(error);
+  } finally {
+    isSavingGameTextLanguage.value = false;
   }
 }
 
@@ -788,7 +922,7 @@ async function loadModViewsFromSnapshot() {
 
 async function refreshCurrentWorkspace() {
   if (activeView.value === "settings") {
-    await Promise.all([loadGameStatus(), loadAppInfo()]);
+    await Promise.all([loadGameStatus(), loadGameTextSettings(), loadAppInfo()]);
     return;
   }
 
@@ -837,23 +971,7 @@ async function saveModMetadata(
 
   try {
     const result = await updateModMetadata(mod.id, patch);
-    if (installedModList.value) {
-      installedModList.value = {
-        ...installedModList.value,
-        mods: installedModList.value.mods.map((installed) =>
-          installed.id === result.modId
-            ? {
-                ...installed,
-                name: result.name,
-                originalName: result.originalName,
-                note: result.note,
-                categoryIds: result.categoryIds,
-                categories: result.categories,
-              }
-            : installed,
-        ),
-      };
-    }
+    applyMetadataUpdateResults([result]);
     syncCategoryFilter();
     return true;
   } catch (error) {
@@ -865,8 +983,82 @@ async function saveModMetadata(
   }
 }
 
+function applyMetadataUpdateResults(results: ModMetadataUpdateResult[]) {
+  if (!installedModList.value) {
+    return;
+  }
+  const resultByModId = new Map(results.map((result) => [result.modId, result]));
+  installedModList.value = {
+    ...installedModList.value,
+    mods: installedModList.value.mods.map((installed) => {
+      const result = resultByModId.get(installed.id);
+      return result
+        ? {
+            ...installed,
+            name: result.name,
+            originalName: result.originalName,
+            note: result.note,
+            categoryIds: result.categoryIds,
+            categories: result.categories,
+          }
+        : installed;
+    }),
+  };
+}
+
+async function saveModCategoryAssignments(
+  assignments: ModCategoryAssignment[],
+  busyId: string,
+): Promise<boolean> {
+  metadataSavingModId.value = busyId;
+  metadataErrorModId.value = "";
+  metadataError.value = "";
+  categoryError.value = "";
+  try {
+    const result = await updateModCategories(assignments);
+    applyMetadataUpdateResults(result.mods);
+    syncCategoryFilter();
+    return true;
+  } catch (error) {
+    metadataErrorModId.value = busyId;
+    metadataError.value = userFacingError(error);
+    categoryError.value = metadataError.value;
+    return false;
+  } finally {
+    metadataSavingModId.value = "";
+  }
+}
+
+async function updateBranchGroupCategory(
+  group: ModBranchGroup,
+  categoryId: string | null,
+  selected: boolean,
+) {
+  const memberIds = new Set(group.modIds);
+  const assignments = installedMods.value
+    .filter((mod) => memberIds.has(mod.id))
+    .map((mod) => {
+      const categoryIds = new Set(categoryId === null ? [] : mod.categoryIds);
+      if (categoryId !== null) {
+        if (selected) {
+          categoryIds.add(categoryId);
+        } else {
+          categoryIds.delete(categoryId);
+        }
+      }
+      return { modId: mod.id, categoryIds: [...categoryIds] };
+    });
+  await saveModCategoryAssignments(assignments, group.id);
+}
+
 function openCategoryManager(mod?: InstalledModSummary) {
-  pendingCategoryModId.value = mod?.id ?? "";
+  pendingCategoryModIds.value = mod ? [mod.id] : [];
+  categoryError.value = "";
+  isCategoryManagerOpen.value = true;
+}
+
+function openCategoryManagerForBranchGroup(group: ModBranchGroup) {
+  pendingCategoryModIds.value = [...group.modIds];
   categoryError.value = "";
   isCategoryManagerOpen.value = true;
 }
@@ -877,7 +1069,7 @@ function closeCategoryManager() {
   }
 
   isCategoryManagerOpen.value = false;
-  pendingCategoryModId.value = "";
+  pendingCategoryModIds.value = [];
   categoryError.value = "";
 }
 
@@ -891,14 +1083,26 @@ async function createCategory(name: string, parentId: string | null) {
     modCategories.value = [...modCategories.value, category].sort((left, right) =>
       left.name.localeCompare(right.name, "zh-Hans-CN"),
     );
-    const targetMod = installedMods.value.find((mod) => mod.id === pendingCategoryModId.value);
+    const targetModIds = new Set(pendingCategoryModIds.value);
+    const targets = installedMods.value.filter((mod) => targetModIds.has(mod.id));
 
-    if (targetMod) {
-      shouldCloseDialog = await saveModMetadata(targetMod, {
-        categoryIds: [...new Set([...targetMod.categoryIds, category.id])],
+    if (targets.length === 1) {
+      shouldCloseDialog = await saveModMetadata(targets[0], {
+        categoryIds: [...new Set([...targets[0].categoryIds, category.id])],
       });
       if (!shouldCloseDialog) {
         categoryError.value = "分类已创建，但未能应用到目标 MOD。";
+      }
+    } else if (targets.length > 1) {
+      shouldCloseDialog = await saveModCategoryAssignments(
+        targets.map((mod) => ({
+          modId: mod.id,
+          categoryIds: [...new Set([...mod.categoryIds, category.id])],
+        })),
+        "branch-group-category",
+      );
+      if (!shouldCloseDialog) {
+        categoryError.value = "分类已创建，但未能应用到目标分支组。";
       }
     }
   } catch (error) {
@@ -1040,6 +1244,64 @@ function reorderInstalledModsInMemory(
     : Math.min(...targetIndexes);
   remainingMods.splice(insertIndex, 0, ...movedMods);
   installedModList.value = { ...modList, mods: remainingMods };
+}
+
+function applyInstalledModOrderInMemory(modIds: string[]) {
+  const modList = installedModList.value;
+  if (!modList) {
+    return;
+  }
+  const modsById = new Map(modList.mods.map((mod) => [mod.id, mod]));
+  const orderedMods = modIds
+    .map((modId) => modsById.get(modId))
+    .filter((mod): mod is InstalledModSummary => Boolean(mod));
+  if (orderedMods.length === modList.mods.length) {
+    installedModList.value = { ...modList, mods: orderedMods };
+  }
+}
+
+async function applyCurrentSortAsManualOrder() {
+  if (modSort.value === "manual" || isUpdatingModOrder.value || !installedMods.value.length) {
+    return;
+  }
+  isUpdatingModOrder.value = true;
+  batchOperationSummary.value = "";
+  try {
+    // 搜索和筛选只影响可见结果；持久化时始终提交完整 MOD 库，避免遗漏隐藏项。
+    const completeOrder = sortInstalledModsForLibrary(
+      installedMods.value,
+      modSort.value,
+      modSortDirection.value,
+    ).map((mod) => mod.id);
+    const result = await replaceModLibraryOrder(completeOrder);
+    applyInstalledModOrderInMemory(result.manualModIds);
+    modSort.value = "manual";
+    batchOperationSummary.value = result.message;
+    modLibraryError.value = "";
+  } catch (error) {
+    modLibraryError.value = userFacingError(error);
+  } finally {
+    isUpdatingModOrder.value = false;
+  }
+}
+
+async function restoreOriginalImportOrder() {
+  if (isUpdatingModOrder.value || !installedMods.value.length) {
+    return;
+  }
+  isUpdatingModOrder.value = true;
+  batchOperationSummary.value = "";
+  try {
+    const result = await restoreModLibraryImportOrder();
+    applyInstalledModOrderInMemory(result.manualModIds);
+    modSort.value = "manual";
+    batchOperationSummary.value = result.message;
+    modLibraryError.value = "";
+  } catch (error) {
+    modLibraryError.value = userFacingError(error);
+  } finally {
+    isUpdatingModOrder.value = false;
+  }
 }
 
 function openConflictManager() {
@@ -1487,6 +1749,22 @@ async function enableInstalledMod(mod: InstalledModSummary) {
 
   try {
     deploymentError.value = "";
+    const plan = await previewEnableMod(mod.id);
+    if (plan.conflicts.length) {
+      const conflictFileCount = new Set(
+        plan.conflicts.flatMap((conflict) => conflict.conflictFiles),
+      ).size;
+      const shouldEnable = await requestConfirmation({
+        title: "确认启用冲突 MOD",
+        message: `“${mod.name}”与 ${plan.conflicts.length} 个已启用 MOD 存在 ${conflictFileCount} 个冲突文件。启用后，该 MOD 将获得更高优先级并覆盖这些文件。`,
+        conflicts: plan.conflicts,
+        confirmLabel: "确认启用",
+        cancelLabel: "暂不启用",
+      });
+      if (!shouldEnable) {
+        return;
+      }
+    }
     await enableMod(mod.id, true);
     await loadModViewsFromSnapshot();
   } catch (error) {
@@ -1620,7 +1898,9 @@ function remapTargetOptionLabel(group: ModelRemapGroup, targetId: string) {
     return setLabel.includes(target.modelId) ? setLabel : `${setLabel} · ${target.modelId}`;
   }
 
-  const displayName = target.displayNames[0] ?? target.modelId;
+  const displayName = target.displayNames[0]
+    ? localizedGameText(target.displayNames[0])
+    : target.modelId;
   const sharedCount = Math.max(target.displayNames.length - 1, 0);
   return sharedCount ? `${displayName} 等 ${target.displayNames.length} 个名称 · ${target.modelId}` : `${displayName} · ${target.modelId}`;
 }
@@ -1633,7 +1913,9 @@ function remapGroupSourceLabel(group: ModelRemapGroup) {
     });
   }
 
-  return group.sourceDisplayNames[0] ?? group.sourceModelIds.join(" + ");
+  return group.sourceDisplayNames[0]
+    ? localizedGameText(group.sourceDisplayNames[0])
+    : group.sourceModelIds.join(" + ");
 }
 
 function selectRemapGroup(groupKey: string) {
@@ -1911,6 +2193,7 @@ async function applySelectedConflictOrder() {
 onMounted(() => {
   void loadAppInfo();
   void loadGameStatus();
+  void loadGameTextSettings();
   void loadModLibraryStatus();
   void listenOperationProgress(updateOperationStatus)
     .then((unlisten) => {
@@ -1982,7 +2265,7 @@ onBeforeUnmount(() => {
       />
       <OperationStatusBar :operation="activeOperation" />
 
-      <div class="workspace-content">
+      <div class="workspace-content" :class="{ 'library-content': activeView === 'library' }">
         <div v-show="activeView === 'settings'" class="workspace-page">
           <section class="panel">
       <div class="panel-heading">
@@ -2033,6 +2316,27 @@ onBeforeUnmount(() => {
           <dd>{{ gameStatus.configPath }}</dd>
         </div>
       </dl>
+          </section>
+
+          <section class="panel secondary">
+            <div class="panel-heading">
+              <div>
+                <h2>游戏文本语言</h2>
+                <p>切换武器、防具等游戏内容名称，不改变 Acumod 界面语言。</p>
+              </div>
+              <label class="game-text-language-control">
+                <span>名称语言</span>
+                <select
+                  :value="gameTextLanguage"
+                  :disabled="isSavingGameTextLanguage"
+                  @change="updateGameTextLanguage"
+                >
+                  <option value="simplifiedChinese">简体中文</option>
+                  <option value="traditionalChinese">繁體中文</option>
+                </select>
+              </label>
+            </div>
+            <p v-if="gameTextError" class="error settings-inline-error">{{ gameTextError }}</p>
           </section>
 
           <section class="panel secondary">
@@ -2525,9 +2829,10 @@ onBeforeUnmount(() => {
           </section>
         </div>
 
-        <div v-show="activeView === 'library'" class="workspace-page">
-          <section class="panel">
-      <div class="preview-block">
+        <div v-show="activeView === 'library'" class="workspace-page library-workspace">
+          <section class="panel library-panel">
+      <div class="preview-block library-preview">
+        <div class="library-controls">
         <div class="section-title-row">
           <h3>已安装 MOD</h3>
           <div class="section-actions">
@@ -2559,6 +2864,7 @@ onBeforeUnmount(() => {
         </div>
         <ModLibraryToolbar
           :is-category-action="isCategoryAction"
+          :is-order-action="isUpdatingModOrder"
           :search-query="modSearchQuery"
           :category-filter="modCategoryFilter"
           :status-filter="modStatusFilter"
@@ -2573,15 +2879,19 @@ onBeforeUnmount(() => {
           @update-conflict-filter="modConflictFilter = $event"
           @update-sort="modSort = $event"
           @update-sort-direction="modSortDirection = $event"
+          @apply-sort="applyCurrentSortAsManualOrder"
+          @restore-import-order="restoreOriginalImportOrder"
         />
         <p v-if="categoryError && !isCategoryManagerOpen" class="error">{{ categoryError }}</p>
         <p v-if="installedMods.length" class="hint">
           显示 {{ displayedInstalledMods.length }} / {{ installedMods.length }} 个 MOD；手动排序只影响 MOD 库浏览顺序，不影响冲突优先级。
         </p>
+        </div>
         <ModLibraryTable
           :mods="displayedInstalledMods"
           :all-mods="installedMods"
           :branch-groups="modBranchGroups"
+          :game-text-language="gameTextLanguage"
           :installed-mod-count="installedMods.length"
           :categories="modCategories"
           :conflicting-mod-ids="conflictingModIds"
@@ -2592,11 +2902,13 @@ onBeforeUnmount(() => {
           :metadata-saving-mod-id="metadataSavingModId"
           :metadata-error-mod-id="metadataErrorModId"
           :metadata-error="metadataError"
-          :can-reorder="modSort === 'manual' && !reorderingModId"
+          :can-reorder="modSort === 'manual' && !reorderingModId && !isUpdatingModOrder"
           :reordering-mod-id="reorderingModId"
           :updating-branch-groups="isUpdatingBranchGroups"
           @update-metadata="saveModMetadata"
           @create-category="openCategoryManager"
+          @update-branch-group-category="updateBranchGroupCategory"
+          @create-category-for-branch-group="openCategoryManagerForBranchGroup"
           @open-folder="showInstalledModFolder"
           @enable="enableInstalledMod"
           @disable="disableInstalledMod"
@@ -2850,9 +3162,20 @@ onBeforeUnmount(() => {
       <ul v-if="confirmationRequest.details?.length" class="compact-list confirmation-details">
         <li v-for="detail in confirmationRequest.details" :key="detail">{{ detail }}</li>
       </ul>
+      <div v-if="confirmationRequest.conflicts?.length" class="enable-conflict-list">
+        <details v-for="conflict in confirmationRequest.conflicts" :key="conflict.modId">
+          <summary>
+            <strong>{{ conflict.name }}</strong>
+            <span>{{ conflict.conflictFiles.length }} 个冲突文件</span>
+          </summary>
+          <ul>
+            <li v-for="file in conflict.conflictFiles" :key="file">{{ file }}</li>
+          </ul>
+        </details>
+      </div>
       <div class="section-actions">
         <button ref="confirmationCancelButton" type="button" class="secondary-button" @click="finishConfirmation(false)">
-          暂不操作
+          {{ confirmationRequest.cancelLabel ?? "暂不操作" }}
         </button>
         <button
           type="button"
@@ -2913,11 +3236,49 @@ onBeforeUnmount(() => {
   overflow: visible;
 }
 
+.workspace-content.library-content {
+  padding: 0 0 44px;
+}
+
 .workspace-page {
   width: 100%;
   max-width: 1180px;
   min-width: 0;
   margin: 0 auto;
+}
+
+.workspace-page.library-workspace {
+  max-width: none;
+  margin: 0;
+}
+
+.library-panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.library-preview {
+  gap: 0;
+  margin-top: 0;
+}
+
+.library-controls {
+  display: grid;
+  gap: 10px;
+  padding: 20px 24px 12px;
+}
+
+.library-preview :deep(.mod-table-region) {
+  margin-top: 0;
+}
+
+.library-preview :deep(.batch-toolbar),
+.library-preview :deep(.mod-table-scroll) {
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
 }
 
 h1,
@@ -2993,6 +3354,28 @@ h2 {
 
 .panel-heading.compact {
   align-items: center;
+}
+
+.game-text-language-control {
+  display: grid;
+  min-width: 180px;
+  gap: 6px;
+  color: #52645f;
+  font-size: 0.8rem;
+}
+
+.game-text-language-control select {
+  min-height: 40px;
+  padding: 0 34px 0 10px;
+  border: 1px solid #bdccc7;
+  border-radius: 4px;
+  color: #203b34;
+  background: #ffffff;
+  font: inherit;
+}
+
+.settings-inline-error {
+  margin-top: 12px;
 }
 
 .path-form {
@@ -3789,6 +4172,52 @@ dd {
 
 .confirmation-details li::marker {
   color: #24745b;
+}
+
+.enable-conflict-list {
+  display: grid;
+  max-height: min(360px, 48vh);
+  overflow: auto;
+  border-top: 1px solid #e1e9e6;
+}
+
+.enable-conflict-list details {
+  border-bottom: 1px solid #e1e9e6;
+}
+
+.enable-conflict-list summary {
+  display: flex;
+  min-height: 44px;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  color: #334b44;
+  cursor: pointer;
+}
+
+.enable-conflict-list summary strong {
+  overflow-wrap: anywhere;
+}
+
+.enable-conflict-list summary span {
+  flex: none;
+  color: #8a5a13;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.enable-conflict-list ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 4px 8px 12px 24px;
+  color: #52645f;
+  font-size: 0.76rem;
+}
+
+.enable-conflict-list li {
+  overflow-wrap: anywhere;
 }
 
 button.danger {

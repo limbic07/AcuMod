@@ -37,7 +37,7 @@ const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 16;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 16;
 const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
-const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 1;
+const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 2;
 const MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION: u32 = 1;
 const MOD_BRANCH_GROUP_NAME_LIMIT: usize = 120;
 const NESTED_ARCHIVE_MAX_DEPTH: usize = 2;
@@ -184,6 +184,16 @@ pub struct InstalledModSummary {
     pub model_remap_count: usize,
 }
 
+/// MOD 库浏览顺序更新结果；只描述界面顺序，不参与部署或冲突优先级。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModLibraryOrderResult {
+    pub manual_mod_ids: Vec<String>,
+    pub import_mod_ids: Vec<String>,
+    pub applied_source: String,
+    pub message: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModRemapDetails {
@@ -266,6 +276,15 @@ pub struct ModDeploymentPlanFile {
     pub target_managed_mod_id: Option<String>,
 }
 
+/// 启用前按已启用 MOD 汇总的真实路径冲突，供前端确认框分组展示。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDeploymentConflict {
+    pub mod_id: String,
+    pub name: String,
+    pub conflict_files: Vec<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModDeploymentPlan {
@@ -275,6 +294,7 @@ pub struct ModDeploymentPlan {
     pub message: String,
     pub file_count: usize,
     pub files: Vec<ModDeploymentPlanFile>,
+    pub conflicts: Vec<ModDeploymentConflict>,
     pub warnings: Vec<String>,
     pub requires_overwrite_confirmation: bool,
 }
@@ -505,6 +525,20 @@ pub struct ModMetadataUpdateResult {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCategoryAssignment {
+    pub mod_id: String,
+    pub category_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCategoryBatchUpdateResult {
+    pub mods: Vec<ModMetadataUpdateResult>,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModCategory {
@@ -643,8 +677,11 @@ struct ConflictOrderStore {
 struct ModLibraryOrderStore {
     #[serde(default = "default_mod_library_order_store_schema_version")]
     schema_version: u32,
+    /// `modIds` 是第一版字段名，反序列化后保留用户已有的手动顺序。
+    #[serde(default, alias = "modIds")]
+    manual_mod_ids: Vec<String>,
     #[serde(default)]
-    mod_ids: Vec<String>,
+    import_mod_ids: Vec<String>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -2566,6 +2603,69 @@ pub fn move_mod_library_items(
     update_workspace_snapshot_after_mod_changes(&paths, &[], &[])
 }
 
+/// 使用完整 MOD ID 列表替换手动浏览顺序，不修改原始导入顺序。
+pub fn replace_mod_library_order(
+    app: &tauri::AppHandle,
+    mod_ids: Vec<String>,
+) -> Result<ModLibraryOrderResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let installation_order = current_mod_library_installation_order(&paths)?;
+    replace_mod_library_order_from(&paths.installed_path, mod_ids, &installation_order)?;
+    let snapshot_warning = update_workspace_snapshot_after_mod_changes(&paths, &[], &[]).err();
+    let store = read_mod_library_order_store(&paths.installed_path)?;
+    Ok(ModLibraryOrderResult {
+        manual_mod_ids: store.manual_mod_ids,
+        import_mod_ids: store.import_mod_ids,
+        applied_source: "browseOrder".to_string(),
+        message: snapshot_warning.map_or_else(
+            || "已将当前排序保存为手动顺序。".to_string(),
+            |_| "手动顺序已保存，工作区快照将在下次读取时重建。".to_string(),
+        ),
+    })
+}
+
+/// 将手动浏览顺序恢复为最早导入在上、最新导入在下。
+pub fn restore_mod_library_import_order(
+    app: &tauri::AppHandle,
+) -> Result<ModLibraryOrderResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let installation_order = current_mod_library_installation_order(&paths)?;
+    restore_mod_library_import_order_from(&paths.installed_path, &installation_order)?;
+    let snapshot_warning = update_workspace_snapshot_after_mod_changes(&paths, &[], &[]).err();
+    let store = read_mod_library_order_store(&paths.installed_path)?;
+    Ok(ModLibraryOrderResult {
+        manual_mod_ids: store.manual_mod_ids,
+        import_mod_ids: store.import_mod_ids,
+        applied_source: "importOrder".to_string(),
+        message: snapshot_warning.map_or_else(
+            || "已恢复为原始导入顺序。".to_string(),
+            |_| "导入顺序已恢复，工作区快照将在下次读取时重建。".to_string(),
+        ),
+    })
+}
+
+fn current_mod_library_installation_order(paths: &LibraryPaths) -> Result<Vec<String>, String> {
+    if let Some(stored) = read_stored_workspace_snapshot(&paths.workspace_snapshot_path)? {
+        return Ok(installation_mod_library_order(
+            &stored.snapshot.installed_mods.mods,
+        ));
+    }
+
+    let mut entries = load_all_installed_manifests(&paths.installed_path)?
+        .into_iter()
+        .map(|context| {
+            (
+                context.manifest.id,
+                context.manifest.installed_at_unix_seconds,
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    Ok(entries.into_iter().map(|entry| entry.0).collect())
+}
+
 /// 将至少两个现有 MOD 组织为一个分支组；MOD 本身仍保持独立部署和冲突记录。
 pub fn create_mod_branch_group(
     app: &tauri::AppHandle,
@@ -2742,6 +2842,68 @@ pub fn update_mod_metadata(
             .push_str(&format!(" 工作区快照更新失败，请手动刷新：{error}"));
     }
     Ok(result)
+}
+
+/// 一次保存多个分支的分类，并只在全部参数验证通过后开始写入清单。
+pub fn update_mod_categories(
+    app: &tauri::AppHandle,
+    assignments: Vec<ModCategoryAssignment>,
+) -> Result<ModCategoryBatchUpdateResult, String> {
+    if assignments.is_empty() {
+        return Err("至少需要选择一个 MOD。".to_string());
+    }
+
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let category_store = load_or_initialize_mod_category_store(&paths)?;
+    let mut seen_mod_ids = HashSet::new();
+    let mut pending_updates = Vec::with_capacity(assignments.len());
+
+    for assignment in assignments {
+        validate_mod_id(&assignment.mod_id)?;
+        if !seen_mod_ids.insert(assignment.mod_id.clone()) {
+            return Err(format!("MOD 分类更新中包含重复项目：{}", assignment.mod_id));
+        }
+        let category_ids = resolve_category_ids(&category_store, &assignment.category_ids)?;
+        let context = load_installed_manifest(&paths.installed_path, &assignment.mod_id)?;
+        pending_updates.push((context, category_ids));
+    }
+
+    let mut results = Vec::with_capacity(pending_updates.len());
+    for (mut context, category_ids) in pending_updates {
+        context.manifest.category_ids = category_ids;
+        context.manifest.category_override = None;
+        context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+        save_manifest(&context.manifest_path, &context.manifest)?;
+
+        let categories = resolve_mod_categories(&category_store, &context.manifest.category_ids);
+        results.push(ModMetadataUpdateResult {
+            mod_id: context.manifest.id.clone(),
+            name: manifest_display_name(&context.manifest),
+            original_name: context.manifest.name.clone(),
+            note: context.manifest.note.clone(),
+            category_ids: categories
+                .iter()
+                .map(|category| category.id.clone())
+                .collect(),
+            categories,
+            message: "MOD 分类已保存。".to_string(),
+        });
+    }
+
+    let changed_mod_ids = results
+        .iter()
+        .map(|result| result.mod_id.clone())
+        .collect::<Vec<_>>();
+    let mut message = format!("已更新 {} 个 MOD 的分类。", results.len());
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(&paths, &changed_mod_ids, &[]) {
+        message.push_str(&format!(" 工作区快照更新失败，请手动刷新：{error}"));
+    }
+
+    Ok(ModCategoryBatchUpdateResult {
+        mods: results,
+        message,
+    })
 }
 
 pub fn list_mod_categories(app: &tauri::AppHandle) -> Result<ModCategoryList, String> {
@@ -6881,6 +7043,8 @@ fn build_deployment_plan(
     let mut requires_overwrite_confirmation = false;
 
     let effective_files = effective_installed_files_for_context(context)?;
+    let conflicts =
+        enabled_mod_conflicts_for_files(installed_root, &context.manifest.id, &effective_files)?;
     for file in &effective_files {
         let source_path = source_path_for_installed_file(context, &file.installed_file)?;
         preview_mrl3_rewrite_count(&source_path, file)?;
@@ -6946,9 +7110,84 @@ fn build_deployment_plan(
         message: message.to_string(),
         file_count: effective_files.len(),
         files,
+        conflicts,
         warnings,
         requires_overwrite_confirmation,
     })
+}
+
+fn enabled_mod_conflicts_for_files(
+    installed_root: &Path,
+    current_mod_id: &str,
+    effective_files: &[EffectiveInstalledModFile],
+) -> Result<Vec<ModDeploymentConflict>, String> {
+    let current_paths = effective_files
+        .iter()
+        .map(|file| {
+            (
+                conflict_path_key(&file.deploy_relative_path),
+                file.deploy_relative_path.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    let mut conflicts = Vec::new();
+
+    if let Some(stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        for entry in stored
+            .mod_index
+            .iter()
+            .filter(|entry| entry.enabled && entry.mod_id != current_mod_id)
+        {
+            let mut conflict_files = entry
+                .effective_files
+                .iter()
+                .filter_map(|path| current_paths.get(&conflict_path_key(path)).cloned())
+                .collect::<Vec<_>>();
+            conflict_files.sort_by_key(|path| conflict_path_key(path));
+            conflict_files
+                .dedup_by(|left, right| conflict_path_key(left) == conflict_path_key(right));
+            if !conflict_files.is_empty() {
+                conflicts.push(ModDeploymentConflict {
+                    mod_id: entry.mod_id.clone(),
+                    name: entry.name.clone(),
+                    conflict_files,
+                });
+            }
+        }
+    } else {
+        for other in load_all_installed_manifests(installed_root)? {
+            if !other.manifest.enabled || other.manifest.id == current_mod_id {
+                continue;
+            }
+            let mut conflict_files = effective_installed_files_for_context(&other)?
+                .iter()
+                .filter_map(|file| {
+                    current_paths
+                        .get(&conflict_path_key(&file.deploy_relative_path))
+                        .cloned()
+                })
+                .collect::<Vec<_>>();
+            conflict_files.sort_by_key(|path| conflict_path_key(path));
+            conflict_files
+                .dedup_by(|left, right| conflict_path_key(left) == conflict_path_key(right));
+            if !conflict_files.is_empty() {
+                conflicts.push(ModDeploymentConflict {
+                    mod_id: other.manifest.id.clone(),
+                    name: manifest_display_name(&other.manifest),
+                    conflict_files,
+                });
+            }
+        }
+    }
+
+    conflicts.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.mod_id.cmp(&right.mod_id))
+    });
+    Ok(conflicts)
 }
 
 fn load_installed_manifest(
@@ -7207,7 +7446,8 @@ fn read_mod_library_order_store(installed_root: &Path) -> Result<ModLibraryOrder
     if !store_path.exists() {
         return Ok(ModLibraryOrderStore {
             schema_version: default_mod_library_order_store_schema_version(),
-            mod_ids: Vec::new(),
+            manual_mod_ids: Vec::new(),
+            import_mod_ids: Vec::new(),
         });
     }
 
@@ -7217,14 +7457,12 @@ fn read_mod_library_order_store(installed_root: &Path) -> Result<ModLibraryOrder
             store_path.display()
         )
     })?;
-    let mut store = serde_json::from_str::<ModLibraryOrderStore>(&store_json).map_err(|error| {
+    serde_json::from_str::<ModLibraryOrderStore>(&store_json).map_err(|error| {
         format!(
             "Could not parse MOD library order store {}: {error}",
             store_path.display()
         )
-    })?;
-    store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
-    Ok(store)
+    })
 }
 
 fn save_mod_library_order_store(
@@ -7250,29 +7488,54 @@ fn save_mod_library_order_store(
     })
 }
 
-fn normalized_mod_library_order(
-    store: &ModLibraryOrderStore,
-    mods: &[InstalledModSummary],
-) -> Vec<String> {
-    let known_mod_ids = mods
+fn installation_mod_library_order(mods: &[InstalledModSummary]) -> Vec<String> {
+    let mut ordered = mods.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.installed_at_unix_seconds
+            .cmp(&right.installed_at_unix_seconds)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    ordered
+        .into_iter()
+        .map(|installed_mod| installed_mod.id.clone())
+        .collect()
+}
+
+fn normalized_order_ids(stored_ids: &[String], installation_order: &[String]) -> Vec<String> {
+    let installed_ids = installation_order
         .iter()
-        .map(|installed_mod| installed_mod.id.as_str())
+        .map(String::as_str)
         .collect::<HashSet<_>>();
     let mut seen = HashSet::new();
-    let mut order = Vec::new();
-
-    for mod_id in &store.mod_ids {
-        if known_mod_ids.contains(mod_id.as_str()) && seen.insert(mod_id.as_str()) {
-            order.push(mod_id.clone());
+    let mut normalized = Vec::with_capacity(installation_order.len());
+    for mod_id in stored_ids {
+        if installed_ids.contains(mod_id.as_str()) && seen.insert(mod_id.as_str()) {
+            normalized.push(mod_id.clone());
         }
     }
-    for installed_mod in mods {
-        if seen.insert(installed_mod.id.as_str()) {
-            order.push(installed_mod.id.clone());
+    for mod_id in installation_order {
+        if seen.insert(mod_id.as_str()) {
+            normalized.push(mod_id.clone());
         }
     }
+    normalized
+}
 
-    order
+fn normalized_mod_library_orders(
+    store: &ModLibraryOrderStore,
+    mods: &[InstalledModSummary],
+) -> (Vec<String>, Vec<String>) {
+    let installation_order = installation_mod_library_order(mods);
+    normalized_mod_library_orders_from_installation(store, &installation_order)
+}
+
+fn normalized_mod_library_orders_from_installation(
+    store: &ModLibraryOrderStore,
+    installation_order: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let import_order = normalized_order_ids(&store.import_mod_ids, installation_order);
+    let manual_order = normalized_order_ids(&store.manual_mod_ids, &import_order);
+    (manual_order, import_order)
 }
 
 fn apply_mod_library_order(
@@ -7280,13 +7543,17 @@ fn apply_mod_library_order(
     mods: &mut Vec<InstalledModSummary>,
 ) -> Result<(), String> {
     let mut store = read_mod_library_order_store(installed_root)?;
-    let order = normalized_mod_library_order(&store, mods);
-    if store.mod_ids != order {
+    let (manual_order, import_order) = normalized_mod_library_orders(&store, mods);
+    if store.schema_version != MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION
+        || store.manual_mod_ids != manual_order
+        || store.import_mod_ids != import_order
+    {
         store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
-        store.mod_ids = order.clone();
+        store.manual_mod_ids = manual_order.clone();
+        store.import_mod_ids = import_order;
         save_mod_library_order_store(installed_root, &store)?;
     }
-    let order_index = order
+    let order_index = manual_order
         .iter()
         .enumerate()
         .map(|(index, mod_id)| (mod_id.as_str(), index))
@@ -7344,17 +7611,22 @@ fn move_mod_library_items_from(
     }
 
     let mut store = read_mod_library_order_store(installed_root)?;
-    let has_all_items = source_ids
-        .iter()
-        .chain(target_ids.iter())
-        .all(|mod_id| store.mod_ids.iter().any(|stored_id| stored_id == mod_id));
-    let mut order = if has_all_items {
+    let has_all_items = source_ids.iter().chain(target_ids.iter()).all(|mod_id| {
+        store
+            .manual_mod_ids
+            .iter()
+            .any(|stored_id| stored_id == mod_id)
+    });
+    let mut order = if has_all_items
+        && store.schema_version == MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION
+        && !store.import_mod_ids.is_empty()
+    {
         // The list view persists a complete order. Reuse it so one drag does not
         // rescan every installed MOD and its model-recognition data.
-        store.mod_ids.clone()
+        store.manual_mod_ids.clone()
     } else {
         let installed_mods = list_installed_mods_from(installed_root)?.mods;
-        normalized_mod_library_order(&store, &installed_mods)
+        normalized_mod_library_orders(&store, &installed_mods).0
     };
     let moved_mod_ids = order
         .iter()
@@ -7380,15 +7652,62 @@ fn move_mod_library_items_from(
     };
     order.splice(insert_index..insert_index, moved_mod_ids);
     store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
-    store.mod_ids = order;
+    store.manual_mod_ids = order;
+    save_mod_library_order_store(installed_root, &store)
+}
+
+fn replace_mod_library_order_from(
+    installed_root: &Path,
+    mod_ids: Vec<String>,
+    installation_order: &[String],
+) -> Result<(), String> {
+    let submitted_ids = mod_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    let installed_ids = installation_order
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if submitted_ids.len() != mod_ids.len() {
+        return Err("保存的排序中包含重复 MOD。".to_string());
+    }
+    if submitted_ids != installed_ids {
+        return Err("保存排序时必须包含本地库中的全部 MOD，且不能包含未知 MOD。".to_string());
+    }
+
+    let mut store = read_mod_library_order_store(installed_root)?;
+    let (_, import_order) =
+        normalized_mod_library_orders_from_installation(&store, installation_order);
+    store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
+    store.manual_mod_ids = mod_ids;
+    store.import_mod_ids = import_order;
+    save_mod_library_order_store(installed_root, &store)
+}
+
+fn restore_mod_library_import_order_from(
+    installed_root: &Path,
+    installation_order: &[String],
+) -> Result<(), String> {
+    let mut store = read_mod_library_order_store(installed_root)?;
+    let (_, import_order) =
+        normalized_mod_library_orders_from_installation(&store, installation_order);
+    store.schema_version = MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION;
+    store.manual_mod_ids = import_order.clone();
+    store.import_mod_ids = import_order;
     save_mod_library_order_store(installed_root, &store)
 }
 
 fn remove_mod_from_library_order(installed_root: &Path, mod_id: &str) -> Result<(), String> {
     let mut store = read_mod_library_order_store(installed_root)?;
-    let original_count = store.mod_ids.len();
-    store.mod_ids.retain(|current_id| current_id != mod_id);
-    if store.mod_ids.len() != original_count {
+    let original_manual_count = store.manual_mod_ids.len();
+    let original_import_count = store.import_mod_ids.len();
+    store
+        .manual_mod_ids
+        .retain(|current_id| current_id != mod_id);
+    store
+        .import_mod_ids
+        .retain(|current_id| current_id != mod_id);
+    if store.manual_mod_ids.len() != original_manual_count
+        || store.import_mod_ids.len() != original_import_count
+    {
         save_mod_library_order_store(installed_root, &store)?;
     }
     Ok(())
@@ -8639,9 +8958,11 @@ mod tests {
         move_mod_library_item_from, move_mod_library_items_from, preview_disable_mod_from,
         preview_enable_mod_from, preview_mod_import, preview_mod_remap_from,
         preview_restore_all_mods_from, preview_uninstall_mod_from, read_conflict_order_store,
-        remove_category_from_manifests, remove_mod_from_conflict_orders, restore_all_mods_from,
-        save_mod_category_store, uninstall_mod_from, validate_archive_path, ModCategoryStore,
-        StoredModCategory, MOD_CATEGORY_STORE_SCHEMA_VERSION,
+        read_mod_library_order_store, remove_category_from_manifests,
+        remove_mod_from_conflict_orders, replace_mod_library_order_from, restore_all_mods_from,
+        restore_mod_library_import_order_from, save_mod_category_store, uninstall_mod_from,
+        validate_archive_path, ModCategoryStore, ModLibraryOrderStore, StoredModCategory,
+        MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
     use crate::operations::OperationReporter;
 
@@ -9301,6 +9622,39 @@ mod tests {
         assert!(error.contains("requires overwrite confirmation"));
 
         cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
+    fn enable_preview_groups_conflict_files_by_enabled_mod() {
+        let first_source = temp_root("enable_conflict_first_source");
+        let second_source = temp_root("enable_conflict_second_source");
+        let installed_root = temp_root("enable_conflict_installed");
+        let game_root = temp_root("enable_conflict_game");
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+        for source in [&first_source, &second_source] {
+            write_file(&source.join("nativePC").join("weapon").join("shared.mod3"));
+        }
+        let first =
+            install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+                .unwrap();
+        let second =
+            install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+                .unwrap();
+        enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
+
+        let plan = preview_enable_mod_from(&installed_root, &game_root, &second.mod_id).unwrap();
+
+        assert_eq!(plan.conflicts.len(), 1);
+        assert_eq!(plan.conflicts[0].mod_id, first.mod_id);
+        assert_eq!(
+            plan.conflicts[0].conflict_files,
+            vec!["nativePC/weapon/shared.mod3"]
+        );
+
+        cleanup(first_source);
+        cleanup(second_source);
         cleanup(installed_root);
         cleanup(game_root);
     }
@@ -9968,6 +10322,67 @@ mod tests {
 
         cleanup(first_source);
         cleanup(second_source);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn migrates_legacy_library_order_without_changing_manual_sequence() {
+        let store = serde_json::from_str::<ModLibraryOrderStore>(
+            r#"{"schemaVersion":1,"modIds":["mod-b","mod-a"]}"#,
+        )
+        .unwrap();
+        let installation_order = vec!["mod-a".to_string(), "mod-b".to_string()];
+
+        let (manual_order, import_order) =
+            super::normalized_mod_library_orders_from_installation(&store, &installation_order);
+
+        assert_eq!(manual_order, vec!["mod-b", "mod-a"]);
+        assert_eq!(import_order, vec!["mod-a", "mod-b"]);
+    }
+
+    #[test]
+    fn replaces_and_restores_complete_mod_library_order() {
+        let installed_root = temp_root("replace_library_order");
+        let installation_order = vec![
+            "mod-a".to_string(),
+            "mod-b".to_string(),
+            "mod-c".to_string(),
+        ];
+
+        replace_mod_library_order_from(
+            &installed_root,
+            vec![
+                "mod-c".to_string(),
+                "mod-a".to_string(),
+                "mod-b".to_string(),
+            ],
+            &installation_order,
+        )
+        .unwrap();
+        let replaced = read_mod_library_order_store(&installed_root).unwrap();
+        assert_eq!(replaced.manual_mod_ids, vec!["mod-c", "mod-a", "mod-b"]);
+        assert_eq!(replaced.import_mod_ids, installation_order.clone());
+
+        restore_mod_library_import_order_from(&installed_root, &installation_order).unwrap();
+        let restored = read_mod_library_order_store(&installed_root).unwrap();
+        assert_eq!(restored.manual_mod_ids, installation_order);
+
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn rejects_incomplete_mod_library_order() {
+        let installed_root = temp_root("incomplete_library_order");
+        let installation_order = vec!["mod-a".to_string(), "mod-b".to_string()];
+
+        let error = replace_mod_library_order_from(
+            &installed_root,
+            vec!["mod-a".to_string()],
+            &installation_order,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("全部 MOD"));
         cleanup(installed_root);
     }
 

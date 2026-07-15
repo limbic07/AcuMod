@@ -35,7 +35,7 @@ use super::model_remap::{
 const PREVIEW_FILE_LIMIT: usize = 200;
 const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 16;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 16;
-const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
 const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 1;
 const MOD_CATEGORY_NAME_LIMIT: usize = 40;
@@ -661,6 +661,18 @@ struct StoredWorkspaceSnapshot {
     schema_version: u32,
     manifest_schema_version: u32,
     snapshot: ModWorkspaceSnapshot,
+    /// 快照内保存有效部署路径索引，启停后可只重读受影响的 manifest 并重算冲突。
+    mod_index: Vec<WorkspaceModIndexEntry>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceModIndexEntry {
+    mod_id: String,
+    name: String,
+    enabled: bool,
+    effective_files: Vec<String>,
+    model_replacements: Vec<ModelReplacement>,
 }
 
 #[derive(Clone)]
@@ -1558,8 +1570,8 @@ pub fn get_mod_workspace_snapshot_with_progress(
     ensure_library_directories(&paths)?;
 
     progress.report("正在读取工作区快照", 0, None, None);
-    if let Some(snapshot) = read_workspace_snapshot(&paths.workspace_snapshot_path)? {
-        return Ok(snapshot);
+    if let Some(stored) = read_stored_workspace_snapshot(&paths.workspace_snapshot_path)? {
+        return Ok(stored.snapshot);
     }
 
     refresh_mod_workspace_snapshot_with_progress(app, progress)
@@ -1582,7 +1594,8 @@ pub fn refresh_mod_workspace_snapshot_with_progress(
         &category_store,
         progress,
     )?;
-    save_workspace_snapshot(&paths.workspace_snapshot_path, &snapshot)?;
+    let mod_index = build_workspace_mod_index(&contexts)?;
+    save_workspace_snapshot(&paths.workspace_snapshot_path, &snapshot, mod_index)?;
     Ok(snapshot)
 }
 
@@ -1624,22 +1637,23 @@ fn save_workspace_snapshot_from_contexts(
         &category_store,
         progress,
     )?;
+    let mod_index = build_workspace_mod_index(contexts)?;
     let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
-    save_workspace_snapshot(&snapshot_path, &snapshot)
+    save_workspace_snapshot(&snapshot_path, &snapshot, mod_index)
 }
 
 fn update_workspace_snapshot_after_import(
     paths: &LibraryPaths,
     mod_id: &str,
 ) -> Result<(), String> {
-    let Some(mut snapshot) = read_workspace_snapshot(&paths.workspace_snapshot_path)? else {
+    let Some(mut stored) = read_stored_workspace_snapshot(&paths.workspace_snapshot_path)? else {
         return Ok(());
     };
     let category_store = load_mod_category_store(&paths.categories_path)?;
     let context = load_installed_manifest(&paths.installed_path, mod_id)?;
     let mut imported = installed_mod_list_from_contexts(
         &paths.installed_path,
-        &[context],
+        std::slice::from_ref(&context),
         &category_store,
         &OperationReporter::default(),
     )?;
@@ -1647,28 +1661,33 @@ fn update_workspace_snapshot_after_import(
         return Err("导入完成，但无法生成 MOD 快照条目。".to_string());
     };
 
-    snapshot
+    stored
+        .snapshot
         .installed_mods
         .mods
         .retain(|installed| installed.id != imported_mod.id);
-    snapshot.installed_mods.mods.push(imported_mod);
-    snapshot.installed_mods.mods.sort_by(|left, right| {
+    stored.snapshot.installed_mods.mods.push(imported_mod);
+    stored.snapshot.installed_mods.mods.sort_by(|left, right| {
         right
             .installed_at_unix_seconds
             .cmp(&left.installed_at_unix_seconds)
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
-    apply_mod_library_order(&paths.installed_path, &mut snapshot.installed_mods.mods)?;
-    snapshot.installed_mods.message = format!(
+    apply_mod_library_order(
+        &paths.installed_path,
+        &mut stored.snapshot.installed_mods.mods,
+    )?;
+    stored.snapshot.installed_mods.message = format!(
         "本地 MOD 库共有 {} 个 MOD。",
-        snapshot.installed_mods.mods.len()
+        stored.snapshot.installed_mods.mods.len()
     );
     let categories = sorted_mod_categories(&category_store.categories);
-    snapshot.categories = ModCategoryList {
+    stored.snapshot.categories = ModCategoryList {
         message: format!("共有 {} 个分类。", categories.len()),
         categories,
     };
-    save_workspace_snapshot(&paths.workspace_snapshot_path, &snapshot)
+    upsert_workspace_mod_index_entry(&mut stored.mod_index, &context)?;
+    save_stored_workspace_snapshot(&paths.workspace_snapshot_path, &stored)
 }
 
 fn append_workspace_snapshot_warning(message: &mut String, result: Result<(), String>) {
@@ -1677,7 +1696,7 @@ fn append_workspace_snapshot_warning(message: &mut String, result: Result<(), St
     }
 }
 
-fn read_workspace_snapshot(path: &Path) -> Result<Option<ModWorkspaceSnapshot>, String> {
+fn read_stored_workspace_snapshot(path: &Path) -> Result<Option<StoredWorkspaceSnapshot>, String> {
     if !path.is_file() {
         return Ok(None);
     }
@@ -1691,25 +1710,246 @@ fn read_workspace_snapshot(path: &Path) -> Result<Option<ModWorkspaceSnapshot>, 
     {
         return Ok(None);
     }
-    Ok(Some(stored.snapshot))
+    Ok(Some(stored))
 }
 
-fn save_workspace_snapshot(path: &Path, snapshot: &ModWorkspaceSnapshot) -> Result<(), String> {
+fn save_workspace_snapshot(
+    path: &Path,
+    snapshot: &ModWorkspaceSnapshot,
+    mod_index: Vec<WorkspaceModIndexEntry>,
+) -> Result<(), String> {
     let stored = StoredWorkspaceSnapshot {
         schema_version: WORKSPACE_SNAPSHOT_SCHEMA_VERSION,
         manifest_schema_version: CURRENT_MOD_MANIFEST_SCHEMA_VERSION,
         snapshot: snapshot.clone(),
+        mod_index,
     };
+    save_stored_workspace_snapshot(path, &stored)
+}
+
+fn save_stored_workspace_snapshot(
+    path: &Path,
+    stored: &StoredWorkspaceSnapshot,
+) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&stored)
         .map_err(|error| format!("无法序列化工作区快照：{error}"))?;
     fs::write(path, json).map_err(|error| format!("无法保存工作区快照 {}：{error}", path.display()))
 }
 
+fn build_workspace_mod_index(
+    contexts: &[InstalledManifestContext],
+) -> Result<Vec<WorkspaceModIndexEntry>, String> {
+    contexts
+        .iter()
+        .map(workspace_mod_index_entry)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn workspace_mod_index_entry(
+    context: &InstalledManifestContext,
+) -> Result<WorkspaceModIndexEntry, String> {
+    let effective_files = effective_installed_files_for_context(context)?
+        .into_iter()
+        .map(|file| file.deploy_relative_path)
+        .collect();
+    let original_replacements =
+        model_replacements_for_manifest(&context.manifest, &context.content_path)?;
+    let model_replacements =
+        effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?;
+
+    Ok(WorkspaceModIndexEntry {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        enabled: context.manifest.enabled,
+        effective_files,
+        model_replacements,
+    })
+}
+
+fn upsert_workspace_mod_index_entry(
+    mod_index: &mut Vec<WorkspaceModIndexEntry>,
+    context: &InstalledManifestContext,
+) -> Result<(), String> {
+    let entry = workspace_mod_index_entry(context)?;
+    mod_index.retain(|candidate| candidate.mod_id != entry.mod_id);
+    mod_index.push(entry);
+    mod_index.sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
+    Ok(())
+}
+
+fn update_workspace_snapshot_after_mod_changes(
+    paths: &LibraryPaths,
+    changed_mod_ids: &[String],
+    removed_mod_ids: &[String],
+) -> Result<(), String> {
+    let result =
+        update_workspace_snapshot_after_mod_changes_inner(paths, changed_mod_ids, removed_mod_ids);
+    if result.is_err() {
+        invalidate_workspace_snapshot(&paths.installed_path);
+    }
+    result
+}
+
+fn update_workspace_snapshot_after_mod_changes_inner(
+    paths: &LibraryPaths,
+    changed_mod_ids: &[String],
+    removed_mod_ids: &[String],
+) -> Result<(), String> {
+    let Some(mut stored) = read_stored_workspace_snapshot(&paths.workspace_snapshot_path)? else {
+        return Ok(());
+    };
+    let removed_ids = removed_mod_ids.iter().collect::<HashSet<_>>();
+    stored
+        .snapshot
+        .installed_mods
+        .mods
+        .retain(|installed| !removed_ids.contains(&installed.id));
+    stored
+        .mod_index
+        .retain(|entry| !removed_ids.contains(&entry.mod_id));
+
+    let category_store = load_mod_category_store(&paths.categories_path)?;
+    for mod_id in changed_mod_ids {
+        if removed_ids.contains(mod_id) {
+            continue;
+        }
+        let context = load_installed_manifest(&paths.installed_path, mod_id)?;
+        let mut list = installed_mod_list_from_contexts(
+            &paths.installed_path,
+            std::slice::from_ref(&context),
+            &category_store,
+            &OperationReporter::default(),
+        )?;
+        let Some(summary) = list.mods.pop() else {
+            continue;
+        };
+        stored
+            .snapshot
+            .installed_mods
+            .mods
+            .retain(|installed| installed.id != summary.id);
+        stored.snapshot.installed_mods.mods.push(summary);
+        upsert_workspace_mod_index_entry(&mut stored.mod_index, &context)?;
+    }
+
+    for installed in &mut stored.snapshot.installed_mods.mods {
+        installed.categories = resolve_mod_categories(&category_store, &installed.category_ids);
+        installed.category_ids = installed
+            .categories
+            .iter()
+            .map(|category| category.id.clone())
+            .collect();
+    }
+
+    apply_mod_library_order(
+        &paths.installed_path,
+        &mut stored.snapshot.installed_mods.mods,
+    )?;
+    stored.snapshot.installed_mods.message = format!(
+        "本地 MOD 库共有 {} 个 MOD。",
+        stored.snapshot.installed_mods.mods.len()
+    );
+    let categories = sorted_mod_categories(&category_store.categories);
+    stored.snapshot.categories = ModCategoryList {
+        message: format!("共有 {} 个分类。", categories.len()),
+        categories,
+    };
+    let conflict_store = read_conflict_order_store(&paths.installed_path)?;
+    stored.snapshot.conflict_report =
+        build_mod_conflict_report_from_workspace_index(&stored.mod_index, &conflict_store);
+    update_snapshot_partial_override_flags(&mut stored);
+    save_stored_workspace_snapshot(&paths.workspace_snapshot_path, &stored)
+}
+
+fn update_snapshot_partial_override_flags(stored: &mut StoredWorkspaceSnapshot) {
+    for installed in &mut stored.snapshot.installed_mods.mods {
+        installed.partially_overridden = false;
+    }
+
+    let entries_by_id = stored
+        .mod_index
+        .iter()
+        .map(|entry| (entry.mod_id.as_str(), entry))
+        .collect::<HashMap<_, _>>();
+    let mut overridden_ids = HashSet::new();
+    for group in &stored.snapshot.conflict_report.groups {
+        for conflict_file in &group.conflict_files {
+            let path_key = conflict_path_key(conflict_file);
+            let providers = group
+                .participants
+                .iter()
+                .filter(|participant| {
+                    entries_by_id
+                        .get(participant.mod_id.as_str())
+                        .is_some_and(|entry| {
+                            entry.enabled
+                                && entry
+                                    .effective_files
+                                    .iter()
+                                    .any(|path| conflict_path_key(path) == path_key)
+                        })
+                })
+                .map(|participant| participant.mod_id.as_str())
+                .collect::<Vec<_>>();
+            overridden_ids.extend(providers.into_iter().skip(1).map(str::to_string));
+        }
+    }
+
+    for installed in &mut stored.snapshot.installed_mods.mods {
+        installed.partially_overridden =
+            installed.enabled && overridden_ids.contains(&installed.id);
+    }
+}
+
+fn mark_all_workspace_mods_disabled(paths: &LibraryPaths) -> Result<(), String> {
+    let Some(mut stored) = read_stored_workspace_snapshot(&paths.workspace_snapshot_path)? else {
+        return Ok(());
+    };
+    for installed in &mut stored.snapshot.installed_mods.mods {
+        installed.enabled = false;
+        installed.partially_overridden = false;
+    }
+    for entry in &mut stored.mod_index {
+        entry.enabled = false;
+    }
+    stored.snapshot.conflict_report = ModConflictReport {
+        conflict_count: 0,
+        conflict_file_count: 0,
+        groups: Vec::new(),
+        warnings: Vec::new(),
+        message: "未发现已启用 MOD 之间的文件冲突。".to_string(),
+    };
+    save_stored_workspace_snapshot(&paths.workspace_snapshot_path, &stored)
+}
+
+fn update_workspace_mod_index_only(installed_root: &Path, mod_id: &str) -> Result<(), String> {
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    let Some(mut stored) = read_stored_workspace_snapshot(&snapshot_path)? else {
+        return Ok(());
+    };
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    upsert_workspace_mod_index_entry(&mut stored.mod_index, &context)?;
+    save_stored_workspace_snapshot(&snapshot_path, &stored)
+}
+
+fn invalidate_workspace_snapshot(installed_root: &Path) {
+    if let Ok(snapshot_path) = workspace_snapshot_path_for_installed_root(installed_root) {
+        let _ = fs::remove_file(snapshot_path);
+    }
+}
+
 fn workspace_snapshot_path_for_installed_root(installed_root: &Path) -> Result<PathBuf, String> {
-    installed_root
-        .parent()
-        .map(|mods_path| mods_path.join("workspace-snapshot.json"))
-        .ok_or_else(|| "无法确定工作区快照目录。".to_string())
+    let is_standard_installed_root = installed_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("installed"));
+    if is_standard_installed_root {
+        return installed_root
+            .parent()
+            .map(|mods_path| mods_path.join("workspace-snapshot.json"))
+            .ok_or_else(|| "无法确定工作区快照目录。".to_string());
+    }
+    Ok(installed_root.join(".workspace-snapshot.json"))
 }
 
 pub fn move_mod_library_item(
@@ -1720,7 +1960,8 @@ pub fn move_mod_library_item(
 ) -> Result<(), String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    move_mod_library_item_from(&paths.installed_path, &mod_id, &target_mod_id, place_after)
+    move_mod_library_item_from(&paths.installed_path, &mod_id, &target_mod_id, place_after)?;
+    update_workspace_snapshot_after_mod_changes(&paths, &[], &[])
 }
 
 pub fn update_mod_metadata(
@@ -1762,7 +2003,7 @@ pub fn update_mod_metadata(
         .map(|category| category.id.clone())
         .collect();
 
-    Ok(ModMetadataUpdateResult {
+    let mut result = ModMetadataUpdateResult {
         mod_id: context.manifest.id.clone(),
         name: manifest_display_name(&context.manifest),
         original_name: context.manifest.name.clone(),
@@ -1770,7 +2011,17 @@ pub fn update_mod_metadata(
         category_ids,
         categories,
         message: "MOD 信息已保存。".to_string(),
-    })
+    };
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(
+        &paths,
+        std::slice::from_ref(&result.mod_id),
+        &[],
+    ) {
+        result
+            .message
+            .push_str(&format!(" 工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 pub fn list_mod_categories(app: &tauri::AppHandle) -> Result<ModCategoryList, String> {
@@ -1807,6 +2058,8 @@ pub fn create_mod_category(
     store.categories.push(category.clone());
     save_mod_category_store(&paths.categories_path, &store)?;
 
+    update_workspace_snapshot_after_mod_changes(&paths, &[], &[])?;
+
     Ok(ModCategory::from(&category))
 }
 
@@ -1841,6 +2094,8 @@ pub fn rename_mod_category(
     let category = category.clone();
     save_mod_category_store(&paths.categories_path, &store)?;
 
+    update_workspace_snapshot_after_mod_changes(&paths, &[], &[])?;
+
     Ok(ModCategory::from(&category))
 }
 
@@ -1874,6 +2129,8 @@ pub fn delete_mod_category(
 
     let affected_mod_count = remove_category_from_manifests(&paths.installed_path, &category_id)?;
     save_mod_category_store(&paths.categories_path, &store)?;
+
+    update_workspace_snapshot_after_mod_changes(&paths, &[], &[])?;
 
     Ok(ModCategoryDeleteResult {
         category_id,
@@ -1939,13 +2196,23 @@ pub fn apply_mod_remap_with_progress(
 ) -> Result<ModRemapApplyResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    apply_mod_remap_from_with_progress(
+    let mut result = apply_mod_remap_from_with_progress(
         &paths.installed_path,
         &mod_id,
         &group_key,
         target_id,
         progress,
-    )
+    )?;
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(
+        &paths,
+        std::slice::from_ref(&result.mod_id),
+        &[],
+    ) {
+        result
+            .message
+            .push_str(&format!(" 工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 pub fn preview_enable_mod(
@@ -1967,13 +2234,23 @@ pub fn enable_mod_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    enable_mod_from_with_progress(
+    let mut result = enable_mod_from_with_progress(
         &paths.installed_path,
         &game_root,
         &mod_id,
         confirm_overwrite,
         progress,
-    )
+    )?;
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(
+        &paths,
+        std::slice::from_ref(&result.mod_id),
+        &[],
+    ) {
+        result
+            .warnings
+            .push(format!("工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 pub fn disable_mod_with_progress(
@@ -1984,7 +2261,18 @@ pub fn disable_mod_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    disable_mod_from_with_progress(&paths.installed_path, &game_root, &mod_id, progress)
+    let mut result =
+        disable_mod_from_with_progress(&paths.installed_path, &game_root, &mod_id, progress)?;
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(
+        &paths,
+        std::slice::from_ref(&result.mod_id),
+        &[],
+    ) {
+        result
+            .warnings
+            .push(format!("工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 /// 在一个后台任务中顺序处理多个 MOD；单项失败会记录在结果中并继续后续项目。
@@ -1997,13 +2285,31 @@ pub fn batch_update_mods_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    batch_update_mods_from_with_progress(
+    let mut result = batch_update_mods_from_with_progress(
         &paths.installed_path,
         &game_root,
         action,
         mod_ids,
         progress,
-    )
+    )?;
+    let succeeded_ids = result
+        .items
+        .iter()
+        .filter(|item| item.status == "succeeded")
+        .map(|item| item.mod_id.clone())
+        .collect::<Vec<_>>();
+    let (changed_ids, removed_ids) = match action {
+        BatchModAction::Uninstall => (Vec::new(), succeeded_ids),
+        BatchModAction::Enable | BatchModAction::Disable => (succeeded_ids, Vec::new()),
+    };
+    if let Err(error) =
+        update_workspace_snapshot_after_mod_changes(&paths, &changed_ids, &removed_ids)
+    {
+        result
+            .warnings
+            .push(format!("工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 pub fn preview_disable_mod(
@@ -2032,7 +2338,22 @@ pub fn uninstall_mod_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    uninstall_mod_with_paths_and_progress(&paths.installed_path, &game_root, &mod_id, progress)
+    let mut result = uninstall_mod_with_paths_and_progress(
+        &paths.installed_path,
+        &game_root,
+        &mod_id,
+        progress,
+    )?;
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(
+        &paths,
+        &[],
+        std::slice::from_ref(&result.mod_id),
+    ) {
+        result
+            .warnings
+            .push(format!("工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 fn uninstall_mod_with_paths_and_progress(
@@ -2068,7 +2389,14 @@ pub fn restore_all_mods_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    restore_all_mods_from_with_progress(&paths.installed_path, &game_root, progress)
+    let mut result =
+        restore_all_mods_from_with_progress(&paths.installed_path, &game_root, progress)?;
+    if let Err(error) = mark_all_workspace_mods_disabled(&paths) {
+        result
+            .warnings
+            .push(format!("工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 pub fn get_mod_conflict_report(app: &tauri::AppHandle) -> Result<ModConflictReport, String> {
@@ -2114,13 +2442,19 @@ pub fn apply_conflict_order_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     let game_root = resolve_game_root(app)?;
-    apply_conflict_order_from_with_progress(
+    let mut result = apply_conflict_order_from_with_progress(
         &paths.installed_path,
         &game_root,
         &group_id,
         confirm_overwrite,
         progress,
-    )
+    )?;
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(&paths, &[], &[]) {
+        result
+            .warnings
+            .push(format!("工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -2367,6 +2701,27 @@ fn find_installed_mod_by_name(
     installed_root: &Path,
     mod_name: &str,
 ) -> Result<Option<ModInstallResult>, String> {
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    if let Some(stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        let existing_id = stored
+            .snapshot
+            .installed_mods
+            .mods
+            .iter()
+            .find(|installed| {
+                installed
+                    .original_name
+                    .trim()
+                    .eq_ignore_ascii_case(mod_name.trim())
+            })
+            .map(|installed| installed.id.clone());
+        return existing_id
+            .map(|mod_id| load_installed_manifest(installed_root, &mod_id))
+            .transpose()?
+            .map(existing_mod_install_result)
+            .transpose();
+    }
+
     let contexts = load_all_installed_manifests(installed_root)?;
     let existing = contexts.into_iter().find(|context| {
         context
@@ -4143,6 +4498,10 @@ fn enable_mod_from_with_progress(
     progress.report("正在保存部署记录", 0, Some(1), None);
     save_manifest(&context.manifest_path, &context.manifest)?;
     let mut warnings = plan.warnings;
+    if let Err(error) = update_workspace_mod_index_only(installed_root, &context.manifest.id) {
+        invalidate_workspace_snapshot(installed_root);
+        warnings.push(format!("冲突索引更新失败，将使用兼容扫描：{error}"));
+    }
     progress.report("正在记录冲突优先级", 0, None, None);
     record_enabled_mod_conflict_order(installed_root, &context.manifest.id)?;
     reapply_conflict_groups_for_mod_with_progress(
@@ -4205,6 +4564,10 @@ fn disable_mod_from_with_progress(
     context.manifest.deployed_files = Vec::new();
     progress.report("正在保存部署记录", 0, Some(1), None);
     save_manifest(&context.manifest_path, &context.manifest)?;
+    if let Err(error) = update_workspace_mod_index_only(installed_root, &context.manifest.id) {
+        invalidate_workspace_snapshot(installed_root);
+        warnings.push(format!("冲突索引更新失败，将使用兼容扫描：{error}"));
+    }
 
     restore_enabled_versions_for_paths_with_progress(
         installed_root,
@@ -4425,6 +4788,33 @@ fn restore_plan_items(contexts: &[InstalledManifestContext]) -> Vec<RestoreModPl
 }
 
 fn get_mod_conflict_report_from(installed_root: &Path) -> Result<ModConflictReport, String> {
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    if let Some(stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        let store = read_conflict_order_store(installed_root)?;
+        return Ok(build_mod_conflict_report_from_workspace_index(
+            &stored.mod_index,
+            &store,
+        ));
+    }
+    let contexts = load_all_installed_manifests(installed_root)?;
+    let store = read_conflict_order_store(installed_root)?;
+    build_mod_conflict_report(&contexts, &store)
+}
+
+fn get_mod_conflict_report_with_changed_mod(
+    installed_root: &Path,
+    changed_mod_id: &str,
+) -> Result<ModConflictReport, String> {
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    if let Some(mut stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        let context = load_installed_manifest(installed_root, changed_mod_id)?;
+        upsert_workspace_mod_index_entry(&mut stored.mod_index, &context)?;
+        let store = read_conflict_order_store(installed_root)?;
+        return Ok(build_mod_conflict_report_from_workspace_index(
+            &stored.mod_index,
+            &store,
+        ));
+    }
     let contexts = load_all_installed_manifests(installed_root)?;
     let store = read_conflict_order_store(installed_root)?;
     build_mod_conflict_report(&contexts, &store)
@@ -4498,10 +4888,11 @@ fn update_workspace_snapshot_conflict_order(
     participant_order: &[String],
 ) -> Result<(), String> {
     let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
-    let Some(mut snapshot) = read_workspace_snapshot(&snapshot_path)? else {
+    let Some(mut stored) = read_stored_workspace_snapshot(&snapshot_path)? else {
         return Ok(());
     };
-    let Some(group) = snapshot
+    let Some(group) = stored
+        .snapshot
         .conflict_report
         .groups
         .iter_mut()
@@ -4534,7 +4925,8 @@ fn update_workspace_snapshot_conflict_order(
                 })
         })
         .collect();
-    save_workspace_snapshot(&snapshot_path, &snapshot)
+    update_snapshot_partial_override_flags(&mut stored);
+    save_stored_workspace_snapshot(&snapshot_path, &stored)
 }
 
 fn preview_apply_conflict_order_from(
@@ -4542,10 +4934,9 @@ fn preview_apply_conflict_order_from(
     game_root: &Path,
     group_id: &str,
 ) -> Result<ApplyConflictOrderPlan, String> {
-    let contexts = load_all_installed_manifests(installed_root)?;
-    let store = read_conflict_order_store(installed_root)?;
-    let report = build_mod_conflict_report(&contexts, &store)?;
+    let report = get_mod_conflict_report_from(installed_root)?;
     let group = find_conflict_group(&report, group_id)?;
+    let contexts = load_conflict_group_contexts(installed_root, group)?;
     let conflict_paths = conflict_paths_for_group(&contexts, group)?;
     let deployed_file_index = deployed_file_index(installed_root)?;
     let mut warnings = Vec::new();
@@ -4626,11 +5017,27 @@ fn apply_conflict_order_from_with_progress(
         return Err("No enabled MOD can provide a file for this conflict group.".to_string());
     }
 
-    let mut contexts = load_all_installed_manifests(installed_root)?;
-    let store = read_conflict_order_store(installed_root)?;
-    let report = build_mod_conflict_report(&contexts, &store)?;
+    let report = get_mod_conflict_report_from(installed_root)?;
     let group = find_conflict_group(&report, group_id)?;
+    let mut contexts = load_conflict_group_contexts(installed_root, group)?;
     let conflict_paths = conflict_paths_for_group(&contexts, group)?;
+    let deployed_index = deployed_file_index(installed_root)?;
+    let loaded_ids = contexts
+        .iter()
+        .map(|context| context.manifest.id.clone())
+        .collect::<HashSet<_>>();
+    let additional_owner_ids = conflict_paths
+        .iter()
+        .filter_map(|conflict_path| {
+            let target_path =
+                game_root.join(relative_string_to_path(&conflict_path.deploy_relative_path).ok()?);
+            deployed_index.get(&deployment_key(&target_path)).cloned()
+        })
+        .filter(|mod_id| !loaded_ids.contains(mod_id))
+        .collect::<HashSet<_>>();
+    for mod_id in additional_owner_ids {
+        contexts.push(load_installed_manifest(installed_root, &mod_id)?);
+    }
     let deployed_at = unix_seconds_now()?;
     let mut applied_file_count = 0;
     progress.report(
@@ -4714,6 +5121,17 @@ fn apply_conflict_order_from_with_progress(
         warnings: plan.warnings,
         message: format!("Applied the MOD order to {applied_file_count} conflicting file(s)."),
     })
+}
+
+fn load_conflict_group_contexts(
+    installed_root: &Path,
+    group: &ModConflictGroup,
+) -> Result<Vec<InstalledManifestContext>, String> {
+    group
+        .participants
+        .iter()
+        .map(|participant| load_installed_manifest(installed_root, &participant.mod_id))
+        .collect()
 }
 
 fn build_mod_conflict_report(
@@ -4837,6 +5255,210 @@ fn build_mod_conflict_report(
         warnings: Vec::new(),
         message,
     })
+}
+
+fn build_mod_conflict_report_from_workspace_index(
+    mod_index: &[WorkspaceModIndexEntry],
+    store: &ConflictOrderStore,
+) -> ModConflictReport {
+    let conflict_paths = collect_conflict_path_groups_from_workspace_index(mod_index);
+    let mut adjacency: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for conflict_path in &conflict_paths {
+        for mod_id in &conflict_path.participant_ids {
+            adjacency.entry(mod_id.clone()).or_default().extend(
+                conflict_path
+                    .participant_ids
+                    .iter()
+                    .filter(|participant_id| *participant_id != mod_id)
+                    .cloned(),
+            );
+        }
+    }
+
+    let mut visited = HashSet::new();
+    let mut groups = Vec::new();
+    for mod_id in adjacency.keys() {
+        if !visited.insert(mod_id.clone()) {
+            continue;
+        }
+
+        let mut participant_ids = Vec::new();
+        let mut pending = vec![mod_id.clone()];
+        while let Some(current_id) = pending.pop() {
+            participant_ids.push(current_id.clone());
+            if let Some(neighbors) = adjacency.get(&current_id) {
+                for neighbor in neighbors {
+                    if visited.insert(neighbor.clone()) {
+                        pending.push(neighbor.clone());
+                    }
+                }
+            }
+        }
+
+        participant_ids.sort();
+        let group_id = conflict_group_id(&participant_ids);
+        let participant_id_set = participant_ids.iter().cloned().collect::<HashSet<_>>();
+        let mut participants = mod_index
+            .iter()
+            .filter(|entry| participant_id_set.contains(&entry.mod_id))
+            .map(|entry| ModConflictParticipant {
+                mod_id: entry.mod_id.clone(),
+                name: entry.name.clone(),
+                enabled: entry.enabled,
+                order: 0,
+            })
+            .collect::<Vec<_>>();
+        let stored_order = store
+            .orders
+            .get(&group_id)
+            .or_else(|| find_best_stored_order(store, &participant_ids));
+        sort_participants_by_conflict_order(&mut participants, stored_order);
+        let conflict_files = conflict_paths
+            .iter()
+            .filter(|path| {
+                path.participant_ids
+                    .iter()
+                    .any(|participant_id| participant_id_set.contains(participant_id))
+            })
+            .map(|path| path.deploy_relative_path.clone())
+            .collect::<Vec<_>>();
+
+        groups.push(ModConflictGroup {
+            group_id,
+            participant_count: participants.len(),
+            conflict_file_count: conflict_files.len(),
+            conflict_files,
+            enabled_participant_count: participants.len(),
+            participants,
+            shared_model_targets: shared_model_targets_from_workspace_index(
+                mod_index,
+                &participant_id_set,
+            ),
+        });
+    }
+
+    groups.sort_by(|left, right| {
+        left.participants
+            .first()
+            .map(|participant| participant.name.to_lowercase())
+            .cmp(
+                &right
+                    .participants
+                    .first()
+                    .map(|participant| participant.name.to_lowercase()),
+            )
+    });
+    let conflict_count = groups.len();
+    let conflict_file_count = conflict_paths.len();
+    let message = if conflict_count == 0 {
+        "未发现已启用 MOD 之间的文件冲突。".to_string()
+    } else {
+        format!("发现 {conflict_count} 个相互独立的 MOD 冲突组。")
+    };
+
+    ModConflictReport {
+        conflict_count,
+        conflict_file_count,
+        groups,
+        warnings: Vec::new(),
+        message,
+    }
+}
+
+fn collect_conflict_path_groups_from_workspace_index(
+    mod_index: &[WorkspaceModIndexEntry],
+) -> Vec<ConflictPathGroup> {
+    let mut participants_by_path: HashMap<String, (String, HashSet<String>)> = HashMap::new();
+    for entry in mod_index.iter().filter(|entry| entry.enabled) {
+        for deploy_relative_path in &entry.effective_files {
+            participants_by_path
+                .entry(conflict_path_key(deploy_relative_path))
+                .or_insert_with(|| (deploy_relative_path.clone(), HashSet::new()))
+                .1
+                .insert(entry.mod_id.clone());
+        }
+    }
+
+    let mut groups = participants_by_path
+        .into_values()
+        .filter_map(|(deploy_relative_path, participant_ids)| {
+            if participant_ids.len() < 2 {
+                return None;
+            }
+            let mut participant_ids = participant_ids.into_iter().collect::<Vec<_>>();
+            participant_ids.sort();
+            Some(ConflictPathGroup {
+                deploy_relative_path,
+                participant_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    groups.sort_by(|left, right| {
+        conflict_path_key(&left.deploy_relative_path)
+            .cmp(&conflict_path_key(&right.deploy_relative_path))
+    });
+    groups
+}
+
+fn shared_model_targets_from_workspace_index(
+    mod_index: &[WorkspaceModIndexEntry],
+    participant_ids: &HashSet<String>,
+) -> Vec<SharedModelTarget> {
+    struct SharedTargetAccumulator {
+        model_kind: String,
+        model_id: String,
+        sub_kinds: HashSet<String>,
+        display_names: HashSet<String>,
+        participant_ids: HashSet<String>,
+    }
+
+    let mut targets = BTreeMap::<(String, String), SharedTargetAccumulator>::new();
+    for entry in mod_index
+        .iter()
+        .filter(|entry| participant_ids.contains(&entry.mod_id))
+    {
+        for replacement in &entry.model_replacements {
+            let key = (replacement.model_kind.clone(), replacement.model_id.clone());
+            let target = targets
+                .entry(key)
+                .or_insert_with(|| SharedTargetAccumulator {
+                    model_kind: replacement.model_kind.clone(),
+                    model_id: replacement.model_id.clone(),
+                    sub_kinds: HashSet::new(),
+                    display_names: HashSet::new(),
+                    participant_ids: HashSet::new(),
+                });
+            target.sub_kinds.insert(replacement.sub_kind.clone());
+            target
+                .display_names
+                .extend(replacement.display_names.iter().cloned());
+            target.participant_ids.insert(entry.mod_id.clone());
+        }
+    }
+
+    let mut shared_targets = targets
+        .into_values()
+        .filter(|target| target.participant_ids.len() >= 2)
+        .map(|target| {
+            let mut sub_kinds = target.sub_kinds.into_iter().collect::<Vec<_>>();
+            let mut display_names = target.display_names.into_iter().collect::<Vec<_>>();
+            sub_kinds.sort();
+            display_names.sort();
+            SharedModelTarget {
+                model_kind: target.model_kind,
+                sub_kind: sub_kinds.join("、"),
+                model_id: target.model_id,
+                display_names,
+            }
+        })
+        .collect::<Vec<_>>();
+    shared_targets.sort_by(|left, right| {
+        left.model_kind
+            .cmp(&right.model_kind)
+            .then_with(|| left.model_id.cmp(&right.model_id))
+    });
+    shared_targets
 }
 
 fn shared_model_targets_for_group(
@@ -5027,7 +5649,7 @@ fn reapply_conflict_groups_for_mod_with_progress(
     progress: &OperationReporter,
 ) -> Result<(), String> {
     progress.report("正在同步关联冲突", 0, None, None);
-    let report = get_mod_conflict_report_from(installed_root)?;
+    let report = get_mod_conflict_report_with_changed_mod(installed_root, mod_id)?;
 
     for group in report.groups {
         if group.enabled_participant_count == 0
@@ -5060,9 +5682,8 @@ fn record_enabled_mod_conflict_order(
     installed_root: &Path,
     enabled_mod_id: &str,
 ) -> Result<(), String> {
-    let contexts = load_all_installed_manifests(installed_root)?;
     let mut store = read_conflict_order_store(installed_root)?;
-    let report = build_mod_conflict_report(&contexts, &store)?;
+    let report = get_mod_conflict_report_with_changed_mod(installed_root, enabled_mod_id)?;
     let mut changed = false;
 
     for group in report.groups {
@@ -5105,7 +5726,31 @@ fn restore_enabled_versions_for_paths_with_progress(
         Some(deploy_relative_paths.len()),
         None,
     );
-    let mut contexts = load_all_installed_manifests(installed_root)?;
+    let requested_path_keys = deploy_relative_paths
+        .iter()
+        .map(|path| conflict_path_key(path))
+        .collect::<HashSet<_>>();
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    let mut contexts = if let Some(stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        let candidate_ids = stored
+            .mod_index
+            .iter()
+            .filter(|entry| {
+                entry.enabled
+                    && entry
+                        .effective_files
+                        .iter()
+                        .any(|path| requested_path_keys.contains(&conflict_path_key(path)))
+            })
+            .map(|entry| entry.mod_id.clone())
+            .collect::<Vec<_>>();
+        candidate_ids
+            .iter()
+            .map(|mod_id| load_installed_manifest(installed_root, mod_id))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        load_all_installed_manifests(installed_root)?
+    };
     let store = read_conflict_order_store(installed_root)?;
     let deployed_at = unix_seconds_now()?;
     let mut seen_paths = HashSet::new();
@@ -5372,16 +6017,37 @@ fn has_other_enabled_equivalent_provider(
     deploy_relative_path: &str,
     target_path: &Path,
 ) -> Result<bool, String> {
-    for context in load_all_installed_manifests(installed_root)? {
+    let path_key = conflict_path_key(deploy_relative_path);
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    let contexts = if let Some(stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        let candidate_ids = stored
+            .mod_index
+            .iter()
+            .filter(|entry| {
+                entry.enabled
+                    && entry.mod_id != current_mod_id
+                    && entry
+                        .effective_files
+                        .iter()
+                        .any(|path| conflict_path_key(path) == path_key)
+            })
+            .map(|entry| entry.mod_id.clone())
+            .collect::<Vec<_>>();
+        candidate_ids
+            .iter()
+            .map(|mod_id| load_installed_manifest(installed_root, mod_id))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        load_all_installed_manifests(installed_root)?
+    };
+
+    for context in contexts {
         if !context.manifest.enabled || context.manifest.id == current_mod_id {
             continue;
         }
         let has_equivalent_file = effective_installed_files_for_context(&context)?
             .into_iter()
-            .filter(|file| {
-                conflict_path_key(&file.deploy_relative_path)
-                    == conflict_path_key(deploy_relative_path)
-            })
+            .filter(|file| conflict_path_key(&file.deploy_relative_path) == path_key)
             .map(|file| effective_file_matches_target(&context, &file, target_path))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -6571,8 +7237,18 @@ fn load_or_initialize_mod_category_store_from(
         changed = true;
     }
 
-    changed |=
-        migrate_installed_mod_categories(installed_root, &mut store, requires_hierarchy_migration)?;
+    let has_current_workspace_snapshot = workspace_snapshot_path_for_installed_root(installed_root)
+        .ok()
+        .and_then(|path| read_stored_workspace_snapshot(&path).ok().flatten())
+        .is_some();
+    // 有效快照已经证明全部 manifest 完成当前版本迁移；日常分类读取不应再次扫描整库。
+    if requires_hierarchy_migration || !has_current_workspace_snapshot {
+        changed |= migrate_installed_mod_categories(
+            installed_root,
+            &mut store,
+            requires_hierarchy_migration,
+        )?;
+    }
 
     if changed {
         save_mod_category_store(categories_path, &store)?;
@@ -6952,8 +7628,25 @@ fn remove_category_from_manifests(
     category_id: &str,
 ) -> Result<usize, String> {
     let mut affected_mod_count = 0;
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    let contexts = if let Some(stored) = read_stored_workspace_snapshot(&snapshot_path)? {
+        let affected_ids = stored
+            .snapshot
+            .installed_mods
+            .mods
+            .iter()
+            .filter(|installed| installed.category_ids.iter().any(|id| id == category_id))
+            .map(|installed| installed.id.clone())
+            .collect::<Vec<_>>();
+        affected_ids
+            .iter()
+            .map(|mod_id| load_installed_manifest(installed_root, mod_id))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        load_all_installed_manifests(installed_root)?
+    };
 
-    for mut context in load_all_installed_manifests(installed_root)? {
+    for mut context in contexts {
         let original_count = context.manifest.category_ids.len();
         context
             .manifest
@@ -7076,8 +7769,9 @@ mod tests {
     };
 
     use super::{
-        apply_conflict_order_from, apply_mod_remap_from, armor_set_label, clear_import_staging,
-        disable_mod_from, enable_mod_from, find_installed_mod_by_content,
+        apply_conflict_order_from, apply_mod_remap_from, armor_set_label,
+        build_mod_conflict_report_from_workspace_index, build_workspace_mod_index,
+        clear_import_staging, disable_mod_from, enable_mod_from, find_installed_mod_by_content,
         get_mod_conflict_report_from, install_mod_from_candidate_into,
         install_mod_from_folder_into, installed_mod_content_path, list_installed_mods_from,
         load_all_installed_manifests, load_or_initialize_mod_category_store_for_installed_root,
@@ -7874,6 +8568,17 @@ mod tests {
         assert_eq!(report.conflict_file_count, 1);
         assert_eq!(report.groups[0].conflict_file_count, 1);
         assert_eq!(report.groups[0].participant_count, 2);
+
+        let contexts = load_all_installed_manifests(&installed_root).unwrap();
+        let index = build_workspace_mod_index(&contexts).unwrap();
+        let store = read_conflict_order_store(&installed_root).unwrap();
+        let cached_report = build_mod_conflict_report_from_workspace_index(&index, &store);
+        assert_eq!(cached_report.conflict_count, report.conflict_count);
+        assert_eq!(
+            cached_report.conflict_file_count,
+            report.conflict_file_count
+        );
+        assert_eq!(cached_report.groups[0].participants.len(), 2);
 
         cleanup(first_source);
         cleanup(second_source);

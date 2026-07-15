@@ -90,9 +90,10 @@ src-tauri/
 
 1. command 使用 `async fn`，并通过 `operations::run_blocking_operation` 调用同步文件 service。
 2. service 在已知文件总数后通过 `OperationReporter` 上报真实完成数；未知总数的扫描只上报阶段和当前项。
-3. 前端不要重复调用列表、分类、冲突三个全量读取 command；启动和普通导入后使用 `getModWorkspaceSnapshot()` 读取缓存，只有用户主动刷新时使用 `refreshModWorkspaceSnapshot()` 强制全量重建。
+3. 前端不要重复调用列表、分类、冲突三个全量读取 command；启动以及改变部署状态的操作完成后使用 `getModWorkspaceSnapshot()` 读取缓存，名称、备注和分类编辑直接使用 command 返回值局部更新。只有用户主动刷新时使用 `refreshModWorkspaceSnapshot()` 强制全量重建。
 4. 任务事件统一为 `acumod://operation-progress`，由 `OperationStatusBar` 展示；不要为单个功能另造加载浮层或取消按钮。
 5. 完成后检查软件目录旁的 `AcumodData/logs/operation-timings.log` 是否写入结果和耗时。日志不能记录凭据、令牌或文件内容。
+6. 新增会修改 manifest、分类、冲突顺序或浏览顺序的 command 时，必须同步更新工作区快照；禁止在操作完成后用全量刷新代替快照一致性维护。
 
 当前已确认示例：
 

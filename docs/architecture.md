@@ -138,8 +138,9 @@ Vue 操作
 - `OperationReporter` 对目录扫描、压缩包解包、本地库复制、游戏目录复制、删除和游戏实际状态比对发送阶段与真实完成数。扫描总数未知时只展示当前发现项；文件清单确定后展示 `已完成 / 总数`。状态同步必须把“读取清单”“准备有效文件”“逐文件比对”“分析覆盖关系”和“保存状态”分成独立阶段，不能在比对期间停留在清单完成画面。
 - 每个任务结束后把类型、结果和耗时追加到 `AcumodData/logs/operation-timings.log`。该日志用于定位性能问题，不保存凭据或文件内容。
 - 本项目不提供任务取消。复制、删除和 manifest 写入一旦开始必须顺序完成，以保持部署记录与实际游戏目录一致。
-- `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。普通导入只把新 MOD 和最新分类增量写回缓存，用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
+- `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。快照 schema 2 在展示 DTO 之外保存每个 MOD 的有效部署路径和有效识别目标索引。普通导入、启停、卸载、批量操作、模型改绑和冲突应用只重读受影响的 manifest，再基于索引在内存中更新冲突报告；用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
 - 工作区快照只是可丢弃、可重建的读取缓存，不保存独立部署状态。manifest、`conflict-orders.json` 和 `mod-library-order.json` 仍是事实来源。
+- 禁用 MOD 后恢复低优先级版本时，先按索引筛选包含同一有效路径的已启用候选，只加载这些 manifest；冲突预览和应用同样只加载当前冲突组及相关部署记录所有者。索引缺失时回退到全库兼容扫描，不牺牲旧数据可用性。
 
 ## MOD 库和复制式部署
 

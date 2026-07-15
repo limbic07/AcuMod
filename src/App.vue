@@ -32,8 +32,6 @@ import {
   installModFromCandidate,
   installModFromFolder,
   importLegacyBoxMods,
-  listInstalledMods,
-  listModCategories,
   moveConflictParticipant,
   moveModLibraryItem,
   openInstalledModFolder,
@@ -701,25 +699,6 @@ async function loadModLibraryStatus() {
   }
 }
 
-async function loadInstalledMods() {
-  try {
-    installedModList.value = await listInstalledMods();
-    modLibraryError.value = "";
-  } catch (error) {
-    modLibraryError.value = userFacingError(error);
-  }
-}
-
-async function loadModCategories() {
-  try {
-    const categoryList = await listModCategories();
-    modCategories.value = categoryList.categories;
-    categoryError.value = "";
-  } catch (error) {
-    categoryError.value = userFacingError(error);
-  }
-}
-
 async function refreshModViews() {
   isRefreshingModViews.value = true;
 
@@ -806,8 +785,24 @@ async function saveModMetadata(
   metadataError.value = "";
 
   try {
-    await updateModMetadata(mod.id, patch);
-    await loadInstalledMods();
+    const result = await updateModMetadata(mod.id, patch);
+    if (installedModList.value) {
+      installedModList.value = {
+        ...installedModList.value,
+        mods: installedModList.value.mods.map((installed) =>
+          installed.id === result.modId
+            ? {
+                ...installed,
+                name: result.name,
+                originalName: result.originalName,
+                note: result.note,
+                categoryIds: result.categoryIds,
+                categories: result.categories,
+              }
+            : installed,
+        ),
+      };
+    }
     syncCategoryFilter();
     return true;
   } catch (error) {
@@ -842,7 +837,9 @@ async function createCategory(name: string, parentId: string | null) {
 
   try {
     const category = await createModCategory(name, parentId);
-    await loadModCategories();
+    modCategories.value = [...modCategories.value, category].sort((left, right) =>
+      left.name.localeCompare(right.name, "zh-Hans-CN"),
+    );
     const targetMod = installedMods.value.find((mod) => mod.id === pendingCategoryModId.value);
 
     if (targetMod) {
@@ -869,8 +866,21 @@ async function renameCategory(categoryId: string, name: string) {
   categoryError.value = "";
 
   try {
-    await renameModCategory(categoryId, name);
-    await Promise.all([loadModCategories(), loadInstalledMods()]);
+    const updated = await renameModCategory(categoryId, name);
+    modCategories.value = modCategories.value.map((category) =>
+      category.id === updated.id ? updated : category,
+    );
+    if (installedModList.value) {
+      installedModList.value = {
+        ...installedModList.value,
+        mods: installedModList.value.mods.map((installed) => ({
+          ...installed,
+          categories: installed.categories.map((category) =>
+            category.id === updated.id ? updated : category,
+          ),
+        })),
+      };
+    }
     syncCategoryFilter();
   } catch (error) {
     categoryError.value = userFacingError(error);
@@ -898,7 +908,27 @@ async function deleteCategory(category: ModCategory) {
 
   try {
     await deleteModCategory(category.id);
-    await Promise.all([loadModCategories(), loadInstalledMods()]);
+    modCategories.value = modCategories.value
+      .filter((candidate) => candidate.id !== category.id)
+      .map((candidate) =>
+        candidate.parentId === category.id ? { ...candidate, parentId: null } : candidate,
+      );
+    if (installedModList.value) {
+      installedModList.value = {
+        ...installedModList.value,
+        mods: installedModList.value.mods.map((installed) => ({
+          ...installed,
+          categoryIds: installed.categoryIds.filter((id) => id !== category.id),
+          categories: installed.categories
+            .filter((candidate) => candidate.id !== category.id)
+            .map((candidate) =>
+              candidate.parentId === category.id
+                ? { ...candidate, parentId: null }
+                : candidate,
+            ),
+        })),
+      };
+    }
     syncCategoryFilter();
   } catch (error) {
     categoryError.value = userFacingError(error);
@@ -1218,7 +1248,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
   try {
     deploymentError.value = "";
     await enableMod(mod.id, true);
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1233,7 +1263,7 @@ async function disableInstalledMod(mod: InstalledModSummary) {
   try {
     deploymentError.value = "";
     await disableMod(mod.id);
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1306,7 +1336,7 @@ async function updateInstalledModsInBatch(
     if (action === "uninstall") {
       await loadModLibraryStatus();
     }
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1479,7 +1509,7 @@ async function applySelectedRemap() {
       }
     }
     await applyModRemap(details.modId, group.groupKey, plan.targetId);
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
     closeRemapManager(true);
   } catch (error) {
     remapError.value = userFacingError(error);
@@ -1513,7 +1543,7 @@ async function uninstallInstalledMod(mod: InstalledModSummary) {
 
     await uninstallMod(mod.id);
     await loadModLibraryStatus();
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1545,7 +1575,7 @@ async function restoreAllInstalledMods() {
     }
 
     await restoreAllMods();
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1630,7 +1660,7 @@ async function applySelectedConflictOrder() {
       selectedConflictGroupId.value,
       plan.requiresOverwriteConfirmation,
     );
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     conflictActionError.value = userFacingError(error);
   } finally {

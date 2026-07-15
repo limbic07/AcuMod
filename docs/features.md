@@ -148,7 +148,7 @@ MVP 完成标准：
 
 - MHW 文件 ID 表由 Acumod 内置维护。
 - MHW 已停止更新，因此首期可以先维护一版固定 ID 表。
-- 第一版识别范围覆盖武器、防具、发型、随从武器、随从防具、猎虫、挂件、NPC、猎人手臂上的投射器/飞翔爪和人物语音替换。
+- 第一版识别范围覆盖武器、防具、发型、随从武器、随从防具、猎虫、挂件、NPC、猎人手臂上的投射器/飞翔爪和人物语音替换；传统管理器增强阶段增加 `nativePC/plugins` 插件和按武器类型区分的语音资源。
 - 同一个 MOD 可能替换多个模型，需要展示多个识别结果。
 - 当前内置索引由 `15.10.00` 数据包、本地中文表和可追溯的 curated 社区映射生成；原始游戏数据不提交，应用使用 `references/mhwi-data/curated/model-index.json`。
 
@@ -172,7 +172,8 @@ MVP 完成标准：
 - 防具手臂 `arm/mod/*.evam` 使用固定格式保存配套飞翔爪编号。Acumod 只有在同一 MOD 同时包含匹配的 `wp/slg` 模型时，才把 `.evam` 解析结果作为该飞翔爪的“关联防具”展示；只有 `.evam` 而没有实际飞翔爪模型时，不新增任何替换结果。
 - 数据层已从 Steam 版 `15.10.00` 原始 chunk 定向提取 462 个有效防具 EVAM，并生成 234 个防具模型的逐性别绑定表；其中 14 条明确没有飞翔爪，5 个模型的男女绑定不同。原始二进制文件不进入仓库，后续防具配套飞翔爪改绑必须使用该表，不再采用 `plNNN -> slgNNN` 同号猜测。
 - 人物语音只在 `sound/wwise/Windows` 下精确匹配 `pl_act_vo_f_*_m.nbnk` 或 `pl_act_vo_m_*_m.nbnk`，映射为角色创建界面的男女语音 1 至 20 号。
-- 识别结果写入当前 manifest schema 15，并在导入结果和已安装 MOD 列表展示；schema 1 至 12 的旧 manifest 在读取时结合本地库文件路径和 `.evam` 内容重新识别，避免保留早期版本对文件名、`vfx/mod`、防具套装或投射器资源的误判。
+- 武器语音只在同一 Wwise 目录下精确匹配 `wp_<武器代码>_(cmn|epvsp).nbnk` 或 `wpNN_<武器代码>_(cmn|epvsp).nbnk`，映射为“武器语音·太刀”等两级分类；公共音频包和未知代码不猜测。`nativePC/plugins` 下的内容统一识别为“插件”。
+- 识别结果写入当前 manifest schema 16，并在导入结果和已安装 MOD 列表展示；旧 manifest 在读取时结合本地库文件路径和 `.evam` 内容重新识别过期结果，避免保留早期误判并补充新类别。
 - 模型 ID 和装备部位只匹配文件夹名称，文件名不参与模型识别；人物语音因游戏资源格式没有独立 ID 目录，是唯一的精确文件名匹配例外。
 - 发型优先显示角色创建界面的数字槽位，再显示经 CAPCOM Steam 页面或本地游戏文本确认的官方简体中文名称；NPC/联动角色英文名不作为游戏 ID 显示。
 - 同一个 MOD 可以返回多个 `ModelReplacement`。
@@ -286,8 +287,8 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
    - 所有文件操作仍由 `App.vue -> src/api/modLibrary.ts -> Tauri command -> Rust service` 协调，不改变导入、部署或确认流程。
 2. Slice 12：MOD 分类、检索和浏览排序
    - 使用 `ModelReplacement` 自动生成分类，支持名称、原始名称、备注、类别、替换类型、游戏内名称、启用状态和冲突状态的搜索/筛选。
-   - 支持按导入顺序、名称、类别和替换目标浏览排序；浏览排序不影响冲突组覆盖顺序。
-- Slice 12 由 manifest schema 9 引入显示名称、备注和单分类覆盖；Slice 14 由 schema 10 引入模型改绑，schema 11 更新防具套装识别语义，schema 12 扩充已核对的飞翔爪映射，schema 13 增加 `.evam` 关联识别，schema 14 改为统一 `categoryIds[]` 多分类，当前 schema 15 增加盒子来源和观察所得部署记录；原始普通导入仍按名称去重，盒子导入额外按来源和完整内容关联。
+   - 支持按导入顺序、名称、类别和替换目标浏览排序，每种可计算排序均可切换升序或倒序；浏览排序不影响冲突组覆盖顺序。
+- Slice 12 由 manifest schema 9 引入显示名称、备注和单分类覆盖；Slice 14 由 schema 10 引入模型改绑，schema 11 更新防具套装识别语义，schema 12 扩充已核对的飞翔爪映射，schema 13 增加 `.evam` 关联识别，schema 14 改为统一 `categoryIds[]` 多分类，schema 15 增加盒子来源和观察所得部署记录，当前 schema 16 增加插件与武器语音识别；原始普通导入仍按名称去重，盒子导入额外按来源和完整内容关联。
 3. Slice 13：稳定 ID 扩展和同模型提示
    - 已接入脸型、怪物、噗吱猪服装、家具、玩家附件和随从附件路径识别。
    - 怪物和噗吱猪服装优先使用本地 `15.10.00` 简体中文名称；脸型、家具和附件在没有可核验中文名称时显示类别与底层 ID。
@@ -310,10 +311,10 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 ### 实现约定
 
 - 全局分类存放于 schema 3 的 `AcumodData/mods/categories.json`，包含稳定分类 ID、名称、可选 `parentId`、创建时间，以及仅供 Rust 迁移和新导入复用的识别来源键；最多只支持一层子分类。
-- 每个 MOD 的 schema 15 manifest 保存 `categoryIds[]`。列表 DTO 返回已解析的 `ModCategory[]`，前端按任一分类筛选、搜索和排序。
+- 每个 MOD 的 schema 16 manifest 保存 `categoryIds[]`。列表 DTO 返回已解析的 `ModCategory[]`，前端按任一分类筛选、搜索和排序。
 - 元数据使用字段级 patch：名称、备注和 `categoryIds[]` 可以独立保存。空自定义名称表示回到原始导入名称，空数组表示未分类。
 - 新建、重命名、删除分类使用 `list/create/rename/delete_mod_category` Tauri command。删除分类时，Rust 扫描本地 MOD manifest 并清除全部引用；带识别来源的分类还会写入抑制列表，后续导入不会自动重建。
-- schema 13 及更早版本首次读取时，把有效 `categoryOverride` 与模型识别得到的分类取并集，写入 schema 15 的 `categoryIds[]`；模型识别版本仍独立维护。
+- schema 13 及更早版本首次读取时，把有效 `categoryOverride` 与模型识别得到的分类取并集，写入当前 schema 的 `categoryIds[]`；模型识别版本仍独立维护。
 - 前端保存链路为：表格单元格或分类管理对话框 -> `src/api/modLibrary.ts` typed wrapper -> Tauri command -> Rust service -> `manifest.json` 或 `categories.json` -> 刷新 MOD 列表和分类列表。MOD 库拖拽排序单独写入 `AcumodData/mods/mod-library-order.json`，不改写 manifest，也不改变冲突优先级。
 
 ## Slice 14：同类型模型替换目标改绑
@@ -336,7 +337,7 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - MOD 库的“替换信息”单元格是模型改绑的直接入口；已启用 MOD 仍可进入查看，但选择和保存会锁定并提示先禁用。
 - 弹窗单分组只显示一个“替换模型”下拉框，多分组用顶部标签切换；“恢复默认”清除当前改绑，飞翔爪手动编号收进“其他飞翔爪编号”。点击保存后内部调用 `preview_mod_remap` 校验，界面不展示文件数、MRL3 或 EVAM 技术统计。
 - 当新旧有效部署路径之间实际移动了防具目录中的 `.epv3` 特效触发文件时，预览必须返回“装备特效需要游戏内确认”的警告；前端复用现有保存确认框展示该提示。恢复默认同样适用，普通防具或飞翔爪改绑不额外提示。
-- manifest schema 10 新增 `modelRemaps`，当前 schema 15 继续只保存分组键和目标 ID，不复制或改写本地 MOD 文件。
+- manifest schema 10 新增 `modelRemaps`，当前 schema 16 继续只保存分组键和目标 ID，不复制或改写本地 MOD 文件。
 - Rust 根据原始文件、识别结果和 `modelRemaps` 生成有效部署路径；启用预览、实际复制、冲突检测、冲突顺序应用和禁用后的版本恢复都使用这份计划。
 - 路径改绑只替换经过验证的资源目录和文件名 token。`.mrl3` 仅对其中精确命中的贴图资源路径进行长度校验后的改写；飞翔爪改绑只改写已经通过识别关联到该模型的 26 字节 `.evam` 绑定字段；不修改 `.mod3`、`.tex` 或 `.nbnk` 文件内容。
 - 防具路径按 `plNNN_NNNN` 的完整模型 ID 重写；位于同一防具目录、且严格符合 `head/body/arm/wst/leg/epv/{f,m}_<部位>NNN.epv3` 的 EPV 文件只重写三位套装号，不把目标变体号写入 EPV 文件名。`vfx`、自定义资源目录和不符合该命名的文件保持原路径。

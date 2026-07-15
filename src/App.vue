@@ -24,10 +24,10 @@ import {
   deleteModCategory,
   disableMod,
   enableMod,
-  getModConflictReport,
   getModLibraryStatus,
   getModRemapDetails,
   getModWorkspaceSnapshot,
+  refreshModWorkspaceSnapshot,
   installModFromArchive,
   installModFromCandidate,
   installModFromFolder,
@@ -148,6 +148,7 @@ const modCategoryFilter = ref("all");
 const modStatusFilter = ref("all");
 const modConflictFilter = ref("all");
 const modSort = ref<"manual" | "installation" | "name" | "category" | "replacement">("manual");
+const modSortDirection = ref<"asc" | "desc">("asc");
 const reorderingModId = ref("");
 const confirmationRequest = ref<ConfirmationRequest | null>(null);
 const confirmationCancelButton = ref<HTMLButtonElement | null>(null);
@@ -451,25 +452,28 @@ const displayedInstalledMods = computed(() => {
       return 0;
     }
 
+    let comparison = 0;
     if (modSort.value === "name") {
-      return left.name.localeCompare(right.name, "zh-Hans-CN");
+      comparison = left.name.localeCompare(right.name, "zh-Hans-CN");
+    } else if (modSort.value === "category") {
+      comparison =
+        visibleModCategories(left)
+          .join("、")
+          .localeCompare(visibleModCategories(right).join("、"), "zh-Hans-CN") ||
+        left.name.localeCompare(right.name, "zh-Hans-CN");
+    } else if (modSort.value === "replacement") {
+      comparison =
+        summarizeModReplacements(left).localeCompare(
+          summarizeModReplacements(right),
+          "zh-Hans-CN",
+        ) || left.name.localeCompare(right.name, "zh-Hans-CN");
+    } else {
+      comparison =
+        left.installedAtUnixSeconds - right.installedAtUnixSeconds ||
+        left.name.localeCompare(right.name, "zh-Hans-CN");
     }
 
-    if (modSort.value === "category") {
-      return visibleModCategories(left).join("、").localeCompare(
-        visibleModCategories(right).join("、"),
-        "zh-Hans-CN",
-      )
-        || left.name.localeCompare(right.name, "zh-Hans-CN");
-    }
-
-    if (modSort.value === "replacement") {
-      return summarizeModReplacements(left).localeCompare(summarizeModReplacements(right), "zh-Hans-CN")
-        || left.name.localeCompare(right.name, "zh-Hans-CN");
-    }
-
-    return right.installedAtUnixSeconds - left.installedAtUnixSeconds
-      || left.name.localeCompare(right.name, "zh-Hans-CN");
+    return modSortDirection.value === "asc" ? comparison : -comparison;
   });
 
   return mods;
@@ -555,6 +559,8 @@ function modelKindLabel(modelKind: string) {
     npc: "NPC",
     slinger: "投射器",
     voice: "人物语音",
+    weaponVoice: "武器语音",
+    plugin: "插件",
     face: "脸型",
     monster: "怪物",
     poogie: "噗吱猪服装",
@@ -714,16 +720,25 @@ async function loadModCategories() {
   }
 }
 
-async function loadConflictReport() {
+async function refreshModViews() {
+  isRefreshingModViews.value = true;
+
   try {
-    conflictReport.value = await getModConflictReport();
+    const snapshot = await refreshModWorkspaceSnapshot();
+    installedModList.value = snapshot.installedMods;
+    modCategories.value = snapshot.categories.categories;
+    conflictReport.value = snapshot.conflictReport;
     modLibraryError.value = "";
+    categoryError.value = "";
+    syncCategoryFilter();
   } catch (error) {
     modLibraryError.value = userFacingError(error);
+  } finally {
+    isRefreshingModViews.value = false;
   }
 }
 
-async function refreshModViews() {
+async function loadModViewsFromSnapshot() {
   isRefreshingModViews.value = true;
 
   try {
@@ -1035,7 +1050,7 @@ async function installPreviewedMod() {
     installResult.value = await installModFromFolder(importPath.value, allowGameRoot);
     importError.value = "";
     await loadModLibraryStatus();
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     importError.value = userFacingError(error);
   } finally {
@@ -1056,7 +1071,7 @@ async function installArchive() {
       outcome.status === "ambiguous" ? outcome.originalArchivePath : null;
     selectedCandidateRootPath.value = outcome.preview?.candidates[0]?.rootPath ?? "";
     await loadModLibraryStatus();
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     archiveError.value = userFacingError(error);
   } finally {
@@ -1083,7 +1098,7 @@ async function installSelectedCandidate() {
     candidateImportSourcePath.value = "";
     candidateOriginalArchivePath.value = null;
     selectedCandidateRootPath.value = "";
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
     await loadModLibraryStatus();
   } catch (error) {
     importError.value = userFacingError(error);
@@ -1128,7 +1143,7 @@ async function importSelectedLegacyBoxMods() {
     legacyBoxStateSyncResult.value = result.stateSync;
     legacyBoxError.value = "";
     await loadModLibraryStatus();
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     legacyBoxError.value = userFacingError(error);
   } finally {
@@ -1142,7 +1157,7 @@ async function refreshLegacyBoxGameModStates() {
     // 手动检测复用同一条 Rust 状态同步链路，不会复制、覆盖或删除游戏目录文件。
     legacyBoxStateSyncResult.value = await refreshGameModStates();
     legacyBoxError.value = "";
-    await refreshModViews();
+    await loadModViewsFromSnapshot();
   } catch (error) {
     legacyBoxError.value = userFacingError(error);
   } finally {
@@ -1549,9 +1564,34 @@ async function moveSelectedConflictParticipant(
   activeModAction.value = modId;
 
   try {
-    await moveConflictParticipant(selectedConflictGroupId.value, modId, direction);
+    const currentGroup = selectedConflictGroup.value;
+    if (!currentGroup) {
+      return;
+    }
+    const result = await moveConflictParticipant(
+      selectedConflictGroupId.value,
+      modId,
+      direction,
+      currentGroup.participants.map((participant) => participant.modId),
+    );
+    const participantsById = new Map(
+      currentGroup.participants.map((participant) => [participant.modId, participant]),
+    );
+    const reorderedParticipants = result.participantOrder.flatMap((participantId, index) => {
+      const participant = participantsById.get(participantId);
+      return participant ? [{ ...participant, order: index + 1 }] : [];
+    });
+    if (conflictReport.value && reorderedParticipants.length === currentGroup.participants.length) {
+      conflictReport.value = {
+        ...conflictReport.value,
+        groups: conflictReport.value.groups.map((group) =>
+          group.groupId === currentGroup.groupId
+            ? { ...group, participants: reorderedParticipants }
+            : group,
+        ),
+      };
+    }
     conflictActionError.value = "";
-    await loadConflictReport();
   } catch (error) {
     conflictActionError.value = userFacingError(error);
   } finally {
@@ -1610,7 +1650,7 @@ onMounted(() => {
       // Browser-only Vite development has no Tauri event API.
     })
     .finally(() => {
-      void refreshModViews();
+      void loadModViewsFromSnapshot();
     });
   void getCurrentWebview()
     .onDragDropEvent((event) => {
@@ -2212,6 +2252,7 @@ onBeforeUnmount(() => {
           :status-filter="modStatusFilter"
           :conflict-filter="modConflictFilter"
           :sort="modSort"
+          :sort-direction="modSortDirection"
           :categories="availableModCategories"
           @manage-categories="openCategoryManager()"
           @update-search-query="modSearchQuery = $event"
@@ -2219,6 +2260,7 @@ onBeforeUnmount(() => {
           @update-status-filter="modStatusFilter = $event"
           @update-conflict-filter="modConflictFilter = $event"
           @update-sort="modSort = $event"
+          @update-sort-direction="modSortDirection = $event"
         />
         <p v-if="categoryError && !isCategoryManagerOpen" class="error">{{ categoryError }}</p>
         <p v-if="installedMods.length" class="hint">

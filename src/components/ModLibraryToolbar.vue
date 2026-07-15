@@ -11,6 +11,7 @@ const props = defineProps<{
   statusFilter: string;
   conflictFilter: string;
   sort: "manual" | "installation" | "name" | "category" | "replacement";
+  sortDirection: "asc" | "desc";
   categories: CategoryFilterOption[];
 }>();
 
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   updateStatusFilter: [value: string];
   updateConflictFilter: [value: string];
   updateSort: [value: "manual" | "installation" | "name" | "category" | "replacement"];
+  updateSortDirection: [value: "asc" | "desc"];
 }>();
 
 function updateSearchQuery(event: Event) {
@@ -44,6 +46,10 @@ function updateSort(event: Event) {
     "updateSort",
     (event.target as HTMLSelectElement).value as "manual" | "installation" | "name" | "category" | "replacement",
   );
+}
+
+function toggleSortDirection() {
+  emit("updateSortDirection", props.sortDirection === "asc" ? "desc" : "asc");
 }
 </script>
 
@@ -97,13 +103,25 @@ function updateSort(event: Event) {
     </label>
     <label>
       <span>排序</span>
-      <select :value="props.sort" @change="updateSort">
-        <option value="manual">手动排序</option>
-        <option value="installation">导入顺序</option>
-        <option value="name">名称</option>
-        <option value="category">分类</option>
-        <option value="replacement">替换目标</option>
-      </select>
+      <div class="sort-control-row">
+        <select :value="props.sort" @change="updateSort">
+          <option value="manual">手动排序</option>
+          <option value="installation">导入顺序</option>
+          <option value="name">名称</option>
+          <option value="category">分类</option>
+          <option value="replacement">替换目标</option>
+        </select>
+        <button
+          type="button"
+          class="icon-button sort-direction-button"
+          :disabled="props.sort === 'manual'"
+          :aria-label="props.sortDirection === 'asc' ? '切换为倒序' : '切换为升序'"
+          :data-tooltip="props.sortDirection === 'asc' ? '当前升序' : '当前倒序'"
+          @click="toggleSortDirection"
+        >
+          <span aria-hidden="true">{{ props.sortDirection === "asc" ? "↑" : "↓" }}</span>
+        </button>
+      </div>
     </label>
   </div>
 </template>
@@ -136,6 +154,22 @@ function updateSort(event: Event) {
 .category-filter-row select {
   min-width: 0;
   flex: 1;
+}
+
+.sort-control-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sort-control-row select {
+  min-width: 0;
+  flex: 1;
+}
+
+.sort-direction-button {
+  min-height: 42px;
+  flex: 0 0 32px;
+  font-size: 1rem;
 }
 
 input,

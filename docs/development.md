@@ -90,7 +90,7 @@ src-tauri/
 
 1. command 使用 `async fn`，并通过 `operations::run_blocking_operation` 调用同步文件 service。
 2. service 在已知文件总数后通过 `OperationReporter` 上报真实完成数；未知总数的扫描只上报阶段和当前项。
-3. 前端不要重复调用列表、分类、冲突三个全量读取 command；刷新 MOD 库时使用 `getModWorkspaceSnapshot()`。
+3. 前端不要重复调用列表、分类、冲突三个全量读取 command；启动和普通导入后使用 `getModWorkspaceSnapshot()` 读取缓存，只有用户主动刷新时使用 `refreshModWorkspaceSnapshot()` 强制全量重建。
 4. 任务事件统一为 `acumod://operation-progress`，由 `OperationStatusBar` 展示；不要为单个功能另造加载浮层或取消按钮。
 5. 完成后检查软件目录旁的 `AcumodData/logs/operation-timings.log` 是否写入结果和耗时。日志不能记录凭据、令牌或文件内容。
 
@@ -143,6 +143,9 @@ src/api/modLibrary.ts
 
   getModWorkspaceSnapshot()
   -> invoke<ModWorkspaceSnapshot>("get_mod_workspace_snapshot")
+
+  refreshModWorkspaceSnapshot()
+  -> invoke<ModWorkspaceSnapshot>("refresh_mod_workspace_snapshot")
 
   previewModImport(path, allowGameRoot)
   -> invoke<ModImportPreview>("preview_mod_import", { path, allowGameRoot })
@@ -253,7 +256,7 @@ src-tauri/src/services/mod_library.rs
   多候选时重新校验并只导入用户选择的一个内容根
   盒子导入完成后调用 mod_state_sync service；完全匹配自动启用，可完整解释的部分匹配自动启用并纳入冲突顺序，其余自动保持未启用
   观察所得部署记录删除前重新比较本地库有效内容；外部改动、归属不明或仍有等价提供者时保留文件
-  调用 model_recognition service，将路径识别和 EVAM 关联结果写入当前 manifest schema 15
+  调用 model_recognition service，将路径识别和 EVAM 关联结果写入当前 manifest schema 16
   调用 model_remap service，校验并保存五类改绑选择，生成有效部署文件、MRL3 贴图路径修正和 EVAM 飞翔爪绑定修正
   启用 MOD 前生成部署计划，确认覆盖后复制到 MHW 游戏目录，并把 deployedFiles 写回 manifest
   禁用 MOD 时只删除 manifest 中记录过的 deployedFiles
@@ -405,7 +408,7 @@ Vue UI
 1. 导入 service 根据最终 `deployRelativePath` 和库内 `.evam` 文件调用内容感知识别入口。
 2. Rust 查询编译进应用的武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪和人物语音精简索引；投射器未核实名称保留资源 ID，不按防具同号推断。
 3. 只有实际存在匹配 `wp/slg` 模型时，严格通过格式校验的 `.evam` 才作为该飞翔爪的关联防具写入 `associations`；孤立 `.evam` 不生成识别结果。
-4. 结果随 `ModInstallResult` 返回并写入当前 manifest schema 15。
+4. 结果随 `ModInstallResult` 返回并写入当前 manifest schema 16。
 5. `list_installed_mods` 读取 schema 1 至 12 的旧 manifest 时结合库内文件内容重算识别结果；武器和防具只在规范资源根目录识别，`vfx/mod` 中的同名模型只作为附属资源保留。
 6. Vue 展示模型类型、子类型、模型 ID、游戏名称和可选关联防具摘要。
 
@@ -413,7 +416,7 @@ Vue UI
 
 1. Vue 调用 `get_mod_remap_details`，只显示后端判定为可改绑的五类分组和同类型目标。
 2. 用户选择目标并点击保存后，Vue 在内部调用 `preview_mod_remap`；Rust 校验原路径、有效路径、MRL3 修正、EVAM 绑定和碰撞，不写 manifest。前端只显示必要警告，不展示技术统计。
-3. 校验通过后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 15 manifest。
+3. 校验通过后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 16 manifest。
 4. `preview_enable_mod`、`enable_mod`、冲突检测和冲突顺序应用不再直接使用原始 `files[].deployRelativePath`，而是统一调用有效部署文件生成器。
 5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；飞翔爪改绑只修改已关联 `.evam` 的绑定字段；本地库原文件保持不变。
 
@@ -464,9 +467,9 @@ Vue UI
 例如“冲突检测和排序”：
 
 1. Vue 读取已安装 MOD 后调用 `get_mod_conflict_report`，主列表只显示普通序号；手动拖拽排序调用 `move_mod_library_item` 并只写 `mod-library-order.json`。
-2. Rust service 扫描所有 manifest 中的 `deployRelativePath`，将直接或间接相互冲突的 MOD 聚合为独立冲突组。
+2. Rust service 在刷新时扫描所有 manifest 中的 `deployRelativePath`，将直接或间接相互冲突的 MOD 聚合为独立冲突组并写入工作区快照。
 3. 用户打开冲突管理界面并选择一个 MOD 组；Vue 调用 `move_conflict_participant` 上移或下移组内 MOD。列表从上到下为优先级，第一项是最终覆盖者。
-4. 排序移动只更新 `conflict-orders.json` 中这个 MOD 组合的顺序，不立即写入 MHW 游戏目录。
+4. 排序移动由前端提交当前组的完整 ID 顺序，Rust 只更新 `conflict-orders.json` 中这个组合及工作区快照对应组，不重新读取全部 manifest，也不立即写入 MHW 游戏目录。
 5. 用户点击应用此组顺序后，Vue 先调用 `preview_apply_conflict_order`。
 6. 用户确认后调用 `apply_conflict_order`，Rust service 遍历组内全部冲突文件，按组优先级选择各文件的最终提供者并更新部署记录。
 7. 冲突报告只使用已启用 MOD；`enable_mod` 成功后把本次启用的 MOD 放到相关组最上方，再应用组优先级。

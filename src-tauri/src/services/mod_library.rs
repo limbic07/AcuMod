@@ -33,8 +33,9 @@ use super::model_remap::{
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 15;
-const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 13;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 16;
+const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 16;
+const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
 const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 1;
 const MOD_CATEGORY_NAME_LIMIT: usize = 40;
@@ -123,7 +124,7 @@ pub struct ModArchiveImportOutcome {
     pub message: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledModSummary {
     pub id: String,
@@ -200,7 +201,7 @@ pub struct ModRemapApplyResult {
     pub message: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledModList {
     pub mods: Vec<InstalledModSummary>,
@@ -208,7 +209,7 @@ pub struct InstalledModList {
     pub message: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModWorkspaceSnapshot {
     pub installed_mods: InstalledModList,
@@ -382,7 +383,7 @@ pub struct RestoreAllResult {
     pub message: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModConflictParticipant {
     pub mod_id: String,
@@ -391,7 +392,7 @@ pub struct ModConflictParticipant {
     pub order: usize,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedModelTarget {
     pub model_kind: String,
@@ -400,7 +401,7 @@ pub struct SharedModelTarget {
     pub display_names: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModConflictGroup {
     pub group_id: String,
@@ -412,7 +413,7 @@ pub struct ModConflictGroup {
     pub shared_model_targets: Vec<SharedModelTarget>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModConflictReport {
     pub conflict_count: usize,
@@ -429,6 +430,7 @@ pub struct ModConflictMoveResult {
     pub mod_id: String,
     pub direction: String,
     pub moved: bool,
+    pub participant_order: Vec<String>,
     pub message: String,
 }
 
@@ -475,7 +477,7 @@ pub struct ModCategory {
     pub created_at_unix_seconds: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModCategoryList {
     pub categories: Vec<ModCategory>,
@@ -653,6 +655,14 @@ struct InstalledManifestContext {
     manifest: InstalledModManifest,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredWorkspaceSnapshot {
+    schema_version: u32,
+    manifest_schema_version: u32,
+    snapshot: ModWorkspaceSnapshot,
+}
+
 #[derive(Clone)]
 struct EffectiveInstalledModFile {
     installed_file: InstalledModFile,
@@ -740,14 +750,19 @@ pub fn install_mod_from_folder_with_progress(
 ) -> Result<ModInstallResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    install_mod_from_folder_into_with_options_and_progress(
+    let mut result = install_mod_from_folder_into_with_options_and_progress(
         raw_path,
         allow_game_root,
         &paths.installed_path,
         None,
         None,
         progress,
-    )
+    )?;
+    append_workspace_snapshot_warning(
+        &mut result.message,
+        update_workspace_snapshot_after_import(&paths, &result.mod_id),
+    );
+    Ok(result)
 }
 
 pub fn install_mod_from_archive_with_progress(
@@ -817,7 +832,7 @@ pub fn install_mod_from_archive_with_progress(
     );
 
     match result {
-        Ok(install_result) => {
+        Ok(mut install_result) => {
             let cleanup_message = match fs::remove_dir_all(&staging_path) {
                 Ok(()) => "Archive MOD import completed.".to_string(),
                 Err(error) => format!(
@@ -826,6 +841,10 @@ pub fn install_mod_from_archive_with_progress(
                 ),
             };
 
+            append_workspace_snapshot_warning(
+                &mut install_result.message,
+                update_workspace_snapshot_after_import(&paths, &install_result.mod_id),
+            );
             Ok(ModArchiveImportOutcome {
                 status: if install_result.already_installed {
                     "alreadyInstalled".to_string()
@@ -885,6 +904,11 @@ pub fn install_mod_from_candidate_with_progress(
                     }
                 }
             }
+
+            append_workspace_snapshot_warning(
+                &mut install_result.message,
+                update_workspace_snapshot_after_import(&paths, &install_result.mod_id),
+            );
 
             Ok(install_result)
         }
@@ -1004,23 +1028,40 @@ pub fn import_legacy_box_mods_with_progress(
         progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
     }
 
-    let state_sync = match resolve_game_root(app) {
+    let (mut state_sync, snapshot_updated) = match resolve_game_root(app) {
         Ok(game_root) => match synchronize_legacy_mod_states_with_progress(
             &paths.installed_path,
             &game_root,
             progress,
         ) {
-            Ok(result) => result,
+            Ok(result) => (result, true),
             // 本地副本已经完成时，不应因只读状态检测失败而把整个导入判为失败。
             // 用户仍可在修复游戏目录或本地数据后手动重新检测。
-            Err(error) => ModStateSyncResult::unavailable(format!(
-                "MOD 已导入本地库，但状态同步未完成：{error}"
-            )),
+            Err(error) => (
+                ModStateSyncResult::unavailable(format!(
+                    "MOD 已导入本地库，但状态同步未完成：{error}"
+                )),
+                false,
+            ),
         },
-        Err(error) => ModStateSyncResult::unavailable(format!(
-            "MOD 已导入本地库，但尚未检测游戏状态：{error}"
-        )),
+        Err(error) => (
+            ModStateSyncResult::unavailable(format!(
+                "MOD 已导入本地库，但尚未检测游戏状态：{error}"
+            )),
+            false,
+        ),
     };
+    if !snapshot_updated {
+        if let Err(error) = save_workspace_snapshot_from_contexts(
+            &paths.installed_path,
+            &installed_contexts,
+            progress,
+        ) {
+            state_sync
+                .warnings
+                .push(format!("工作区快照更新失败，下次刷新时会重新生成：{error}"));
+        }
+    }
 
     let failed_count = items.iter().filter(|item| item.status == "failed").count();
     let message = format!(
@@ -1221,6 +1262,10 @@ fn synchronize_legacy_mod_states_with_progress(
     }
 
     apply_mod_state_sync_plan(installed_root, game_root, &mut contexts, &plan, progress)?;
+    progress.report("正在更新工作区快照", 0, None, None);
+    if let Err(error) = save_workspace_snapshot_from_contexts(installed_root, &contexts, progress) {
+        warnings.push(format!("工作区快照更新失败，下次刷新时会重新生成：{error}"));
+    }
     Ok(plan.to_result(warnings))
 }
 
@@ -1512,19 +1557,46 @@ pub fn get_mod_workspace_snapshot_with_progress(
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
 
+    progress.report("正在读取工作区快照", 0, None, None);
+    if let Some(snapshot) = read_workspace_snapshot(&paths.workspace_snapshot_path)? {
+        return Ok(snapshot);
+    }
+
+    refresh_mod_workspace_snapshot_with_progress(app, progress)
+}
+
+pub fn refresh_mod_workspace_snapshot_with_progress(
+    app: &tauri::AppHandle,
+    progress: &OperationReporter,
+) -> Result<ModWorkspaceSnapshot, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+
     progress.report("正在读取 MOD 分类", 0, None, None);
     let category_store = load_or_initialize_mod_category_store(&paths)?;
     progress.report("正在读取 MOD 清单", 0, None, None);
     let contexts = load_all_installed_manifests_with_progress(&paths.installed_path, progress)?;
-    let installed_mods = installed_mod_list_from_contexts(
+    let snapshot = build_workspace_snapshot_from_contexts(
         &paths.installed_path,
         &contexts,
         &category_store,
         progress,
     )?;
+    save_workspace_snapshot(&paths.workspace_snapshot_path, &snapshot)?;
+    Ok(snapshot)
+}
+
+fn build_workspace_snapshot_from_contexts(
+    installed_root: &Path,
+    contexts: &[InstalledManifestContext],
+    category_store: &ModCategoryStore,
+    progress: &OperationReporter,
+) -> Result<ModWorkspaceSnapshot, String> {
+    let installed_mods =
+        installed_mod_list_from_contexts(installed_root, contexts, category_store, progress)?;
     progress.report("正在分析冲突信息", 0, None, None);
-    let conflict_store = read_conflict_order_store(&paths.installed_path)?;
-    let conflict_report = build_mod_conflict_report(&contexts, &conflict_store)?;
+    let conflict_store = read_conflict_order_store(installed_root)?;
+    let conflict_report = build_mod_conflict_report(contexts, &conflict_store)?;
     let categories = sorted_mod_categories(&category_store.categories);
 
     Ok(ModWorkspaceSnapshot {
@@ -1535,6 +1607,109 @@ pub fn get_mod_workspace_snapshot_with_progress(
         },
         conflict_report,
     })
+}
+
+fn save_workspace_snapshot_from_contexts(
+    installed_root: &Path,
+    contexts: &[InstalledManifestContext],
+    progress: &OperationReporter,
+) -> Result<(), String> {
+    let categories_path = mod_category_store_path(installed_root)
+        .ok_or_else(|| "无法确定分类数据文件位置。".to_string())?;
+    // 状态同步已经持有最新 manifest，上下文不能再通过分类迁移入口重复全库读取。
+    let category_store = load_mod_category_store(&categories_path)?;
+    let snapshot = build_workspace_snapshot_from_contexts(
+        installed_root,
+        contexts,
+        &category_store,
+        progress,
+    )?;
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    save_workspace_snapshot(&snapshot_path, &snapshot)
+}
+
+fn update_workspace_snapshot_after_import(
+    paths: &LibraryPaths,
+    mod_id: &str,
+) -> Result<(), String> {
+    let Some(mut snapshot) = read_workspace_snapshot(&paths.workspace_snapshot_path)? else {
+        return Ok(());
+    };
+    let category_store = load_mod_category_store(&paths.categories_path)?;
+    let context = load_installed_manifest(&paths.installed_path, mod_id)?;
+    let mut imported = installed_mod_list_from_contexts(
+        &paths.installed_path,
+        &[context],
+        &category_store,
+        &OperationReporter::default(),
+    )?;
+    let Some(imported_mod) = imported.mods.pop() else {
+        return Err("导入完成，但无法生成 MOD 快照条目。".to_string());
+    };
+
+    snapshot
+        .installed_mods
+        .mods
+        .retain(|installed| installed.id != imported_mod.id);
+    snapshot.installed_mods.mods.push(imported_mod);
+    snapshot.installed_mods.mods.sort_by(|left, right| {
+        right
+            .installed_at_unix_seconds
+            .cmp(&left.installed_at_unix_seconds)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    apply_mod_library_order(&paths.installed_path, &mut snapshot.installed_mods.mods)?;
+    snapshot.installed_mods.message = format!(
+        "本地 MOD 库共有 {} 个 MOD。",
+        snapshot.installed_mods.mods.len()
+    );
+    let categories = sorted_mod_categories(&category_store.categories);
+    snapshot.categories = ModCategoryList {
+        message: format!("共有 {} 个分类。", categories.len()),
+        categories,
+    };
+    save_workspace_snapshot(&paths.workspace_snapshot_path, &snapshot)
+}
+
+fn append_workspace_snapshot_warning(message: &mut String, result: Result<(), String>) {
+    if let Err(error) = result {
+        message.push_str(&format!(" 工作区快照更新失败，请点击刷新重建：{error}"));
+    }
+}
+
+fn read_workspace_snapshot(path: &Path) -> Result<Option<ModWorkspaceSnapshot>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let json = fs::read_to_string(path)
+        .map_err(|error| format!("无法读取工作区快照 {}：{error}", path.display()))?;
+    let Ok(stored) = serde_json::from_str::<StoredWorkspaceSnapshot>(&json) else {
+        return Ok(None);
+    };
+    if stored.schema_version != WORKSPACE_SNAPSHOT_SCHEMA_VERSION
+        || stored.manifest_schema_version != CURRENT_MOD_MANIFEST_SCHEMA_VERSION
+    {
+        return Ok(None);
+    }
+    Ok(Some(stored.snapshot))
+}
+
+fn save_workspace_snapshot(path: &Path, snapshot: &ModWorkspaceSnapshot) -> Result<(), String> {
+    let stored = StoredWorkspaceSnapshot {
+        schema_version: WORKSPACE_SNAPSHOT_SCHEMA_VERSION,
+        manifest_schema_version: CURRENT_MOD_MANIFEST_SCHEMA_VERSION,
+        snapshot: snapshot.clone(),
+    };
+    let json = serde_json::to_string_pretty(&stored)
+        .map_err(|error| format!("无法序列化工作区快照：{error}"))?;
+    fs::write(path, json).map_err(|error| format!("无法保存工作区快照 {}：{error}", path.display()))
+}
+
+fn workspace_snapshot_path_for_installed_root(installed_root: &Path) -> Result<PathBuf, String> {
+    installed_root
+        .parent()
+        .map(|mods_path| mods_path.join("workspace-snapshot.json"))
+        .ok_or_else(|| "无法确定工作区快照目录。".to_string())
 }
 
 pub fn move_mod_library_item(
@@ -1907,10 +2082,17 @@ pub fn move_conflict_participant(
     group_id: String,
     mod_id: String,
     direction: String,
+    participant_order: Vec<String>,
 ) -> Result<ModConflictMoveResult, String> {
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
-    move_conflict_participant_from(&paths.installed_path, &group_id, &mod_id, &direction)
+    move_conflict_participant_from(
+        &paths.installed_path,
+        &group_id,
+        &mod_id,
+        &direction,
+        participant_order,
+    )
 }
 
 pub fn preview_apply_conflict_order(
@@ -3162,6 +3344,8 @@ fn model_kind_label(model_kind: &str) -> &str {
         "npc" => "NPC",
         "slinger" => "投射器",
         "voice" => "人物语音",
+        "weaponVoice" => "武器语音",
+        "plugin" => "插件",
         "face" => "脸型",
         "monster" => "怪物",
         "poogie" => "噗吱猪服装",
@@ -4251,50 +4435,106 @@ fn move_conflict_participant_from(
     group_id: &str,
     mod_id: &str,
     direction: &str,
+    mut order: Vec<String>,
 ) -> Result<ModConflictMoveResult, String> {
     validate_mod_id(mod_id)?;
-    let contexts = load_all_installed_manifests(installed_root)?;
+    if order.len() < 2 {
+        return Err("冲突组至少需要两个 MOD。".to_string());
+    }
+    let mut unique_ids = HashSet::new();
+    for participant_id in &order {
+        validate_mod_id(participant_id)?;
+        if !unique_ids.insert(participant_id.clone()) {
+            return Err("冲突组顺序包含重复 MOD。".to_string());
+        }
+    }
+    let mut sorted_ids = order.clone();
+    sorted_ids.sort();
+    if conflict_group_id(&sorted_ids) != group_id {
+        return Err("冲突组已经变化，请刷新后重试。".to_string());
+    }
+
     let mut store = read_conflict_order_store(installed_root)?;
-    let report = build_mod_conflict_report(&contexts, &store)?;
-    let group = find_conflict_group(&report, group_id)?;
-    let mut order = group
-        .participants
-        .iter()
-        .map(|participant| participant.mod_id.clone())
-        .collect::<Vec<_>>();
     let index = order
         .iter()
         .position(|participant_id| participant_id == mod_id)
-        .ok_or_else(|| format!("MOD is not part of this conflict: {mod_id}"))?;
+        .ok_or_else(|| format!("当前 MOD 不属于该冲突组：{mod_id}"))?;
     let target_index = match direction {
         "up" if index > 0 => Some(index - 1),
         "down" if index + 1 < order.len() => Some(index + 1),
         "up" | "down" => None,
-        other => return Err(format!("Unknown conflict move direction: {other}")),
+        other => return Err(format!("未知的冲突顺序移动方向：{other}")),
     };
 
     let Some(target_index) = target_index else {
         return Ok(ModConflictMoveResult {
-            group_id: group.group_id.clone(),
+            group_id: group_id.to_string(),
             mod_id: mod_id.to_string(),
             direction: direction.to_string(),
             moved: false,
-            message: "MOD is already at the requested edge of this conflict order.".to_string(),
+            participant_order: order,
+            message: "当前 MOD 已位于冲突顺序边界。".to_string(),
         });
     };
 
     order.swap(index, target_index);
-    store.orders.insert(group.group_id.clone(), order);
+    store.orders.insert(group_id.to_string(), order.clone());
     save_conflict_order_store(installed_root, &store)?;
+    update_workspace_snapshot_conflict_order(installed_root, group_id, &order)?;
 
     Ok(ModConflictMoveResult {
-        group_id: group.group_id.clone(),
+        group_id: group_id.to_string(),
         mod_id: mod_id.to_string(),
         direction: direction.to_string(),
         moved: true,
-        message: "Conflict order was updated. Apply this group to update its game files."
-            .to_string(),
+        participant_order: order,
+        message: "冲突优先级已更新，应用该冲突组后会同步游戏目录文件。".to_string(),
     })
+}
+
+fn update_workspace_snapshot_conflict_order(
+    installed_root: &Path,
+    group_id: &str,
+    participant_order: &[String],
+) -> Result<(), String> {
+    let snapshot_path = workspace_snapshot_path_for_installed_root(installed_root)?;
+    let Some(mut snapshot) = read_workspace_snapshot(&snapshot_path)? else {
+        return Ok(());
+    };
+    let Some(group) = snapshot
+        .conflict_report
+        .groups
+        .iter_mut()
+        .find(|group| group.group_id == group_id)
+    else {
+        return Ok(());
+    };
+    let participants_by_id = group
+        .participants
+        .iter()
+        .cloned()
+        .map(|participant| (participant.mod_id.clone(), participant))
+        .collect::<HashMap<_, _>>();
+    if !participant_order
+        .iter()
+        .all(|mod_id| participants_by_id.contains_key(mod_id))
+    {
+        return Ok(());
+    }
+    group.participants = participant_order
+        .iter()
+        .enumerate()
+        .filter_map(|(index, mod_id)| {
+            participants_by_id
+                .get(mod_id)
+                .cloned()
+                .map(|mut participant| {
+                    participant.order = index + 1;
+                    participant
+                })
+        })
+        .collect();
+    save_workspace_snapshot(&snapshot_path, &snapshot)
 }
 
 fn preview_apply_conflict_order_from(
@@ -6248,6 +6488,7 @@ struct LibraryPaths {
     mods_path: PathBuf,
     installed_path: PathBuf,
     categories_path: PathBuf,
+    workspace_snapshot_path: PathBuf,
     staging_path: PathBuf,
     import_staging_path: PathBuf,
 }
@@ -6257,6 +6498,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
     let mods_path = software_data_path.join("mods");
     let installed_path = mods_path.join("installed");
     let categories_path = mods_path.join("categories.json");
+    let workspace_snapshot_path = mods_path.join("workspace-snapshot.json");
     let staging_path = mods_path.join("staging");
     let import_staging_path = staging_path.join("imports");
 
@@ -6265,6 +6507,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
         mods_path,
         installed_path,
         categories_path,
+        workspace_snapshot_path,
         staging_path,
         import_staging_path,
     })
@@ -6461,6 +6704,34 @@ fn ensure_recognition_categories(
                     recognition_key,
                     name: weapon_type.to_string(),
                     parent_recognition_key: Some("weapon".to_string()),
+                    assign_to_mod: true,
+                });
+            continue;
+        }
+
+        if model_kind == "weaponVoice" {
+            let parent =
+                specs
+                    .entry("weaponVoice".to_string())
+                    .or_insert_with(|| RecognitionCategorySpec {
+                        recognition_key: "weaponVoice".to_string(),
+                        name: "武器语音".to_string(),
+                        parent_recognition_key: None,
+                        assign_to_mod: false,
+                    });
+            let weapon_type = replacement.sub_kind.trim();
+            if weapon_type.is_empty() {
+                parent.assign_to_mod = true;
+                continue;
+            }
+
+            let recognition_key = format!("weaponVoice:{weapon_type}");
+            specs
+                .entry(recognition_key.clone())
+                .or_insert_with(|| RecognitionCategorySpec {
+                    recognition_key,
+                    name: weapon_type.to_string(),
+                    parent_recognition_key: Some("weaponVoice".to_string()),
                     assign_to_mod: true,
                 });
             continue;
@@ -7698,7 +7969,19 @@ mod tests {
 
         let initial_report = get_mod_conflict_report_from(&installed_root).unwrap();
         let group_id = initial_report.groups[0].group_id.clone();
-        move_conflict_participant_from(&installed_root, &group_id, &first.mod_id, "down").unwrap();
+        let participant_order = initial_report.groups[0]
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect();
+        move_conflict_participant_from(
+            &installed_root,
+            &group_id,
+            &first.mod_id,
+            "down",
+            participant_order,
+        )
+        .unwrap();
         let moved_report = get_mod_conflict_report_from(&installed_root).unwrap();
 
         assert_eq!(
@@ -7797,8 +8080,19 @@ mod tests {
             .map(|participant| participant.mod_id.clone())
             .collect::<Vec<_>>();
 
-        move_conflict_participant_from(&installed_root, &edited_group_id, &first.mod_id, "down")
-            .unwrap();
+        let participant_order = edited_group
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect();
+        move_conflict_participant_from(
+            &installed_root,
+            &edited_group_id,
+            &first.mod_id,
+            "down",
+            participant_order,
+        )
+        .unwrap();
 
         let after = get_mod_conflict_report_from(&installed_root).unwrap();
         let other_after = after
@@ -7875,7 +8169,19 @@ mod tests {
         let report = get_mod_conflict_report_from(&installed_root).unwrap();
         let group_id = report.groups[0].group_id.clone();
         assert_eq!(report.groups[0].conflict_file_count, 2);
-        move_conflict_participant_from(&installed_root, &group_id, &second.mod_id, "down").unwrap();
+        let participant_order = report.groups[0]
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect();
+        move_conflict_participant_from(
+            &installed_root,
+            &group_id,
+            &second.mod_id,
+            "down",
+            participant_order,
+        )
+        .unwrap();
         let result =
             apply_conflict_order_from(&installed_root, &game_root, &group_id, false).unwrap();
 
@@ -8212,12 +8518,21 @@ mod tests {
         enable_mod_from(&installed_root, &game_root, &first.mod_id, false).unwrap();
         enable_mod_from(&installed_root, &game_root, &second.mod_id, true).unwrap();
 
-        let group_id = get_mod_conflict_report_from(&installed_root)
-            .unwrap()
-            .groups[0]
-            .group_id
-            .clone();
-        move_conflict_participant_from(&installed_root, &group_id, &first.mod_id, "down").unwrap();
+        let report = get_mod_conflict_report_from(&installed_root).unwrap();
+        let group_id = report.groups[0].group_id.clone();
+        let participant_order = report.groups[0]
+            .participants
+            .iter()
+            .map(|participant| participant.mod_id.clone())
+            .collect();
+        move_conflict_participant_from(
+            &installed_root,
+            &group_id,
+            &first.mod_id,
+            "down",
+            participant_order,
+        )
+        .unwrap();
         assert!(read_conflict_order_store(&installed_root)
             .unwrap()
             .orders

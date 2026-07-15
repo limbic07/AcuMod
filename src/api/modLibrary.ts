@@ -415,6 +415,7 @@ export interface ModConflictMoveResult {
   modId: string;
   direction: string;
   moved: boolean;
+  participantOrder: string[];
   message: string;
 }
 
@@ -480,6 +481,10 @@ export function listInstalledMods(): Promise<InstalledModList> {
 
 export function getModWorkspaceSnapshot(): Promise<ModWorkspaceSnapshot> {
   return invoke<ModWorkspaceSnapshot>("get_mod_workspace_snapshot");
+}
+
+export function refreshModWorkspaceSnapshot(): Promise<ModWorkspaceSnapshot> {
+  return invoke<ModWorkspaceSnapshot>("refresh_mod_workspace_snapshot");
 }
 
 export function updateModMetadata(
@@ -696,11 +701,13 @@ export function moveConflictParticipant(
   groupId: string,
   modId: string,
   direction: "up" | "down",
+  participantOrder: string[],
 ): Promise<ModConflictMoveResult> {
   return invoke<ModConflictMoveResult>("move_conflict_participant", {
     groupId,
     modId,
     direction,
+    participantOrder,
   });
 }
 

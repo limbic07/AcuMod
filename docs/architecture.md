@@ -138,7 +138,8 @@ Vue 操作
 - `OperationReporter` 对目录扫描、压缩包解包、本地库复制、游戏目录复制、删除和游戏实际状态比对发送阶段与真实完成数。扫描总数未知时只展示当前发现项；文件清单确定后展示 `已完成 / 总数`。状态同步必须把“读取清单”“准备有效文件”“逐文件比对”“分析覆盖关系”和“保存状态”分成独立阶段，不能在比对期间停留在清单完成画面。
 - 每个任务结束后把类型、结果和耗时追加到 `AcumodData/logs/operation-timings.log`。该日志用于定位性能问题，不保存凭据或文件内容。
 - 本项目不提供任务取消。复制、删除和 manifest 写入一旦开始必须顺序完成，以保持部署记录与实际游戏目录一致。
-- `get_mod_workspace_snapshot` 在一次 manifest 读取后组装 MOD 列表、分类和冲突报告；MOD 库刷新优先使用它，避免前端并行调用三个全量扫描 command。
+- `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。普通导入只把新 MOD 和最新分类增量写回缓存，用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
+- 工作区快照只是可丢弃、可重建的读取缓存，不保存独立部署状态。manifest、`conflict-orders.json` 和 `mod-library-order.json` 仍是事实来源。
 
 ## MOD 库和复制式部署
 
@@ -328,7 +329,7 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
 
 ## MHW 模型替换识别
 
-MHW 的替换 MOD 通常可以通过资源路径和文件 ID 判断它替换的是哪一个游戏内对象。Acumod 内置维护精简 ID 索引，把底层 ID 映射成用户能理解的名称。MVP 覆盖武器、防具、发型、随从武器、随从防具、猎虫、挂件、NPC、猎人手臂上的投射器/飞翔爪和人物语音；同一个 MOD 可能识别出多个目标。Slice 14 在识别结果之上支持武器、防具、随从防具、投射器/飞翔爪和发型改绑；人物语音以及其它识别类别仍为只读。
+MHW 的替换 MOD 通常可以通过资源路径和文件 ID 判断它替换的是哪一个游戏内对象。Acumod 内置维护精简 ID 索引，把底层 ID 映射成用户能理解的名称。MVP 覆盖武器、防具、发型、随从武器、随从防具、猎虫、挂件、NPC、猎人手臂上的投射器/飞翔爪和人物语音；后续路径规则增加 `nativePC/plugins` 插件和按武器类型识别的语音资源。同一个 MOD 可能识别出多个目标。Slice 14 在识别结果之上支持武器、防具、随从防具、投射器/飞翔爪和发型改绑；人物语音、武器语音、插件以及其它识别类别仍为只读。
 
 当前识别链路：
 
@@ -343,14 +344,14 @@ MOD 文件列表
 
 模型替换信息建议包含：
 
-- 替换类型：武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪或人物语音。
+- 替换类型：武器、防具、发型、随从装备、猎虫、挂件、NPC、投射器/飞翔爪、人物语音、武器语音或插件。
 - 具体类型：例如太刀、大剑、弓等。
 - 原始目标 ID。
 - 原始目标游戏内名称。
 
 当前 `references/mhwi-data/curated/model-index.json` 由 `scripts/build-mhwi-model-index.ps1` 从 `15.10.00` 本地表和 curated 社区映射生成，并通过 `include_str!` 编译进 Rust。`model_recognition` service 只接受从 `nativePC` 开始的规范资源根目录：武器从 `wp/...`、防具从 `pl/f_equip/...` 或 `pl/m_equip/...`；`vfx/mod` 中即使包含相同模型 ID，也只被视为附属特效资源。一个模型可能被多个游戏对象共用，因此 DTO 保留名称和 ID 数组；同一防具模型必须命中头盔、铠甲、护手、腰甲和护腿五个标准部位才合并为一个套装 DTO，只有部分部位时继续返回独立 DTO。UI 遇到套装 DTO 时从官方分部位名称提取套装级名称，不得用第一条部位名称作为摘要。
 
-新导入 MOD 使用 manifest schema 15 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]` 和状态同步元数据。schema 1 至 12 的旧 manifest 会先结合本地库路径和 `.evam` 内容重算识别结果；schema 13 及更早版本的 `categoryOverride` 会与识别得到的初始分类合并后写入 `categoryIds[]`，schema 10 以后已保存的改绑选择仍会保留。模型 ID 和装备部位只从目录组件识别；人物语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。
+新导入 MOD 使用 manifest schema 16 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]` 和状态同步元数据。旧 manifest 会在读取时按迁移规则保留现有元数据并重新识别缺失或过期的模型结果。模型 ID 和装备部位只从目录组件识别；人物语音与武器语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。武器语音只接受 `wp_<代码>_(cmn|epvsp)` 或 `wpNN_<代码>_(cmn|epvsp)`，并映射到 14 种武器；无法确定武器的公共音频包不猜测分类。`nativePC/plugins` 下的内容统一识别为“插件”。
 
 投射器/飞翔爪接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录。已核对条目来自原始 MOD 页面；其它规范目录只返回 `pathPattern` 底层 ID，不按防具同号猜测。普通文件名不参与投射器识别，也不识别 `Assets/gm/gm000` 下的投射器弹药。
 
@@ -413,11 +414,11 @@ MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和
 - 文件结构更适合学习和调试。
 - 暂时不需要引入数据库依赖。
 
-当前传统管理器增强阶段仍使用 JSON：每个 `installed/<mod_id>/manifest.json` 的 `enabled` 与 `deployedFiles` 表示当前真正部署到游戏目录的状态，`installed/conflict-orders.json` 保存各冲突组的优先级，`mods/mod-library-order.json` 保存手动浏览顺序。冲突组顺序的第一项是最终覆盖者，MOD 库顺序绝不参与部署。它们共同构成唯一的运行状态。
+当前传统管理器增强阶段仍使用 JSON：每个 `installed/<mod_id>/manifest.json` 的 `enabled` 与 `deployedFiles` 表示当前真正部署到游戏目录的状态，`installed/conflict-orders.json` 保存各冲突组的优先级，`mods/mod-library-order.json` 保存手动浏览顺序。`mods/workspace-snapshot.json` 只是上述数据的读取缓存。冲突组顺序的第一项是最终覆盖者，MOD 库顺序绝不参与部署。前三者共同构成唯一的运行状态。
 
 ### 多配置移除迁移
 
-多配置、状态快照和配置切换均不属于产品范围。移除该功能时不需要转换当前 MOD 状态：每个 manifest 已保存 `enabled` 与 `deployedFiles`，`conflict-orders.json` 已保存当前冲突顺序，它们继续作为唯一事实来源。
+多配置、可切换的部署状态快照和配置切换均不属于产品范围。移除该功能时不需要转换当前 MOD 状态：每个 manifest 已保存 `enabled` 与 `deployedFiles`，`conflict-orders.json` 已保存当前冲突顺序，它们继续作为唯一事实来源。这里不包含可随时重建的 `workspace-snapshot.json` 读取缓存。
 
 当前代码不再包含 Profile DTO、Tauri command、Rust 存储模块或服务层同步逻辑，也不会在启动、启停、还原、冲突排序或卸载时访问 `AcumodData/mods/profiles.json`。旧文件保持原样，程序不读取、写入或自动删除它；旧文件中的额外命名快照也不会再被恢复或切换。
 
@@ -551,7 +552,7 @@ AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计�
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 15 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
+4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 16 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容；Slice 14 的受控改绑建立在该识别结果上。

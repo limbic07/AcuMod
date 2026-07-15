@@ -171,10 +171,26 @@ pub async fn get_mod_workspace_snapshot(
     let worker_app = app.clone();
     run_blocking_operation(
         app,
+        "loadWorkspace",
+        "正在加载 MOD 库",
+        move |progress| {
+            mod_library::get_mod_workspace_snapshot_with_progress(&worker_app, &progress)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn refresh_mod_workspace_snapshot(
+    app: tauri::AppHandle,
+) -> Result<ModWorkspaceSnapshot, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
         "refreshWorkspace",
         "正在刷新 MOD 库",
         move |progress| {
-            mod_library::get_mod_workspace_snapshot_with_progress(&worker_app, &progress)
+            mod_library::refresh_mod_workspace_snapshot_with_progress(&worker_app, &progress)
         },
     )
     .await
@@ -421,13 +437,30 @@ pub async fn get_mod_conflict_report(app: tauri::AppHandle) -> Result<ModConflic
 }
 
 #[tauri::command]
-pub fn move_conflict_participant(
+pub async fn move_conflict_participant(
     app: tauri::AppHandle,
     group_id: String,
     mod_id: String,
     direction: String,
+    participant_order: Vec<String>,
 ) -> Result<ModConflictMoveResult, String> {
-    mod_library::move_conflict_participant(&app, group_id, mod_id, direction)
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "moveConflict",
+        "正在调整冲突优先级",
+        move |progress| {
+            progress.report("正在保存冲突顺序", 0, None, None);
+            mod_library::move_conflict_participant(
+                &worker_app,
+                group_id,
+                mod_id,
+                direction,
+                participant_order,
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]

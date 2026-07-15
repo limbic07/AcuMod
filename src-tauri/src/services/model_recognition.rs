@@ -177,6 +177,8 @@ pub fn recognize_model_replacements(
     add_path_pattern_asset_matches(&mut replacements, &normalized_files, &index.asset_models);
     add_unknown_slinger_matches(&mut replacements, &normalized_files, &index.asset_models);
     add_voice_matches(&mut replacements, &normalized_files, &index.voice_models);
+    add_weapon_voice_matches(&mut replacements, &normalized_files);
+    add_plugin_matches(&mut replacements, &normalized_files);
     merge_armor_set_matches(&mut replacements);
 
     replacements.sort_by(|left, right| {
@@ -808,6 +810,116 @@ fn add_voice_matches(
     }
 }
 
+fn add_weapon_voice_matches(
+    replacements: &mut Vec<ModelReplacement>,
+    normalized_files: &[(String, String)],
+) {
+    let mut matches = BTreeMap::<(&'static str, &'static str), Vec<String>>::new();
+
+    for (normalized, original) in normalized_files {
+        let is_sound_bank = nativepc_relative_directory(normalized)
+            .is_some_and(|directory| directory_starts_with_path(directory, "sound/wwise/windows"));
+        if !is_sound_bank {
+            continue;
+        }
+        let Some((weapon_code, weapon_type)) = detect_weapon_voice(file_name(normalized)) else {
+            continue;
+        };
+        matches
+            .entry((weapon_code, weapon_type))
+            .or_default()
+            .push(original.clone());
+    }
+
+    for ((weapon_code, weapon_type), mut matched_files) in matches {
+        sort_and_deduplicate(&mut matched_files);
+        replacements.push(ModelReplacement {
+            model_kind: "weaponVoice".to_string(),
+            sub_kind: weapon_type.to_string(),
+            model_part: "soundBank".to_string(),
+            model_id: format!("weaponVoice:{weapon_code}"),
+            game_ids: Vec::new(),
+            variant_ids: Vec::new(),
+            display_names: vec![format!("{weapon_type}语音")],
+            affected_parts: Vec::new(),
+            associations: Vec::new(),
+            matched_files,
+            recognition_source: "pathPattern".to_string(),
+        });
+    }
+}
+
+fn detect_weapon_voice(file_name: &str) -> Option<(&'static str, &'static str)> {
+    // 公共音频包同样使用 wp 前缀；只有完整命中已知武器代码时才分类，避免把共享音效误报成武器语音。
+    let stem = file_name.strip_suffix(".nbnk")?;
+    let mut parts = stem.split('_');
+    let bank_prefix = parts.next()?;
+    let weapon_code = parts.next()?;
+    let bank_kind = parts.next()?;
+    if parts.next().is_some()
+        || !(bank_prefix == "wp"
+            || bank_prefix.strip_prefix("wp").is_some_and(|suffix| {
+                suffix.len() == 2 && suffix.chars().all(|character| character.is_ascii_digit())
+            }))
+        || !matches!(bank_kind, "cmn" | "epvsp")
+    {
+        return None;
+    }
+
+    WEAPON_VOICE_TYPES
+        .iter()
+        .find_map(|(code, weapon_type)| (*code == weapon_code).then_some((*code, *weapon_type)))
+}
+
+const WEAPON_VOICE_TYPES: &[(&str, &str)] = &[
+    ("bow", "弓"),
+    ("caxe", "盾斧"),
+    ("gun", "铳枪"),
+    ("ham", "大锤"),
+    ("hbg", "重弩炮"),
+    ("hue", "狩猎笛"),
+    ("lan", "长枪"),
+    ("lbg", "轻弩炮"),
+    ("one", "片手剑"),
+    ("rod", "操虫棍"),
+    ("saxe", "斩斧"),
+    ("sou", "双剑"),
+    ("swo", "太刀"),
+    ("two", "大剑"),
+];
+
+fn add_plugin_matches(
+    replacements: &mut Vec<ModelReplacement>,
+    normalized_files: &[(String, String)],
+) {
+    let mut matched_files = normalized_files
+        .iter()
+        .filter(|(normalized, _)| {
+            nativepc_relative_directory(normalized)
+                .is_some_and(|directory| directory_starts_with_path(directory, "plugins"))
+        })
+        .map(|(_, original)| original.clone())
+        .collect::<Vec<_>>();
+    if matched_files.is_empty() {
+        return;
+    }
+
+    sort_and_deduplicate(&mut matched_files);
+    replacements.push(ModelReplacement {
+        model_kind: "plugin".to_string(),
+        sub_kind: "插件".to_string(),
+        model_part: "pluginFiles".to_string(),
+        model_id: "nativePC/plugins".to_string(),
+        game_ids: Vec::new(),
+        variant_ids: Vec::new(),
+        display_names: vec!["插件".to_string()],
+        affected_parts: Vec::new(),
+        associations: Vec::new(),
+        matched_files,
+        recognition_source: "pathPattern".to_string(),
+    });
+}
+
 fn merge_armor_set_matches(replacements: &mut Vec<ModelReplacement>) {
     let mut armor_sets = BTreeMap::<String, Vec<ModelReplacement>>::new();
     let mut remaining_replacements = Vec::new();
@@ -1002,13 +1114,15 @@ fn model_kind_order(model_kind: &str) -> u8 {
         "npc" => 7,
         "slinger" => 8,
         "voice" => 9,
-        "face" => 10,
-        "monster" => 11,
-        "poogie" => 12,
-        "furniture" => 13,
-        "playerAccessory" => 14,
-        "palicoAccessory" => 15,
-        _ => 16,
+        "weaponVoice" => 10,
+        "plugin" => 11,
+        "face" => 12,
+        "monster" => 13,
+        "poogie" => 14,
+        "furniture" => 15,
+        "playerAccessory" => 16,
+        "palicoAccessory" => 17,
+        _ => 18,
     }
 }
 
@@ -1075,6 +1189,45 @@ mod tests {
         assert!(replacements
             .iter()
             .any(|replacement| replacement.sub_kind == "铠甲"));
+    }
+
+    #[test]
+    fn recognizes_plugin_directory_as_one_plugin_target() {
+        let paths = vec![
+            "nativePC/plugins/quick_gathering.dll".to_string(),
+            "nativePC/plugins/config/quick_gathering.toml".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let plugin = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "plugin")
+            .unwrap();
+
+        assert_eq!(plugin.sub_kind, "插件");
+        assert_eq!(plugin.matched_files.len(), 2);
+    }
+
+    #[test]
+    fn recognizes_weapon_voice_sound_banks_by_weapon_code() {
+        let paths = vec![
+            "nativePC/sound/wwise/Windows/wp03_swo_epvsp.nbnk".to_string(),
+            "nativePC/sound/wwise/Windows/wp_swo_cmn.nbnk".to_string(),
+            "nativePC/sound/wwise/Windows/wp_cmn_epvsp.nbnk".to_string(),
+        ];
+
+        let replacements = recognize_model_replacements(&paths).unwrap();
+        let weapon_voice = replacements
+            .iter()
+            .find(|replacement| replacement.model_kind == "weaponVoice")
+            .unwrap();
+
+        assert_eq!(weapon_voice.sub_kind, "太刀");
+        assert_eq!(weapon_voice.matched_files.len(), 2);
+        assert!(!weapon_voice
+            .matched_files
+            .iter()
+            .any(|path| path.ends_with("wp_cmn_epvsp.nbnk")));
     }
 
     #[test]
@@ -1430,12 +1583,17 @@ mod tests {
 
         let replacements = recognize_model_replacements(&paths).unwrap();
 
-        assert!(replacements.is_empty());
+        assert!(!replacements
+            .iter()
+            .any(|replacement| replacement.model_kind == "voice"));
+        assert!(replacements
+            .iter()
+            .any(|replacement| replacement.model_kind == "plugin"));
     }
 
     #[test]
     fn ignores_unrelated_mod_files() {
-        let paths = vec!["nativePC/plugins/example.dll".to_string()];
+        let paths = vec!["nativePC/unrelated/example.bin".to_string()];
 
         let replacements = recognize_model_replacements(&paths).unwrap();
 

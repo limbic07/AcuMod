@@ -110,6 +110,8 @@ function modelKindLabel(modelKind: string) {
     npc: "NPC",
     slinger: "投射器",
     voice: "人物语音",
+    weaponVoice: "武器语音",
+    plugin: "插件",
     face: "脸型",
     monster: "怪物",
     poogie: "噗吱猪服装",

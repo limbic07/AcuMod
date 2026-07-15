@@ -24,6 +24,7 @@ pub fn run() {
             commands::mod_library::get_mod_library_status,
             commands::mod_library::get_mod_remap_details,
             commands::mod_library::get_mod_workspace_snapshot,
+            commands::mod_library::refresh_mod_workspace_snapshot,
             commands::mod_library::install_mod_from_archive,
             commands::mod_library::install_mod_from_candidate,
             commands::mod_library::install_mod_from_folder,

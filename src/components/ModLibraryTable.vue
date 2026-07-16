@@ -9,6 +9,7 @@ import type {
 } from "../api/modLibrary";
 import { localizeGameText, type GameTextLanguage } from "../domain/gameText";
 import { armorTargetDisplayLabel } from "../domain/armorLabels";
+import { compareNaturalText } from "../domain/textSort";
 
 type EditableField = "name" | "note";
 
@@ -197,7 +198,7 @@ function branchGroupCategoryTags(group: ModBranchGroup) {
   }
   return [...categories.values()]
     .map((category) => ({ ...category, name: categoryDisplayName(category) }))
-    .sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+    .sort((left, right) => compareNaturalText(left.name, right.name));
 }
 
 function branchGroupCategorySelectionState(group: ModBranchGroup, categoryId: string) {

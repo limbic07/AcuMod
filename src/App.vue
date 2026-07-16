@@ -16,6 +16,7 @@ import {
 } from "./domain/branchGroupSuggestions";
 import { earliestArmorMenuOrder } from "./domain/armorMenuOrder";
 import { armorTargetDisplayLabel } from "./domain/armorLabels";
+import { compareNaturalText } from "./domain/textSort";
 import { getAppInfo, type AppInfo } from "./api/app";
 import { listenOperationProgress, type OperationProgress } from "./api/operations";
 import {
@@ -189,6 +190,7 @@ type ModSortMode = "manual" | "installation" | "name" | "category" | "replacemen
 
 const modSort = ref<ModSortMode>("manual");
 const modSortDirection = ref<"asc" | "desc">("asc");
+const prioritizeBranchGroups = ref(true);
 const reorderingModId = ref("");
 const isUpdatingModOrder = ref(false);
 const confirmationRequest = ref<ConfirmationRequest | null>(null);
@@ -529,16 +531,51 @@ interface SortableModLibraryItem {
   groupId: string | null;
   name: string;
   categories: string;
+  categoryRank: number;
   replacements: string;
   armorMenuOrder: number;
   installedAtUnixSeconds: number;
   mods: InstalledModSummary[];
 }
 
+const MOD_CATEGORY_SORT_ORDER = [
+  "防具",
+  "武器",
+  "发型",
+  "投射器",
+  "随从防具",
+  "随从武器",
+  "猎虫",
+  "挂件",
+  "人物语音",
+  "武器语音",
+  "NPC",
+  "脸型",
+  "怪物",
+  "噗吱猪服装",
+  "插件",
+  "数据修改",
+];
+
+function categorySortRank(categories: string[]) {
+  return Math.min(
+    ...categories.map((category) => {
+      const rootCategory = category.split("·", 1)[0]?.trim() || "未分类";
+      if (rootCategory === "未分类") {
+        return MOD_CATEGORY_SORT_ORDER.length + 1;
+      }
+      const rank = MOD_CATEGORY_SORT_ORDER.indexOf(rootCategory);
+      // 用户自建分类排在内置分类之后、未分类之前，并继续使用自然文字排序。
+      return rank >= 0 ? rank : MOD_CATEGORY_SORT_ORDER.length;
+    }),
+  );
+}
+
 function sortInstalledModsForLibrary(
   sourceMods: InstalledModSummary[],
   sort: ModSortMode,
   direction: "asc" | "desc",
+  branchGroupsFirst: boolean,
 ) {
   if (sort === "manual") {
     return groupModsIntoContiguousBlocks([...sourceMods]);
@@ -558,16 +595,17 @@ function sortInstalledModsForLibrary(
       continue;
     }
     const allMembers = installedMods.value.filter((mod) => groupIds.has(mod.id));
-    const categories = [...new Set(allMembers.flatMap(visibleModCategories))]
-      .sort((left, right) => left.localeCompare(right, "zh-Hans-CN"))
-      .join("、");
+    const categoryNames = [...new Set(allMembers.flatMap(visibleModCategories))].sort(
+      compareNaturalText,
+    );
     const replacements = [...new Set(allMembers.map(summarizeModReplacements).filter(Boolean))]
-      .sort((left, right) => left.localeCompare(right, "zh-Hans-CN"))
+      .sort(compareNaturalText)
       .join("、");
     items.push({
       groupId: group.id,
       name: group.name,
-      categories,
+      categories: categoryNames.join("、"),
+      categoryRank: categorySortRank(categoryNames),
       replacements,
       armorMenuOrder: earliestArmorMenuOrder(
         allMembers.flatMap((mod) => mod.modelReplacements),
@@ -581,10 +619,12 @@ function sortInstalledModsForLibrary(
     if (groupedModIds.has(mod.id)) {
       continue;
     }
+    const categoryNames = visibleModCategories(mod);
     items.push({
       groupId: null,
       name: mod.name,
-      categories: visibleModCategories(mod).join("、"),
+      categories: categoryNames.join("、"),
+      categoryRank: categorySortRank(categoryNames),
       replacements: summarizeModReplacements(mod),
       armorMenuOrder: earliestArmorMenuOrder(mod.modelReplacements),
       installedAtUnixSeconds: mod.installedAtUnixSeconds,
@@ -593,27 +633,28 @@ function sortInstalledModsForLibrary(
   }
 
   items.sort((left, right) => {
-    // 分支组外观和操作均不同于普通 MOD，任何自动排序下都固定放在普通 MOD 之前。
-    if (Boolean(left.groupId) !== Boolean(right.groupId)) {
+    // 用户可选择让分支组形成独立的顶部区域；关闭后按普通一级列表项参与排序。
+    if (branchGroupsFirst && Boolean(left.groupId) !== Boolean(right.groupId)) {
       return left.groupId ? -1 : 1;
     }
 
     let comparison = 0;
     if (sort === "name") {
-      comparison = left.name.localeCompare(right.name, "zh-Hans-CN");
+      comparison = compareNaturalText(left.name, right.name);
     } else if (sort === "category") {
       comparison =
-        left.categories.localeCompare(right.categories, "zh-Hans-CN") ||
+        left.categoryRank - right.categoryRank ||
         left.armorMenuOrder - right.armorMenuOrder ||
-        left.name.localeCompare(right.name, "zh-Hans-CN");
+        compareNaturalText(left.categories, right.categories) ||
+        compareNaturalText(left.name, right.name);
     } else if (sort === "replacement") {
       comparison =
-        left.replacements.localeCompare(right.replacements, "zh-Hans-CN") ||
-        left.name.localeCompare(right.name, "zh-Hans-CN");
+        compareNaturalText(left.replacements, right.replacements) ||
+        compareNaturalText(left.name, right.name);
     } else {
       comparison =
         left.installedAtUnixSeconds - right.installedAtUnixSeconds ||
-        left.name.localeCompare(right.name, "zh-Hans-CN");
+        compareNaturalText(left.name, right.name);
     }
     return direction === "asc" ? comparison : -comparison;
   });
@@ -626,6 +667,7 @@ const displayedInstalledMods = computed(() => {
     filteredInstalledMods.value,
     modSort.value,
     modSortDirection.value,
+    prioritizeBranchGroups.value,
   );
 });
 const enabledModCount = computed(
@@ -898,11 +940,25 @@ async function refreshModViews() {
   }
 }
 
-async function loadModViewsFromSnapshot() {
+function preserveCurrentModOrder(nextMods: InstalledModSummary[]) {
+  const nextById = new Map(nextMods.map((mod) => [mod.id, mod]));
+  const ordered = installedMods.value
+    .map((mod) => nextById.get(mod.id))
+    .filter((mod): mod is InstalledModSummary => Boolean(mod));
+  const knownIds = new Set(ordered.map((mod) => mod.id));
+
+  // 新导入项仍按后端给出的顺序补入；状态更新只替换原位置上的数据。
+  return [...ordered, ...nextMods.filter((mod) => !knownIds.has(mod.id))];
+}
+
+async function loadModViewsFromSnapshot(options?: { preserveModOrder?: boolean }) {
   isRefreshingModViews.value = true;
 
   try {
     const snapshot = await getModWorkspaceSnapshot();
+    if (options?.preserveModOrder && installedModList.value) {
+      snapshot.installedMods.mods = preserveCurrentModOrder(snapshot.installedMods.mods);
+    }
     installedModList.value = snapshot.installedMods;
     modCategories.value = snapshot.categories.categories;
     conflictReport.value = snapshot.conflictReport;
@@ -1078,7 +1134,7 @@ async function createCategory(name: string, parentId: string | null) {
   try {
     const category = await createModCategory(name, parentId);
     modCategories.value = [...modCategories.value, category].sort((left, right) =>
-      left.name.localeCompare(right.name, "zh-Hans-CN"),
+      compareNaturalText(left.name, right.name),
     );
     const targetModIds = new Set(pendingCategoryModIds.value);
     const targets = installedMods.value.filter((mod) => targetModIds.has(mod.id));
@@ -1269,6 +1325,7 @@ async function applyCurrentSortAsManualOrder() {
       installedMods.value,
       modSort.value,
       modSortDirection.value,
+      prioritizeBranchGroups.value,
     ).map((mod) => mod.id);
     const result = await replaceModLibraryOrder(completeOrder);
     applyInstalledModOrderInMemory(result.manualModIds);
@@ -1763,7 +1820,7 @@ async function enableInstalledMod(mod: InstalledModSummary) {
       }
     }
     await enableMod(mod.id, true);
-    await loadModViewsFromSnapshot();
+    await loadModViewsFromSnapshot({ preserveModOrder: true });
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1778,7 +1835,7 @@ async function disableInstalledMod(mod: InstalledModSummary) {
   try {
     deploymentError.value = "";
     await disableMod(mod.id);
-    await loadModViewsFromSnapshot();
+    await loadModViewsFromSnapshot({ preserveModOrder: true });
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -1851,7 +1908,7 @@ async function updateInstalledModsInBatch(
     if (action === "uninstall") {
       await loadModLibraryStatus();
     }
-    await loadModViewsFromSnapshot();
+    await loadModViewsFromSnapshot({ preserveModOrder: true });
   } catch (error) {
     deploymentError.value = userFacingError(error);
   } finally {
@@ -2868,6 +2925,7 @@ onBeforeUnmount(() => {
           :conflict-filter="modConflictFilter"
           :sort="modSort"
           :sort-direction="modSortDirection"
+          :prioritize-branch-groups="prioritizeBranchGroups"
           :categories="availableModCategories"
           @manage-categories="openCategoryManager()"
           @update-search-query="modSearchQuery = $event"
@@ -2876,6 +2934,7 @@ onBeforeUnmount(() => {
           @update-conflict-filter="modConflictFilter = $event"
           @update-sort="modSort = $event"
           @update-sort-direction="modSortDirection = $event"
+          @update-prioritize-branch-groups="prioritizeBranchGroups = $event"
           @apply-sort="applyCurrentSortAsManualOrder"
           @restore-import-order="restoreOriginalImportOrder"
         />
@@ -3539,30 +3598,6 @@ dd {
   color: #52645f;
   font-size: 0.84rem;
   font-weight: 700;
-}
-
-.mod-browser-controls label > span {
-  color: #61756f;
-  font-size: 0.74rem;
-  font-weight: 700;
-}
-
-.mod-browser-controls {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.55fr));
-  gap: 10px;
-  margin-top: 18px;
-}
-
-.mod-browser-controls label {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
-.mod-browser-controls input,
-.mod-browser-controls select {
-  min-width: 0;
 }
 
 .file-preview,
@@ -4398,10 +4433,6 @@ button.danger:hover {
 
   .section-title-row {
     display: grid;
-  }
-
-  .mod-browser-controls {
-    grid-template-columns: 1fr;
   }
 
   .section-actions {

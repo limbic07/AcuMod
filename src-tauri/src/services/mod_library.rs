@@ -2435,12 +2435,18 @@ fn update_workspace_snapshot_after_mod_changes_inner(
         let Some(summary) = list.mods.pop() else {
             continue;
         };
-        stored
+        if let Some(position) = stored
             .snapshot
             .installed_mods
             .mods
-            .retain(|installed| installed.id != summary.id);
-        stored.snapshot.installed_mods.mods.push(summary);
+            .iter()
+            .position(|installed| installed.id == summary.id)
+        {
+            // 启停、改名等状态更新只替换快照内容，不能把该 MOD 当作新导入项追加到列表末尾。
+            stored.snapshot.installed_mods.mods[position] = summary;
+        } else {
+            stored.snapshot.installed_mods.mods.push(summary);
+        }
         upsert_workspace_mod_index_entry(&mut stored.mod_index, &context)?;
     }
 

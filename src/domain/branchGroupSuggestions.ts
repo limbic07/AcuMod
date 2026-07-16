@@ -3,6 +3,7 @@ import type {
   ModBranchGroup,
   ModConflictGroup,
 } from "../api/modLibrary";
+import { compareNaturalText } from "./textSort";
 
 const MIN_PATH_COVERAGE = 0.9;
 const MIN_PATH_JACCARD = 0.75;
@@ -273,7 +274,7 @@ function commonTargetLabels(indexes: ModSimilarityIndex[]) {
   const commonKeys = commonSet(indexes.map((index) => new Set(index.modelTargets.keys())));
   return [...commonKeys]
     .map((key) => indexes[0].modelTargets.get(key) ?? key)
-    .sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
+    .sort(compareNaturalText);
 }
 
 function commonNamePrefix(names: string[]) {
@@ -397,6 +398,6 @@ export function buildBranchGroupSuggestions(
       (left, right) =>
         right.similarityPercent - left.similarityPercent ||
         right.sharedFileCount - left.sharedFileCount ||
-        left.suggestedName.localeCompare(right.suggestedName, "zh-Hans-CN"),
+        compareNaturalText(left.suggestedName, right.suggestedName),
     );
 }

@@ -13,6 +13,7 @@ const props = defineProps<{
   conflictFilter: string;
   sort: "manual" | "installation" | "name" | "category" | "replacement";
   sortDirection: "asc" | "desc";
+  prioritizeBranchGroups: boolean;
   categories: CategoryFilterOption[];
 }>();
 
@@ -24,6 +25,7 @@ const emit = defineEmits<{
   updateConflictFilter: [value: string];
   updateSort: [value: "manual" | "installation" | "name" | "category" | "replacement"];
   updateSortDirection: [value: "asc" | "desc"];
+  updatePrioritizeBranchGroups: [value: boolean];
   applySort: [];
   restoreImportOrder: [];
 }>();
@@ -88,7 +90,7 @@ function toggleSortDirection() {
         </button>
       </div>
     </label>
-    <label>
+    <label class="status-filter-control">
       <span>状态</span>
       <select :value="props.statusFilter" @change="updateStatusFilter">
         <option value="all">全部状态</option>
@@ -96,7 +98,7 @@ function toggleSortDirection() {
         <option value="disabled">未启用</option>
       </select>
     </label>
-    <label>
+    <label class="conflict-filter-control">
       <span>冲突</span>
       <select :value="props.conflictFilter" @change="updateConflictFilter">
         <option value="all">全部</option>
@@ -104,7 +106,7 @@ function toggleSortDirection() {
         <option value="normal">无冲突</option>
       </select>
     </label>
-    <label>
+    <label class="sort-field-control">
       <span>排序</span>
       <div class="sort-control-row">
         <select :value="props.sort" @change="updateSort">
@@ -126,6 +128,16 @@ function toggleSortDirection() {
         </button>
       </div>
       <div class="sort-action-row">
+        <button
+          type="button"
+          class="sort-action-button branch-priority-button"
+          :class="{ active: props.prioritizeBranchGroups }"
+          :aria-pressed="props.prioritizeBranchGroups"
+          title="仅影响自动排序"
+          @click="$emit('updatePrioritizeBranchGroups', !props.prioritizeBranchGroups)"
+        >
+          分支组优先
+        </button>
         <button
           type="button"
           class="sort-action-button"
@@ -150,7 +162,13 @@ function toggleSortDirection() {
 <style scoped>
 .mod-browser-controls {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(110px, 0.55fr));
+  grid-template-columns:
+    minmax(280px, 1.55fr)
+    minmax(180px, 0.75fr)
+    minmax(120px, 0.45fr)
+    minmax(110px, 0.42fr)
+    minmax(420px, 1.5fr);
+  align-items: start;
   gap: 10px;
   margin-top: 18px;
 }
@@ -189,16 +207,18 @@ function toggleSortDirection() {
 
 .sort-direction-button {
   min-height: 42px;
-  flex: 0 0 32px;
+  flex: 0 0 40px;
   font-size: 1rem;
 }
 
 .sort-action-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
 .sort-action-button {
+  width: 100%;
   min-height: 30px;
   padding: 0 8px;
   border: 1px solid #cbd8d4;
@@ -208,6 +228,7 @@ function toggleSortDirection() {
   font: inherit;
   font-size: 0.72rem;
   font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -216,6 +237,12 @@ function toggleSortDirection() {
   border-color: #8cbca8;
   color: #17613f;
   background: #edf5f1;
+}
+
+.branch-priority-button.active {
+  border-color: #4f8b75;
+  color: #ffffff;
+  background: #39755f;
 }
 
 .sort-action-button:disabled {
@@ -281,8 +308,30 @@ select {
   display: block;
 }
 
+@media (max-width: 1380px) {
+  .mod-browser-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .mod-search-control,
+  .sort-field-control {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 760px) {
   .mod-browser-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .mod-search-control,
+  .sort-field-control {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .sort-action-row {
     grid-template-columns: 1fr;
   }
 }

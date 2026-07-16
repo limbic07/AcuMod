@@ -8,6 +8,7 @@ import type {
   ModelReplacement,
 } from "../api/modLibrary";
 import { localizeGameText, type GameTextLanguage } from "../domain/gameText";
+import { armorTargetDisplayLabel } from "../domain/armorLabels";
 
 type EditableField = "name" | "note";
 
@@ -403,18 +404,11 @@ function replacementTargetLabel(replacement: ModelReplacement) {
 }
 
 function armorSetTargetLabel(replacement: ModelReplacement) {
-  for (const name of replacement.displayNames) {
-    const localizedName = localizedGameText(name);
-    const setName = localizedName.replace(
-      /[·・‧](?:头部|身体|腕部|腰部|脚部|頭部|身體|腕部|腰部|腳部)$/u,
-      "",
-    );
-    if (setName !== localizedName && setName) {
-      return setName;
-    }
-  }
-
-  return replacement.modelId;
+  return armorTargetDisplayLabel(
+    replacement.displayNames,
+    replacement.modelId,
+    localizedGameText,
+  );
 }
 
 function associationLabel(replacement: ModelReplacement) {

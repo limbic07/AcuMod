@@ -42,6 +42,18 @@
 - `armorSlingerBindings[]`：原版防具 EVAM 的逐性别绑定；`slingerId: null` 表示原文件使用 `0xFFFFFFFF`，即没有飞翔爪。
 - `voiceModels[]`：人物语音文件名、性别、角色创建序号和显示名称。
 
+## armor-menu-order.json
+
+`armor-menu-order.json` 由 `sources/armor-layered-menu-order-zh-hant.md` 的游戏内外观装备菜单录屏抄录生成。生成器先通过 `game-text-zh-hant.json` 的官方繁中名称关联 `model-index.json` 防具目标，再保存普通/进阶与大师位阶各自的菜单序号、统一全局序号和目标 ID。录屏名称与内置官方名称不一致的两项使用脚本内显式别名，不按数组位置猜测 ID；录屏未显示但本地表存在正式外观装备文本的“精英·妖水”“精英·龍 α／β”“精英·觸角 γ”按相邻幻化 ID 显式补入。无法对应菜单项的基础防具、`HARDUMMY` 和不可用模型保留在 `unorderedTargetIds` 供审计，但不进入用户改绑列表。
+
+重新生成命令：
+
+```powershell
+npm run data:armor-menu-order
+```
+
+Rust 的防具改绑目标和 Vue 的 MOD 库分类排序共用这份生成数据，避免前后端维护两套顺序。
+
 ## game-text-zh-hant.json
 
 `game-text-zh-hant.json` 保存当前模型索引会实际展示的繁体中文游戏名称。数据从 [Synthlight/MHW-Editor](https://github.com/Synthlight/MHW-Editor) 固定提交 `a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94` 的成对 `chS_*.json` / `chT_*.json` 游戏文本中，按同一个文本键配对生成，不进行简繁字形转换。武器、防具、随从装备、猎虫、挂件和怪物分别限定在对应文本表内匹配；发型编号、人物语音序号和 Acumod 自己生成的飞翔爪说明使用单独维护的繁中标签。

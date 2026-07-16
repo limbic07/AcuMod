@@ -14,6 +14,8 @@ import {
   type BranchGroupSuggestion,
   type BranchGroupSuggestionSelection,
 } from "./domain/branchGroupSuggestions";
+import { earliestArmorMenuOrder } from "./domain/armorMenuOrder";
+import { armorTargetDisplayLabel } from "./domain/armorLabels";
 import { getAppInfo, type AppInfo } from "./api/app";
 import { listenOperationProgress, type OperationProgress } from "./api/operations";
 import {
@@ -528,6 +530,7 @@ interface SortableModLibraryItem {
   name: string;
   categories: string;
   replacements: string;
+  armorMenuOrder: number;
   installedAtUnixSeconds: number;
   mods: InstalledModSummary[];
 }
@@ -566,6 +569,9 @@ function sortInstalledModsForLibrary(
       name: group.name,
       categories,
       replacements,
+      armorMenuOrder: earliestArmorMenuOrder(
+        allMembers.flatMap((mod) => mod.modelReplacements),
+      ),
       installedAtUnixSeconds: Math.min(...allMembers.map((mod) => mod.installedAtUnixSeconds)),
       mods: visibleMembers,
     });
@@ -580,6 +586,7 @@ function sortInstalledModsForLibrary(
       name: mod.name,
       categories: visibleModCategories(mod).join("、"),
       replacements: summarizeModReplacements(mod),
+      armorMenuOrder: earliestArmorMenuOrder(mod.modelReplacements),
       installedAtUnixSeconds: mod.installedAtUnixSeconds,
       mods: [mod],
     });
@@ -597,6 +604,7 @@ function sortInstalledModsForLibrary(
     } else if (sort === "category") {
       comparison =
         left.categories.localeCompare(right.categories, "zh-Hans-CN") ||
+        left.armorMenuOrder - right.armorMenuOrder ||
         left.name.localeCompare(right.name, "zh-Hans-CN");
     } else if (sort === "replacement") {
       comparison =
@@ -769,18 +777,7 @@ function summarizeModelNames(replacement: ModelReplacement) {
 }
 
 function armorSetTargetLabel(target: { displayNames: string[]; modelId: string }) {
-  for (const name of target.displayNames) {
-    const localizedName = localizedGameText(name);
-    const setName = localizedName.replace(
-      /[·・‧](?:头部|身体|腕部|腰部|脚部|頭部|身體|腕部|腰部|腳部)$/u,
-      "",
-    );
-    if (setName !== localizedName && setName) {
-      return setName;
-    }
-  }
-
-  return target.modelId;
+  return armorTargetDisplayLabel(target.displayNames, target.modelId, localizedGameText);
 }
 
 function summarizeModelAssociations(replacement: ModelReplacement) {

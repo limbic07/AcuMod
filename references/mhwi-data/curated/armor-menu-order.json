@@ -1,0 +1,1633 @@
+{
+  "schemaVersion": 1,
+  "gameVersion": "15.10.00",
+  "source": {
+    "path": "sources/armor-layered-menu-order-zh-hant.md",
+    "locale": "zh-Hant",
+    "provenance": "userGameRecordingTranscription"
+  },
+  "menuItemCount": 267,
+  "sections": [
+    {
+      "key": "lowHighRank",
+      "titleTraditional": "普通（初階／進階）",
+      "itemCount": 116,
+      "globalOrderStart": 1,
+      "globalOrderEnd": 116
+    },
+    {
+      "key": "masterRank",
+      "titleTraditional": "大師（Master）",
+      "itemCount": 151,
+      "globalOrderStart": 117,
+      "globalOrderEnd": 267
+    }
+  ],
+  "targetOrders": {
+    "armor:pl067_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 1,
+      "globalOrder": 1,
+      "displayNameTraditional": "鎧武者"
+    },
+    "armor:pl066_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 2,
+      "globalOrder": 2,
+      "displayNameTraditional": "黎明武士【寂】"
+    },
+    "armor:pl066_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 3,
+      "globalOrder": 3,
+      "displayNameTraditional": "黎明武士【譽】"
+    },
+    "armor:pl018_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 4,
+      "globalOrder": 4,
+      "displayNameTraditional": "【原型】服裝"
+    },
+    "armor:pl036_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 5,
+      "globalOrder": 5,
+      "displayNameTraditional": "【旅團】服裝"
+    },
+    "armor:pl048_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 6,
+      "globalOrder": 6,
+      "displayNameTraditional": "【公會十字】服裝"
+    },
+    "armor:pl053_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 7,
+      "globalOrder": 7,
+      "displayNameTraditional": "【追蹤者】服裝"
+    },
+    "armor:pl116_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 8,
+      "globalOrder": 8,
+      "displayNameTraditional": "【甲蟲】服裝"
+    },
+    "armor:pl117_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 9,
+      "globalOrder": 9,
+      "displayNameTraditional": "【蝴蝶】服裝"
+    },
+    "armor:pl026_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 10,
+      "globalOrder": 10,
+      "displayNameTraditional": "【死神】服裝"
+    },
+    "armor:pl074_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 11,
+      "globalOrder": 11,
+      "displayNameTraditional": "【巴魯特】服裝"
+    },
+    "armor:pl075_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 12,
+      "globalOrder": 12,
+      "displayNameTraditional": "【潛水夫】服裝"
+    },
+    "armor:pl076_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 13,
+      "globalOrder": 13,
+      "displayNameTraditional": "【收穫】服裝"
+    },
+    "armor:pl077_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 14,
+      "globalOrder": 14,
+      "displayNameTraditional": "【獵戶星】服裝"
+    },
+    "armor:pl078_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 15,
+      "globalOrder": 15,
+      "displayNameTraditional": "【盛裝】服裝"
+    },
+    "armor:pl056_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 16,
+      "globalOrder": 16,
+      "displayNameTraditional": "【菌豬頭套】服裝"
+    },
+    "armor:pl055_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 17,
+      "globalOrder": 17,
+      "displayNameTraditional": "【艾路頭套】服裝"
+    },
+    "armor:pl054_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 18,
+      "globalOrder": 18,
+      "displayNameTraditional": "【骷髏面罩】服裝"
+    },
+    "armor:pl063_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 19,
+      "globalOrder": 19,
+      "displayNameTraditional": "【封印的眼罩】服裝"
+    },
+    "armor:pl062_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 20,
+      "globalOrder": 20,
+      "displayNameTraditional": "【墨鏡】服裝"
+    },
+    "armor:pl064_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 21,
+      "globalOrder": 21,
+      "displayNameTraditional": "【搖曳鰻頭套】服裝"
+    },
+    "armor:pl065_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 22,
+      "globalOrder": 22,
+      "displayNameTraditional": "【扒手龍頭套】服裝"
+    },
+    "armor:pl070_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 23,
+      "globalOrder": 23,
+      "displayNameTraditional": "【SAKURA】服裝"
+    },
+    "armor:pl069_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 24,
+      "globalOrder": 24,
+      "displayNameTraditional": "【RYU】服裝"
+    },
+    "armor:pl071_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 25,
+      "globalOrder": 25,
+      "displayNameTraditional": "【但丁】服裝"
+    },
+    "armor:pl073_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 26,
+      "globalOrder": 26,
+      "displayNameTraditional": "【騰龍】服裝"
+    },
+    "armor:pl120_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 27,
+      "globalOrder": 27,
+      "displayNameTraditional": "【巴耶克】服裝"
+    },
+    "armor:pl118_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 28,
+      "globalOrder": 28,
+      "displayNameTraditional": "【傑洛特】服裝"
+    },
+    "armor:pl119_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 29,
+      "globalOrder": 29,
+      "displayNameTraditional": "【希里】服裝"
+    },
+    "armor:pl001_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 30,
+      "globalOrder": 30,
+      "displayNameTraditional": "【皮製】服裝"
+    },
+    "armor:pl014_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 31,
+      "globalOrder": 31,
+      "displayNameTraditional": "【鎖甲】服裝"
+    },
+    "armor:pl002_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 32,
+      "globalOrder": 32,
+      "displayNameTraditional": "【獵人 α】服裝"
+    },
+    "armor:pl002_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 33,
+      "globalOrder": 33,
+      "displayNameTraditional": "【獵人 β】服裝"
+    },
+    "armor:pl003_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 34,
+      "globalOrder": 34,
+      "displayNameTraditional": "【骨製】服裝"
+    },
+    "armor:pl004_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 35,
+      "globalOrder": 35,
+      "displayNameTraditional": "【合金】服裝"
+    },
+    "armor:pl007_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 36,
+      "globalOrder": 36,
+      "displayNameTraditional": "【巨蜂】服裝"
+    },
+    "armor:pl017_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 37,
+      "globalOrder": 37,
+      "displayNameTraditional": "【巨甲蟲】服裝"
+    },
+    "armor:pl005_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 38,
+      "globalOrder": 38,
+      "displayNameTraditional": "【冠突龍】服裝"
+    },
+    "armor:pl006_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 39,
+      "globalOrder": 39,
+      "displayNameTraditional": "【咬魚】服裝"
+    },
+    "armor:pl058_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 40,
+      "globalOrder": 40,
+      "displayNameTraditional": "【貓蜥龍】服裝"
+    },
+    "armor:pl008_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 41,
+      "globalOrder": 41,
+      "displayNameTraditional": "【凶豺龍】服裝"
+    },
+    "armor:pl009_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 42,
+      "globalOrder": 42,
+      "displayNameTraditional": "【搔鳥】服裝"
+    },
+    "armor:pl023_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 43,
+      "globalOrder": 43,
+      "displayNameTraditional": "【眩鳥】服裝"
+    },
+    "armor:pl022_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 44,
+      "globalOrder": 44,
+      "displayNameTraditional": "【凶顎龍】服裝"
+    },
+    "armor:pl010_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 45,
+      "globalOrder": 45,
+      "displayNameTraditional": "【毒妖鳥 α】服裝"
+    },
+    "armor:pl010_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 46,
+      "globalOrder": 46,
+      "displayNameTraditional": "【毒妖鳥 β】服裝"
+    },
+    "armor:pl012_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 47,
+      "globalOrder": 47,
+      "displayNameTraditional": "【土砂龍】服裝"
+    },
+    "armor:pl020_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 48,
+      "globalOrder": 48,
+      "displayNameTraditional": "【蠻顎龍 α】服裝"
+    },
+    "armor:pl020_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 49,
+      "globalOrder": 49,
+      "displayNameTraditional": "【蠻顎龍 β】服裝"
+    },
+    "armor:pl011_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 50,
+      "globalOrder": 50,
+      "displayNameTraditional": "【泥魚龍】服裝"
+    },
+    "armor:pl013_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 51,
+      "globalOrder": 51,
+      "displayNameTraditional": "【飛雷龍】服裝"
+    },
+    "armor:pl024_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 52,
+      "globalOrder": 52,
+      "displayNameTraditional": "【浮空龍】服裝"
+    },
+    "armor:pl021_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 53,
+      "globalOrder": 53,
+      "displayNameTraditional": "【雌火龍 α】服裝"
+    },
+    "armor:pl021_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 54,
+      "globalOrder": 54,
+      "displayNameTraditional": "【雌火龍 β】服裝"
+    },
+    "armor:pl028_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 55,
+      "globalOrder": 55,
+      "displayNameTraditional": "【骨鎚龍 α】服裝"
+    },
+    "armor:pl028_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 56,
+      "globalOrder": 56,
+      "displayNameTraditional": "【骨鎚龍 β】服裝"
+    },
+    "armor:pl025_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 57,
+      "globalOrder": 57,
+      "displayNameTraditional": "【礦石】服裝"
+    },
+    "armor:pl015_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 58,
+      "globalOrder": 58,
+      "displayNameTraditional": "【突擊龍】服裝"
+    },
+    "armor:pl016_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 59,
+      "globalOrder": 59,
+      "displayNameTraditional": "【酸翼龍】服裝"
+    },
+    "armor:pl039_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 60,
+      "globalOrder": 60,
+      "displayNameTraditional": "【岩賊龍】服裝"
+    },
+    "armor:pl031_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 61,
+      "globalOrder": 61,
+      "displayNameTraditional": "【鑄鐵】服裝"
+    },
+    "armor:pl021_0100": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 62,
+      "globalOrder": 62,
+      "displayNameTraditional": "【火龍心 α】服裝"
+    },
+    "armor:pl021_0110": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 63,
+      "globalOrder": 63,
+      "displayNameTraditional": "【火龍心 β】服裝"
+    },
+    "armor:pl040_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 64,
+      "globalOrder": 64,
+      "displayNameTraditional": "【熔岩龍 α】服裝"
+    },
+    "armor:pl040_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 65,
+      "globalOrder": 65,
+      "displayNameTraditional": "【熔岩龍 β】服裝"
+    },
+    "armor:pl027_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 66,
+      "globalOrder": 66,
+      "displayNameTraditional": "【風漂龍 α】服裝"
+    },
+    "armor:pl027_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 67,
+      "globalOrder": 67,
+      "displayNameTraditional": "【風漂龍 β】服裝"
+    },
+    "armor:pl029_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 68,
+      "globalOrder": 68,
+      "displayNameTraditional": "【慘爪龍 α】服裝"
+    },
+    "armor:pl029_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 69,
+      "globalOrder": 69,
+      "displayNameTraditional": "【慘爪龍 β】服裝"
+    },
+    "armor:pl033_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 70,
+      "globalOrder": 70,
+      "displayNameTraditional": "【火龍 α】服裝"
+    },
+    "armor:pl033_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 71,
+      "globalOrder": 71,
+      "displayNameTraditional": "【火龍 β】服裝"
+    },
+    "armor:pl033_0100": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 72,
+      "globalOrder": 72,
+      "displayNameTraditional": "【火龍魂 α】服裝"
+    },
+    "armor:pl033_0110": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 73,
+      "globalOrder": 73,
+      "displayNameTraditional": "【火龍魂 β】服裝"
+    },
+    "armor:pl034_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 74,
+      "globalOrder": 74,
+      "displayNameTraditional": "【角龍 α】服裝"
+    },
+    "armor:pl034_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 75,
+      "globalOrder": 75,
+      "displayNameTraditional": "【角龍 β】服裝"
+    },
+    "armor:pl034_0100": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 76,
+      "globalOrder": 76,
+      "displayNameTraditional": "【暴君角龍 α】服裝"
+    },
+    "armor:pl034_0110": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 77,
+      "globalOrder": 77,
+      "displayNameTraditional": "【暴君角龍 β】服裝"
+    },
+    "armor:pl041_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 78,
+      "globalOrder": 78,
+      "displayNameTraditional": "【爆鎚龍 α】服裝"
+    },
+    "armor:pl041_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 79,
+      "globalOrder": 79,
+      "displayNameTraditional": "【爆鎚龍 β】服裝"
+    },
+    "armor:pl042_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 80,
+      "globalOrder": 80,
+      "displayNameTraditional": "【爆鱗龍 α】服裝"
+    },
+    "armor:pl042_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 81,
+      "globalOrder": 81,
+      "displayNameTraditional": "【爆鱗龍 β】服裝"
+    },
+    "armor:pl050_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 82,
+      "globalOrder": 82,
+      "displayNameTraditional": "【殘虐 α】服裝"
+    },
+    "armor:pl050_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 83,
+      "globalOrder": 83,
+      "displayNameTraditional": "【殘虐 β】服裝"
+    },
+    "armor:pl044_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 84,
+      "globalOrder": 84,
+      "displayNameTraditional": "【杜賓 α】服裝"
+    },
+    "armor:pl043_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 86,
+      "globalOrder": 86,
+      "displayNameTraditional": "【大馬士革 α】服裝"
+    },
+    "armor:pl043_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 87,
+      "globalOrder": 87,
+      "displayNameTraditional": "【大馬士革 β】服裝"
+    },
+    "armor:pl038_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 88,
+      "globalOrder": 88,
+      "displayNameTraditional": "【鑄島熔岩 α】服裝"
+    },
+    "armor:pl038_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 89,
+      "globalOrder": 89,
+      "displayNameTraditional": "【鑄島熔岩 β】服裝"
+    },
+    "armor:pl038_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 90,
+      "globalOrder": 90,
+      "displayNameTraditional": "【鑄島熔岩 γ】服裝"
+    },
+    "armor:pl030_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 91,
+      "globalOrder": 91,
+      "displayNameTraditional": "【戰紋 α】服裝"
+    },
+    "armor:pl030_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 92,
+      "globalOrder": 92,
+      "displayNameTraditional": "【戰紋 β】服裝"
+    },
+    "armor:pl030_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 93,
+      "globalOrder": 93,
+      "displayNameTraditional": "【戰紋 γ】服裝"
+    },
+    "armor:pl046_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 94,
+      "globalOrder": 94,
+      "displayNameTraditional": "【帝王 α】服裝"
+    },
+    "armor:pl046_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 95,
+      "globalOrder": 95,
+      "displayNameTraditional": "【帝王 β】服裝"
+    },
+    "armor:pl046_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 96,
+      "globalOrder": 96,
+      "displayNameTraditional": "【帝王 γ】服裝"
+    },
+    "armor:pl047_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 97,
+      "globalOrder": 97,
+      "displayNameTraditional": "【鋼龍 α】服裝"
+    },
+    "armor:pl047_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 98,
+      "globalOrder": 98,
+      "displayNameTraditional": "【鋼龍 β】服裝"
+    },
+    "armor:pl047_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 99,
+      "globalOrder": 99,
+      "displayNameTraditional": "【鋼龍 γ】服裝"
+    },
+    "armor:pl032_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 100,
+      "globalOrder": 100,
+      "displayNameTraditional": "【烏爾德 α】服裝"
+    },
+    "armor:pl032_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 101,
+      "globalOrder": 101,
+      "displayNameTraditional": "【烏爾德 β】服裝"
+    },
+    "armor:pl032_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 102,
+      "globalOrder": 102,
+      "displayNameTraditional": "【烏爾德 γ】服裝"
+    },
+    "armor:pl035_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 103,
+      "globalOrder": 103,
+      "displayNameTraditional": "【麒麟 α】服裝"
+    },
+    "armor:pl035_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 104,
+      "globalOrder": 104,
+      "displayNameTraditional": "【麒麟 β】服裝"
+    },
+    "armor:pl035_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 105,
+      "globalOrder": 105,
+      "displayNameTraditional": "【麒麟 γ】服裝"
+    },
+    "armor:pl045_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 106,
+      "globalOrder": 106,
+      "displayNameTraditional": "【冥燈幽火 α】服裝"
+    },
+    "armor:pl045_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 107,
+      "globalOrder": 107,
+      "displayNameTraditional": "【冥燈幽火 β】服裝"
+    },
+    "armor:pl045_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 108,
+      "globalOrder": 108,
+      "displayNameTraditional": "【冥燈幽火 γ】服裝"
+    },
+    "armor:pl051_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 109,
+      "globalOrder": 109,
+      "displayNameTraditional": "【皇后 α】服裝"
+    },
+    "armor:pl051_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 110,
+      "globalOrder": 110,
+      "displayNameTraditional": "【皇后 β】服裝"
+    },
+    "armor:pl051_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 111,
+      "globalOrder": 111,
+      "displayNameTraditional": "【皇后 γ】服裝"
+    },
+    "armor:pl049_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 112,
+      "globalOrder": 112,
+      "displayNameTraditional": "【絢輝龍鎧羅 α】服裝"
+    },
+    "armor:pl049_0010": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 113,
+      "globalOrder": 113,
+      "displayNameTraditional": "【絢輝龍鎧羅 β】服裝"
+    },
+    "armor:pl049_0020": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 114,
+      "globalOrder": 114,
+      "displayNameTraditional": "【絢輝龍鎧羅 γ】服裝"
+    },
+    "armor:pl072_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 115,
+      "globalOrder": 115,
+      "displayNameTraditional": "【蒼星之將】服裝"
+    },
+    "armor:pl121_0000": {
+      "sectionKey": "lowHighRank",
+      "menuOrder": 116,
+      "globalOrder": 116,
+      "displayNameTraditional": "【守護者】服裝"
+    },
+    "armor:pl123_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 1,
+      "globalOrder": 117,
+      "displayNameTraditional": "【銀騎士】服裝"
+    },
+    "armor:pl122_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 2,
+      "globalOrder": 118,
+      "displayNameTraditional": "【結雲】服裝"
+    },
+    "armor:pl105_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 3,
+      "globalOrder": 119,
+      "displayNameTraditional": "【冰狼】服裝"
+    },
+    "armor:pl106_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 4,
+      "globalOrder": 120,
+      "displayNameTraditional": "【浴場】服裝"
+    },
+    "armor:pl061_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 5,
+      "globalOrder": 121,
+      "displayNameTraditional": "【龍王的獨眼】服裝"
+    },
+    "armor:pl060_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 6,
+      "globalOrder": 122,
+      "displayNameTraditional": "【知性眼鏡】服裝"
+    },
+    "armor:pl037_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 7,
+      "globalOrder": 123,
+      "displayNameTraditional": "【羽毛裝飾】服裝"
+    },
+    "armor:pl059_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 8,
+      "globalOrder": 124,
+      "displayNameTraditional": "【水晶耳環】服裝"
+    },
+    "armor:pl007_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 9,
+      "globalOrder": 125,
+      "displayNameTraditional": "【精英·巨蜂】服裝"
+    },
+    "armor:pl017_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 10,
+      "globalOrder": 126,
+      "displayNameTraditional": "【精英·巨甲蟲】服裝"
+    },
+    "armor:pl102_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 11,
+      "globalOrder": 127,
+      "displayNameTraditional": "【精英·冰豺龍】服裝"
+    },
+    "armor:pl103_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 12,
+      "globalOrder": 128,
+      "displayNameTraditional": "【精英·冬翼龍】服裝"
+    },
+    "armor:pl008_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 13,
+      "globalOrder": 129,
+      "displayNameTraditional": "【精英·凶豺龍】服裝"
+    },
+    "armor:pl023_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 14,
+      "globalOrder": 130,
+      "displayNameTraditional": "【精英·眩鳥】服裝"
+    },
+    "armor:pl022_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 15,
+      "globalOrder": 131,
+      "displayNameTraditional": "【精英·凶顎龍】服裝"
+    },
+    "armor:pl039_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 16,
+      "globalOrder": 132,
+      "displayNameTraditional": "【精英·岩賊龍】服裝"
+    },
+    "armor:pl009_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 17,
+      "globalOrder": 133,
+      "displayNameTraditional": "【精英·搔鳥】服裝"
+    },
+    "armor:pl010_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 18,
+      "globalOrder": 134,
+      "displayNameTraditional": "【精英·毒妖鳥】服裝"
+    },
+    "armor:pl010_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 19,
+      "globalOrder": 135,
+      "displayNameTraditional": "【精英·妖水】服裝"
+    },
+    "armor:pl012_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 20,
+      "globalOrder": 136,
+      "displayNameTraditional": "【精英·土砂龍】服裝"
+    },
+    "armor:pl011_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 21,
+      "globalOrder": 137,
+      "displayNameTraditional": "【精英·泥魚龍】服裝"
+    },
+    "armor:pl110_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 22,
+      "globalOrder": 138,
+      "displayNameTraditional": "【精英·冰魚龍】服裝"
+    },
+    "armor:pl013_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 23,
+      "globalOrder": 139,
+      "displayNameTraditional": "【精英·飛雷龍】服裝"
+    },
+    "armor:pl013_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 24,
+      "globalOrder": 140,
+      "displayNameTraditional": "【精英·朱毒】服裝"
+    },
+    "armor:pl084_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 25,
+      "globalOrder": 141,
+      "displayNameTraditional": "【精英·猛牛龍 α】服裝"
+    },
+    "armor:pl084_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 26,
+      "globalOrder": 142,
+      "displayNameTraditional": "【精英·猛牛龍 β】服裝"
+    },
+    "armor:pl020_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 27,
+      "globalOrder": 143,
+      "displayNameTraditional": "【精英·蠻顎龍 α】服裝"
+    },
+    "armor:pl020_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 28,
+      "globalOrder": 144,
+      "displayNameTraditional": "【精英·蠻顎龍 β】服裝"
+    },
+    "armor:pl020_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 29,
+      "globalOrder": 145,
+      "displayNameTraditional": "【精英·雷顎 α】服裝"
+    },
+    "armor:pl020_0111": {
+      "sectionKey": "masterRank",
+      "menuOrder": 30,
+      "globalOrder": 146,
+      "displayNameTraditional": "【精英·雷顎 β】服裝"
+    },
+    "armor:pl021_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 31,
+      "globalOrder": 147,
+      "displayNameTraditional": "【精英·雌火龍 α】服裝"
+    },
+    "armor:pl021_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 32,
+      "globalOrder": 148,
+      "displayNameTraditional": "【精英·雌火龍 β】服裝"
+    },
+    "armor:pl021_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 33,
+      "globalOrder": 149,
+      "displayNameTraditional": "【精英·火龍心 α】服裝"
+    },
+    "armor:pl021_0111": {
+      "sectionKey": "masterRank",
+      "menuOrder": 34,
+      "globalOrder": 150,
+      "displayNameTraditional": "【精英·火龍心 β】服裝"
+    },
+    "armor:pl024_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 35,
+      "globalOrder": 151,
+      "displayNameTraditional": "【精英·浮空龍】服裝"
+    },
+    "armor:pl024_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 36,
+      "globalOrder": 152,
+      "displayNameTraditional": "【精英·浮夢】服裝"
+    },
+    "armor:pl028_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 37,
+      "globalOrder": 153,
+      "displayNameTraditional": "【精英·骨鎚龍】服裝"
+    },
+    "armor:pl091_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 38,
+      "globalOrder": 154,
+      "displayNameTraditional": "【機械】服裝"
+    },
+    "armor:pl104_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 39,
+      "globalOrder": 155,
+      "displayNameTraditional": "【蒸汽貴族 α】服裝"
+    },
+    "armor:pl104_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 40,
+      "globalOrder": 156,
+      "displayNameTraditional": "【蒸汽貴族 β】服裝"
+    },
+    "armor:pl089_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 41,
+      "globalOrder": 157,
+      "displayNameTraditional": "【精英·冰牙龍 α】服裝"
+    },
+    "armor:pl089_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 42,
+      "globalOrder": 158,
+      "displayNameTraditional": "【精英·冰牙龍 β】服裝"
+    },
+    "armor:pl033_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 43,
+      "globalOrder": 159,
+      "displayNameTraditional": "【精英·火龍 α】服裝"
+    },
+    "armor:pl033_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 44,
+      "globalOrder": 160,
+      "displayNameTraditional": "【精英·火龍 β】服裝"
+    },
+    "armor:pl033_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 45,
+      "globalOrder": 161,
+      "displayNameTraditional": "【精英·火龍魂 α】服裝"
+    },
+    "armor:pl033_0111": {
+      "sectionKey": "masterRank",
+      "menuOrder": 46,
+      "globalOrder": 162,
+      "displayNameTraditional": "【精英·火龍魂 β】服裝"
+    },
+    "armor:pl034_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 47,
+      "globalOrder": 163,
+      "displayNameTraditional": "【精英·角龍 α】服裝"
+    },
+    "armor:pl034_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 48,
+      "globalOrder": 164,
+      "displayNameTraditional": "【精英·角龍 β】服裝"
+    },
+    "armor:pl034_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 49,
+      "globalOrder": 165,
+      "displayNameTraditional": "【精英·暴君角龍 α】服裝"
+    },
+    "armor:pl034_0111": {
+      "sectionKey": "masterRank",
+      "menuOrder": 50,
+      "globalOrder": 166,
+      "displayNameTraditional": "【精英·暴君角龍 β】服裝"
+    },
+    "armor:pl027_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 51,
+      "globalOrder": 167,
+      "displayNameTraditional": "【精英·風漂龍 α】服裝"
+    },
+    "armor:pl027_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 52,
+      "globalOrder": 168,
+      "displayNameTraditional": "【精英·風漂龍 β】服裝"
+    },
+    "armor:pl027_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 53,
+      "globalOrder": 169,
+      "displayNameTraditional": "【精英·霜漂 α】服裝"
+    },
+    "armor:pl027_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 54,
+      "globalOrder": 170,
+      "displayNameTraditional": "【精英·霜漂 β】服裝"
+    },
+    "armor:pl029_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 55,
+      "globalOrder": 171,
+      "displayNameTraditional": "【精英·慘爪 α】服裝"
+    },
+    "armor:pl029_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 56,
+      "globalOrder": 172,
+      "displayNameTraditional": "【精英·慘爪 β】服裝"
+    },
+    "armor:pl029_0101": {
+      "sectionKey": "masterRank",
+      "menuOrder": 57,
+      "globalOrder": 173,
+      "displayNameTraditional": "【精英·亡爪 α】服裝"
+    },
+    "armor:pl029_0111": {
+      "sectionKey": "masterRank",
+      "menuOrder": 58,
+      "globalOrder": 174,
+      "displayNameTraditional": "【精英·亡爪 β】服裝"
+    },
+    "armor:pl040_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 59,
+      "globalOrder": 175,
+      "displayNameTraditional": "【精英·熔岩龍】服裝"
+    },
+    "armor:pl041_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 60,
+      "globalOrder": 176,
+      "displayNameTraditional": "【精英·爆鎚龍】服裝"
+    },
+    "armor:pl080_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 61,
+      "globalOrder": 177,
+      "displayNameTraditional": "【精英·迅龍 α】服裝"
+    },
+    "armor:pl080_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 62,
+      "globalOrder": 178,
+      "displayNameTraditional": "【精英·迅龍 β】服裝"
+    },
+    "armor:pl081_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 63,
+      "globalOrder": 179,
+      "displayNameTraditional": "【精英·斬龍 α】服裝"
+    },
+    "armor:pl081_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 64,
+      "globalOrder": 180,
+      "displayNameTraditional": "【精英·斬龍 β】服裝"
+    },
+    "armor:pl081_0100": {
+      "sectionKey": "masterRank",
+      "menuOrder": 65,
+      "globalOrder": 181,
+      "displayNameTraditional": "【精英·斬黃 α】服裝"
+    },
+    "armor:pl081_0110": {
+      "sectionKey": "masterRank",
+      "menuOrder": 66,
+      "globalOrder": 182,
+      "displayNameTraditional": "【精英·斬黃 β】服裝"
+    },
+    "armor:pl082_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 67,
+      "globalOrder": 183,
+      "displayNameTraditional": "【精英·碎龍 α】服裝"
+    },
+    "armor:pl082_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 68,
+      "globalOrder": 184,
+      "displayNameTraditional": "【精英·碎龍 β】服裝"
+    },
+    "armor:pl083_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 69,
+      "globalOrder": 185,
+      "displayNameTraditional": "【精英·轟龍 α】服裝"
+    },
+    "armor:pl083_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 70,
+      "globalOrder": 186,
+      "displayNameTraditional": "【精英·轟龍 β】服裝"
+    },
+    "armor:pl083_0100": {
+      "sectionKey": "masterRank",
+      "menuOrder": 71,
+      "globalOrder": 187,
+      "displayNameTraditional": "【精英·轟吼 α】服裝"
+    },
+    "armor:pl083_0110": {
+      "sectionKey": "masterRank",
+      "menuOrder": 72,
+      "globalOrder": 188,
+      "displayNameTraditional": "【精英·轟吼 β】服裝"
+    },
+    "armor:pl093_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 73,
+      "globalOrder": 189,
+      "displayNameTraditional": "【黑帶】服裝"
+    },
+    "armor:pl042_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 74,
+      "globalOrder": 190,
+      "displayNameTraditional": "【精英·矜持 α】服裝"
+    },
+    "armor:pl042_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 75,
+      "globalOrder": 191,
+      "displayNameTraditional": "【精英·矜持 β】服裝"
+    },
+    "armor:pl050_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 76,
+      "globalOrder": 192,
+      "displayNameTraditional": "【精英·貪欲 α】服裝"
+    },
+    "armor:pl050_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 77,
+      "globalOrder": 193,
+      "displayNameTraditional": "【精英·貪欲 β】服裝"
+    },
+    "armor:pl085_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 78,
+      "globalOrder": 194,
+      "displayNameTraditional": "【精英·雪崩 α】服裝"
+    },
+    "armor:pl085_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 79,
+      "globalOrder": 195,
+      "displayNameTraditional": "【精英·雪崩 β】服裝"
+    },
+    "armor:pl032_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 80,
+      "globalOrder": 196,
+      "displayNameTraditional": "【精英·死滅 α】服裝"
+    },
+    "armor:pl032_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 81,
+      "globalOrder": 197,
+      "displayNameTraditional": "【精英·死滅 β】服裝"
+    },
+    "armor:pl046_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 82,
+      "globalOrder": 198,
+      "displayNameTraditional": "【精英·帝王 α】服裝"
+    },
+    "armor:pl046_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 83,
+      "globalOrder": 199,
+      "displayNameTraditional": "【精英·帝王 β】服裝"
+    },
+    "armor:pl047_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 84,
+      "globalOrder": 200,
+      "displayNameTraditional": "【精英·鋼龍 α】服裝"
+    },
+    "armor:pl047_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 85,
+      "globalOrder": 201,
+      "displayNameTraditional": "【精英·鋼龍 β】服裝"
+    },
+    "armor:pl035_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 86,
+      "globalOrder": 202,
+      "displayNameTraditional": "【精英·麒麟 α】服裝"
+    },
+    "armor:pl035_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 87,
+      "globalOrder": 203,
+      "displayNameTraditional": "【精英·麒麟 β】服裝"
+    },
+    "armor:pl086_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 88,
+      "globalOrder": 204,
+      "displayNameTraditional": "【精英·觸角 α】服裝"
+    },
+    "armor:pl086_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 89,
+      "globalOrder": 205,
+      "displayNameTraditional": "【精英·觸角 β】服裝"
+    },
+    "armor:pl094_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 90,
+      "globalOrder": 206,
+      "displayNameTraditional": "【公會宮殿】服裝"
+    },
+    "armor:pl095_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 91,
+      "globalOrder": 207,
+      "displayNameTraditional": "【敏捷耳飾】服裝"
+    },
+    "armor:pl095_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 92,
+      "globalOrder": 208,
+      "displayNameTraditional": "【佯動耳飾】服裝"
+    },
+    "armor:pl088_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 93,
+      "globalOrder": 209,
+      "displayNameTraditional": "【精英·迦樓羅 α】服裝"
+    },
+    "armor:pl088_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 94,
+      "globalOrder": 210,
+      "displayNameTraditional": "【精英·迦樓羅 β】服裝"
+    },
+    "armor:pl108_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 95,
+      "globalOrder": 211,
+      "displayNameTraditional": "【精英·黑狼鳥 α】服裝"
+    },
+    "armor:pl108_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 96,
+      "globalOrder": 212,
+      "displayNameTraditional": "【精英·黑狼鳥 β】服裝"
+    },
+    "armor:pl107_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 97,
+      "globalOrder": 213,
+      "displayNameTraditional": "【精英·雷狼龍 α】服裝"
+    },
+    "armor:pl107_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 98,
+      "globalOrder": 214,
+      "displayNameTraditional": "【精英·雷狼龍 β】服裝"
+    },
+    "armor:pl021_0200": {
+      "sectionKey": "masterRank",
+      "menuOrder": 99,
+      "globalOrder": 215,
+      "displayNameTraditional": "【精英·金黃澄月 α】服裝"
+    },
+    "armor:pl021_0210": {
+      "sectionKey": "masterRank",
+      "menuOrder": 100,
+      "globalOrder": 216,
+      "displayNameTraditional": "【精英·金黃澄月 β】服裝"
+    },
+    "armor:pl033_0200": {
+      "sectionKey": "masterRank",
+      "menuOrder": 101,
+      "globalOrder": 217,
+      "displayNameTraditional": "【精英·銀白耀日 α】服裝"
+    },
+    "armor:pl033_0210": {
+      "sectionKey": "masterRank",
+      "menuOrder": 102,
+      "globalOrder": 218,
+      "displayNameTraditional": "【精英·銀白耀日 β】服裝"
+    },
+    "armor:pl051_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 103,
+      "globalOrder": 219,
+      "displayNameTraditional": "【精英·皇后 α】服裝"
+    },
+    "armor:pl051_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 104,
+      "globalOrder": 220,
+      "displayNameTraditional": "【精英·皇后 β】服裝"
+    },
+    "armor:pl030_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 105,
+      "globalOrder": 221,
+      "displayNameTraditional": "【精英·狂紋 α】服裝"
+    },
+    "armor:pl030_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 106,
+      "globalOrder": 222,
+      "displayNameTraditional": "【精英·狂紋 β】服裝"
+    },
+    "armor:pl092_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 107,
+      "globalOrder": 223,
+      "displayNameTraditional": "【公會成果】服裝"
+    },
+    "armor:pl109_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 108,
+      "globalOrder": 224,
+      "displayNameTraditional": "【精英·金色 α】服裝"
+    },
+    "armor:pl109_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 109,
+      "globalOrder": 225,
+      "displayNameTraditional": "【精英·金色 β】服裝"
+    },
+    "armor:pl109_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 110,
+      "globalOrder": 226,
+      "displayNameTraditional": "【精英·齊天 α】服裝"
+    },
+    "armor:pl109_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 111,
+      "globalOrder": 227,
+      "displayNameTraditional": "【精英·齊天 β】服裝"
+    },
+    "armor:pl107_0100": {
+      "sectionKey": "masterRank",
+      "menuOrder": 112,
+      "globalOrder": 228,
+      "displayNameTraditional": "【精英·獄狼龍 α】服裝"
+    },
+    "armor:pl107_0110": {
+      "sectionKey": "masterRank",
+      "menuOrder": 113,
+      "globalOrder": 229,
+      "displayNameTraditional": "【精英·獄狼龍 β】服裝"
+    },
+    "armor:pl087_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 114,
+      "globalOrder": 230,
+      "displayNameTraditional": "【精英·龍紋 α】服裝"
+    },
+    "armor:pl087_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 115,
+      "globalOrder": 231,
+      "displayNameTraditional": "【精英·龍紋 β】服裝"
+    },
+    "armor:pl082_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 116,
+      "globalOrder": 232,
+      "displayNameTraditional": "【精英·鐵腕 α】服裝"
+    },
+    "armor:pl082_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 117,
+      "globalOrder": 233,
+      "displayNameTraditional": "【精英·鐵腕 β】服裝"
+    },
+    "armor:pl089_0500": {
+      "sectionKey": "masterRank",
+      "menuOrder": 118,
+      "globalOrder": 234,
+      "displayNameTraditional": "【精英·霜刃冰牙龍 α】服裝"
+    },
+    "armor:pl089_0510": {
+      "sectionKey": "masterRank",
+      "menuOrder": 119,
+      "globalOrder": 235,
+      "displayNameTraditional": "【精英·霜刃冰牙龍 β】服裝"
+    },
+    "armor:pl052_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 120,
+      "globalOrder": 236,
+      "displayNameTraditional": "【精英·煌黑龍 α】服裝"
+    },
+    "armor:pl052_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 121,
+      "globalOrder": 237,
+      "displayNameTraditional": "【精英·煌黑龍 β】服裝"
+    },
+    "armor:pl129_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 122,
+      "globalOrder": 238,
+      "displayNameTraditional": "【精英·龍 α】服裝"
+    },
+    "armor:pl129_0010": {
+      "sectionKey": "masterRank",
+      "menuOrder": 123,
+      "globalOrder": 239,
+      "displayNameTraditional": "【精英·龍 β】服裝"
+    },
+    "armor:pl049_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 124,
+      "globalOrder": 240,
+      "displayNameTraditional": "【精英·絢輝龍鎧羅 α】服裝"
+    },
+    "armor:pl049_0011": {
+      "sectionKey": "masterRank",
+      "menuOrder": 125,
+      "globalOrder": 241,
+      "displayNameTraditional": "【精英·絢輝龍鎧羅 β】服裝"
+    },
+    "armor:pl085_0020": {
+      "sectionKey": "masterRank",
+      "menuOrder": 126,
+      "globalOrder": 242,
+      "displayNameTraditional": "【精英·雪崩 γ】服裝"
+    },
+    "armor:pl086_0020": {
+      "sectionKey": "masterRank",
+      "menuOrder": 127,
+      "globalOrder": 243,
+      "displayNameTraditional": "【精英·觸角 γ】服裝"
+    },
+    "armor:pl127_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 128,
+      "globalOrder": 244,
+      "displayNameTraditional": "【風火輪】服裝"
+    },
+    "armor:pl128_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 129,
+      "globalOrder": 245,
+      "displayNameTraditional": "【阿斯特拉】服裝"
+    },
+    "armor:pl124_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 130,
+      "globalOrder": 246,
+      "displayNameTraditional": "【薔薇】服裝"
+    },
+    "armor:pl125_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 131,
+      "globalOrder": 247,
+      "displayNameTraditional": "【熱情】服裝"
+    },
+    "armor:pl126_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 132,
+      "globalOrder": 248,
+      "displayNameTraditional": "【魔界之主】服裝"
+    },
+    "armor:pl130_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 133,
+      "globalOrder": 249,
+      "displayNameTraditional": "【里昂】服裝"
+    },
+    "armor:pl131_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 134,
+      "globalOrder": 250,
+      "displayNameTraditional": "【克蕾兒】服裝"
+    },
+    "armor:pl072_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 135,
+      "globalOrder": 251,
+      "displayNameTraditional": "【蒼世武士】服裝"
+    },
+    "armor:pl133_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 136,
+      "globalOrder": 252,
+      "displayNameTraditional": "【阿提蜜絲】服裝"
+    },
+    "armor:pl096_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 137,
+      "globalOrder": 253,
+      "displayNameTraditional": "【精靈鹿頭套】服裝"
+    },
+    "armor:pl099_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 138,
+      "globalOrder": 254,
+      "displayNameTraditional": "【骷髏頭巾】服裝"
+    },
+    "armor:pl097_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 139,
+      "globalOrder": 255,
+      "displayNameTraditional": "【草食龍頭套】服裝"
+    },
+    "armor:pl111_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 140,
+      "globalOrder": 256,
+      "displayNameTraditional": "【兔耳朵】服裝"
+    },
+    "armor:pl112_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 141,
+      "globalOrder": 257,
+      "displayNameTraditional": "【柔毛秧雞】服裝"
+    },
+    "armor:pl114_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 142,
+      "globalOrder": 258,
+      "displayNameTraditional": "【飛雷龍圍巾】服裝"
+    },
+    "armor:pl100_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 143,
+      "globalOrder": 259,
+      "displayNameTraditional": "【封印的龍骸布】服裝"
+    },
+    "armor:pl101_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 144,
+      "globalOrder": 260,
+      "displayNameTraditional": "【龍人族之耳】服裝"
+    },
+    "armor:pl098_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 145,
+      "globalOrder": 261,
+      "displayNameTraditional": "【企鵝頭套】服裝"
+    },
+    "armor:pl113_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 146,
+      "globalOrder": 262,
+      "displayNameTraditional": "【溫泉銀猴】服裝"
+    },
+    "armor:pl113_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 147,
+      "globalOrder": 263,
+      "displayNameTraditional": "【溫泉金猴】服裝"
+    },
+    "armor:pl115_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 148,
+      "globalOrder": 264,
+      "displayNameTraditional": "【健美 α】服裝"
+    },
+    "armor:pl115_0001": {
+      "sectionKey": "masterRank",
+      "menuOrder": 149,
+      "globalOrder": 265,
+      "displayNameTraditional": "【健美 γ】服裝"
+    },
+    "armor:pl500_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 150,
+      "globalOrder": 266,
+      "displayNameTraditional": "【內衣 α】服裝"
+    },
+    "armor:pl501_0000": {
+      "sectionKey": "masterRank",
+      "menuOrder": 151,
+      "globalOrder": 267,
+      "displayNameTraditional": "【內衣 β】服裝"
+    }
+  },
+  "unorderedTargetIds": [
+    "armor:pl019_0000",
+    "armor:pl057_0000",
+    "armor:pl057_0010",
+    "armor:pl068_0000",
+    "armor:pl068_0010",
+    "armor:pl068_0020",
+    "armor:pl132_0010"
+  ]
+}

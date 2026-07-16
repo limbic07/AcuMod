@@ -367,33 +367,3 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 自动浏览排序把分支组视为与普通 MOD 不同的一级列表项：所有分支组固定排在普通 MOD 区域之前，组内成员保持现有手动相对顺序。将自动排序应用为手动顺序后，分支组仍作为连续块保存；任何浏览顺序都不参与游戏文件覆盖和冲突优先级。
 
 分支组只保存组织关系，不产生第三种启用状态。每个分支继续使用独立 manifest、本地库目录、部署记录和冲突优先级；多个分支可以同时启用。`AcumodData/mods/branch-groups.json` 保存组名和成员 MOD ID，卸载或移出成员后只剩一个分支时自动拆组。完全相同的内容关联到已有本地副本，不重复保存。
-
-## Slice 15：Nexus Mods 下载
-
-目标：先完成传统 UI 中可验证的“选择 Nexus 文件 -> 下载 -> 复用现有导入预览 -> 用户确认安装”闭环，再允许 AI Agent 调用同一入口。
-
-已确认边界：
-
-- 只接受 Monster Hunter: World，固定 Nexus game domain 为 `monsterhunterworld`；不实现通用多游戏下载器。
-- 元数据优先使用 Nexus Mods API v3；文件列表和下载链接通过独立适配器兼容当前可用接口，避免把具体 API 版本散落在 command 和 UI 中。
-- 开发期可以由开发者手动提供 Personal API key 验证链路；公开版本必须注册 Acumod 应用并使用 Nexus SSO，不能要求普通用户粘贴个人 key。
-- Premium 用户可在授权后直接获取下载链接；免费用户必须先访问 Nexus 页面，并由 Acumod 接收网站生成的 NXM 临时 `key` 与 `expires`，不能绕过网页确认。
-- API key 只保存在系统凭据存储中，不写入 `config.json`、manifest、日志或前端状态；Vue 只能得到登录状态和用户摘要。
-- 下载文件先写入 `AcumodData/mods/staging/downloads/<task_id>/` 的 `.part` 文件，完成后校验大小和 API 提供的哈希，再原子改名；下载完成前不解包、不安装。
-- 下载完成后必须调用现有压缩包导入预览。多候选分支、游戏根目录 fallback、同名去重和最终安装确认全部复用已有规则。
-- manifest 后续增加可选 `nexusSource`，记录 game domain、mod ID、file ID、版本、原始页面和文件哈希，用于来源展示与更新检查；不保存临时下载链接或凭据。
-
-建议拆为三个可独立验证的子切片：
-
-1. Slice 15A：Nexus 客户端和账号验证。Rust 实现凭据存储、`validate user`、MOD URL 解析、MOD 元数据与文件列表 DTO；UI 只允许查看和选择文件，不下载。
-2. Slice 15B：受控下载任务。实现开始、查询进度、失败重试、`.part` 文件、大小/哈希校验和速率限制反馈；Premium 直链与免费用户 NXM 授权统一生成一次性下载计划。下载一旦开始顺序完成，不提供取消。
-3. Slice 15C：导入桥接和来源记录。下载完成后进入现有导入预览，用户选择分支并确认安装；成功后写入 `nexusSource`，清理本次下载暂存，并支持按 mod/file/version 检查更新但不自动覆盖。
-
-预计需要新增 Rust 生产依赖：HTTP 流式下载客户端、WebSocket SSO 客户端和系统凭据存储。正式实现前应单独确认依赖选择、许可证、发布体积和 Windows 行为；本次方案阶段不新增依赖。
-
-官方核对入口：
-
-- Nexus Mods API v3：<https://api-docs.nexusmods.com/>
-- API 使用政策和应用注册：<https://help.nexusmods.com/article/114-api-acceptable-use-policy>
-- Nexus SSO protocol 2 示例：<https://github.com/Nexus-Mods/sso-integration-demo>
-- 当前下载链接接口说明：<https://app.swaggerhub.com/apis-docs/NexusMods/nexus-mods_public_api_params_in_form_data/1.0>

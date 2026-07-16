@@ -436,6 +436,12 @@ Vue UI
 .\scripts\build-mhwi-model-index.ps1
 ```
 
+外观装备菜单录屏抄录或防具模型索引更新后，重新关联并生成程序使用的防具顺序：
+
+```powershell
+npm run data:armor-menu-order
+```
+
 当前压缩包导入不新增 Rust 依赖，但开发和发布包中需要提供 `resources/unpackers/7zip/7z.exe`、`7z.dll` 和 7-Zip 许可文件。用户不需要单独安装 7-Zip。
 
 例如“启用和禁用已安装 MOD”：

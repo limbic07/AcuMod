@@ -11,6 +11,10 @@ const MODEL_INDEX_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../references/mhwi-data/curated/model-index.json"
 ));
+const ARMOR_MENU_ORDER_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../references/mhwi-data/curated/armor-menu-order.json"
+));
 const MRL3_TEXTURE_ENTRY_SIZE: usize = 272;
 const MRL3_TEXTURE_PATH_OFFSET: usize = 16;
 const MRL3_TEXTURE_PATH_CAPACITY: usize = 256;
@@ -99,6 +103,18 @@ struct ArmorRemapTargetEntry {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ArmorMenuOrderIndex {
+    target_orders: HashMap<String, ArmorMenuOrderEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArmorMenuOrderEntry {
+    global_order: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ArmorSlingerBindingEntry {
     armor_model_id: String,
     gender: String,
@@ -170,7 +186,7 @@ pub fn build_model_remap_groups(
         &selection_by_group,
         index,
     );
-    add_armor_groups(&mut groups, replacements, &selection_by_group, index);
+    add_armor_groups(&mut groups, replacements, &selection_by_group, index)?;
     add_palico_armor_groups(&mut groups, replacements, &selection_by_group, index);
     add_hair_groups(&mut groups, replacements, &selection_by_group, index);
     add_slinger_groups(
@@ -396,6 +412,17 @@ fn remap_index() -> Result<&'static RemapIndex, String> {
     }
 }
 
+fn armor_menu_order_index() -> Result<&'static ArmorMenuOrderIndex, String> {
+    static INDEX: OnceLock<Result<ArmorMenuOrderIndex, String>> = OnceLock::new();
+    match INDEX.get_or_init(|| {
+        serde_json::from_str(ARMOR_MENU_ORDER_JSON)
+            .map_err(|error| format!("无法解析内置 MHWI 防具菜单顺序：{error}"))
+    }) {
+        Ok(index) => Ok(index),
+        Err(error) => Err(error.clone()),
+    }
+}
+
 fn selection_map(selections: &[ModelRemapSelection]) -> Result<HashMap<&str, &str>, String> {
     let mut selection_by_group = HashMap::new();
     for selection in selections {
@@ -505,7 +532,7 @@ fn add_armor_groups(
     replacements: &[ModelReplacement],
     selection_by_group: &HashMap<&str, &str>,
     index: &RemapIndex,
-) {
+) -> Result<(), String> {
     let mut by_model = BTreeMap::<String, Vec<&ModelReplacement>>::new();
     for replacement in replacements
         .iter()
@@ -516,11 +543,29 @@ fn add_armor_groups(
             .or_default()
             .push(replacement);
     }
-    let targets = index
+    let menu_order = armor_menu_order_index()?;
+    let mut targets = index
         .armor_remap_targets
         .iter()
+        // 改绑入口只展示实际外观装备菜单目标，避免把基础防具、HARDUMMY 或不可用 ID 暴露给用户。
+        .filter(|entry| menu_order.target_orders.contains_key(&entry.target_id))
         .map(armor_target)
         .collect::<Vec<_>>();
+    targets.sort_by(|left, right| {
+        let left_order = menu_order
+            .target_orders
+            .get(&left.target_id)
+            .map(|entry| entry.global_order)
+            .unwrap_or(usize::MAX);
+        let right_order = menu_order
+            .target_orders
+            .get(&right.target_id)
+            .map(|entry| entry.global_order)
+            .unwrap_or(usize::MAX);
+        left_order
+            .cmp(&right_order)
+            .then_with(|| left.model_id.cmp(&right.model_id))
+    });
 
     for (model_id, replacements) in by_model {
         let group_key = format!("armor:{model_id}");
@@ -544,6 +589,7 @@ fn add_armor_groups(
             targets: targets.clone(),
         });
     }
+    Ok(())
 }
 
 fn add_palico_armor_groups(
@@ -1454,6 +1500,43 @@ mod tests {
         )];
         let (groups, _) = build_model_remap_groups(&replacements, &[]).unwrap();
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn armor_remap_targets_follow_the_game_menu_order() {
+        let replacements = vec![replacement("armor", "防具套装", "set", "pl001_0000")];
+        let (groups, _) = build_model_remap_groups(&replacements, &[]).unwrap();
+        let target_ids = groups[0]
+            .targets
+            .iter()
+            .take(5)
+            .map(|target| target.target_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            target_ids,
+            [
+                "armor:pl067_0000",
+                "armor:pl066_0000",
+                "armor:pl066_0010",
+                "armor:pl018_0000",
+                "armor:pl036_0000",
+            ]
+        );
+        for hidden_target in [
+            "armor:pl019_0000",
+            "armor:pl057_0000",
+            "armor:pl057_0010",
+            "armor:pl068_0000",
+            "armor:pl068_0010",
+            "armor:pl068_0020",
+            "armor:pl132_0010",
+        ] {
+            assert!(!groups[0]
+                .targets
+                .iter()
+                .any(|target| target.target_id == hidden_target));
+        }
     }
 
     #[test]

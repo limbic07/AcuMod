@@ -395,25 +395,6 @@ Vue 改绑对话框
 
 目录改名使用按模型类别生成的受限路径规则，而不是全局替换数字：武器、随从防具、发型和飞翔爪只处理各自已验证的资源根与文件名 token；防具另外识别规范 `epv/{f,m}_<部位>NNN.epv3` 文件名，仅将三位套装号替换为目标套装号，不使用目标变体号。`vfx`、自定义资源目录和未知命名保持原路径。部分 `.mrl3` 材质文件内保存贴图资源路径，部署器只解析已验证的 MRL3 头和贴图表，对恰好对应已移动 `.tex` 文件的路径做精确替换；飞翔爪改绑还会在部署副本中同步修改已关联 `.evam` 的偏移 `0x10` 编号。字符串越界、EVAM 源 ID 不一致、格式异常或目标路径碰撞都会阻止保存或部署，本地 MOD 库原件始终不变。人物语音不进入该链路。
 
-## Nexus Mods 下载边界
-
-Slice 15 采用独立的 Nexus 适配层，网络协议和凭据不能进入现有 `mod_library` service：
-
-```text
-Vue 下载页
-  -> typed invoke wrapper
-  -> nexus commands
-  -> nexus auth / metadata / download services
-  -> staging/downloads/<task_id>/<file>.part
-  -> 大小与哈希校验
-  -> 现有 archive import preview
-  -> 用户确认候选分支
-  -> 本地 MOD 库 manifest
-```
-
-建议 Rust 模块为 `commands/nexus.rs`、`services/nexus/client.rs`、`auth.rs`、`download.rs` 和 `storage/credentials.rs`。Vue 不接收 API key、签名下载地址或任意磁盘目标路径，只传递后端签发的 task ID、MHW mod ID 和 file ID。
-
-Nexus 当前主线元数据接口为 API v3，但下载链接仍需要由适配层兼容现有下载接口。正式版本使用已注册 Acumod application slug 的 Nexus SSO；开发期 Personal API key 只用于本机验证。Premium 用户可直接生成下载链接，免费用户必须从 Nexus 页面取得 NXM 的临时 `key/expires`。下载完成后仍复用 Acumod 已有的解包、候选选择、游戏根目录确认和同名去重规则，不允许 Nexus command 直接写入游戏目录。
 
 ## ID 表后续用途
 

@@ -125,17 +125,6 @@ Acumod 不额外备份游戏目录中被覆盖的文件。各 MOD 的原始副�
 
 当前 `tauri.conf.json` 中 `csp` 为 `null`，适合早期开发阶段。进入更接近发布的阶段前，应确认是否需要收紧 CSP。
 
-## Nexus 下载安全
-
-- API key 和 SSO 返回凭据只保存在操作系统凭据存储中；禁止写入 JSON 配置、manifest、日志、错误详情或 Vue 状态。
-- 网络 command 不接受前端提供的任意 URL。MOD 页面仅解析 `monsterhunterworld` 域下的 ID；实际下载地址必须来自 Nexus API 对当前 file ID 返回的一次性结果。
-- 免费用户的 NXM `key/expires` 只用于本次下载计划，使用后立即丢弃；不能持久化或复用过期链接。
-- HTTP 客户端限制重定向次数，拒绝降级到明文 HTTP，并防止重定向到本机、局域网或非 Nexus 返回的任意目标。
-- 下载只写入后端创建的 `staging/downloads/<task_id>/`，文件名需要净化；先写 `.part`，完成大小/哈希校验后再原子改名。
-- 失败和重试只能操作当前 task ID 记录的暂存文件。下载一旦开始不提供取消；下载结束不代表安装，仍必须经过现有解包预览、候选选择和用户确认。
-- 对 `401/403/410/429` 分别显示重新登录、网页授权、链接过期和配额等待状态；不得静默循环请求。
-- 请求携带真实的 `Application-Name` 与 `Application-Version`，遵守 Nexus API 使用政策和响应中的速率限制信息，不抓取或批量镜像站点内容。
-
 ## AI Agent 安全边界
 
 AI Agent 只能提出受控操作请求，不能直接执行文件操作。

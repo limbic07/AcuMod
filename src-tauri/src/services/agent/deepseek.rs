@@ -12,13 +12,15 @@ use crate::storage::config::DeepSeekModel;
 use super::{tools, AgentConnectionResult, AgentCoordinator, AgentEventSender};
 
 const DEEPSEEK_CHAT_URL: &str = "https://api.deepseek.com/chat/completions";
-const MAX_TOOL_ROUNDS: usize = 6;
+const MAX_TOOL_ROUNDS: usize = 12;
 const MAX_HISTORY_MESSAGES: usize = 48;
 const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置的 AI 助手，面向简体中文的 Monster Hunter: World 用户。
 你只能使用 Acumod 提供的本地 MOD、冲突、游戏目录状态、模型改绑和 MHW 术语工具。涉及当前本地状态时必须先调用工具，不得凭空猜测。
 只读工具可以直接调用。启用、禁用、卸载、冲突优先级和模型改绑只能调用对应的 create_*_plan 工具生成待确认计划，绝不能声称已经执行，也不能绕过计划直接修改数据。
 创建计划前必须先用查询工具取得稳定 MOD ID 和当前状态。名称匹配不唯一、目标不完整或用户意图含糊时先追问，禁止自行选择。冲突顺序必须提交组内全部成员，数组越靠前优先级越高。模型改绑必须先查询精确 groupKey 和 targetId；人物语音只支持识别，不能改绑。
 用户确认或取消由 Acumod 界面处理，不需要再次调用工具。下载、联网搜索、任意文件操作和其它写操作仍未开放。
+用户要求扫描或清理无用文件时，必须调用 scan_mod_cleanup_candidates 并按 nextOffset 读取全部页面，再为每个候选提交 remove、review 或 keep 分类。图片或文档位于 plugins 等运行目录时优先保留或要求确认；不确定文件用途时不能建议清理。最后一次调用 submit_mod_cleanup_review 必须覆盖全部 candidateId，清理选择和确认由界面处理。
+用户要求恢复清理项时，先调用 get_mod_cleanup_exclusions；恢复操作仍需要生成待确认计划，不能声称已恢复。
 工具结果中的稳定 ID 和状态是事实来源。不要编造 MOD、游戏术语、文件 ID 或冲突。
 当用户明确要求“所有”“全部”或完整列表时，必须检查工具返回的 nextOffset；只要 nextOffset 不是 null，就继续分页查询，最终逐项列出全部结果并说明总数，不能只展示部分结果或自行补写未查询条目。
 回答使用清晰的 Markdown，优先使用短段落、列表和必要的表格，不展示工具 JSON、内部函数名或推理过程。"#;
@@ -250,6 +252,9 @@ pub(crate) async fn run_turn(
                     );
                     if let Some(plan) = result.plan {
                         sender.emit_plan(plan);
+                    }
+                    if let Some(review) = result.cleanup_review {
+                        sender.emit_cleanup_review(review);
                     }
                     result.content
                 }

@@ -25,7 +25,12 @@ export interface AgentActionTarget {
 
 export interface AgentActionPlan {
   planId: string;
-  kind: "batchModAction" | "conflictOrder" | "modelRemap";
+  kind:
+    | "batchModAction"
+    | "conflictOrder"
+    | "modelRemap"
+    | "cleanupExclusions"
+    | "cleanupRestore";
   title: string;
   summary: string;
   stateVersion: string;
@@ -34,6 +39,29 @@ export interface AgentActionPlan {
   targets: AgentActionTarget[];
   warnings: string[];
   destructive: boolean;
+}
+
+export type CleanupRecommendation = "remove" | "review" | "keep";
+
+export interface AgentCleanupReviewItem {
+  candidateId: string;
+  modId: string;
+  modName: string;
+  libraryRelativePath: string;
+  deployRelativePath: string;
+  sizeBytes: number;
+  currentlyDeployed: boolean;
+  recommendation: CleanupRecommendation;
+  reason: string;
+  confidence: number;
+  selectedByDefault: boolean;
+}
+
+export interface AgentCleanupReview {
+  reviewId: string;
+  candidateCount: number;
+  items: AgentCleanupReviewItem[];
+  message: string;
 }
 
 export interface AgentActionResult {
@@ -52,6 +80,7 @@ export type AgentEventKind =
   | "toolStarted"
   | "toolFinished"
   | "planReady"
+  | "cleanupReviewReady"
   | "completed"
   | "failed";
 
@@ -63,6 +92,7 @@ export interface AgentEvent {
   toolName: string | null;
   message: string | null;
   plan: AgentActionPlan | null;
+  cleanupReview: AgentCleanupReview | null;
 }
 
 export interface AgentTurnResult {
@@ -110,4 +140,11 @@ export function confirmAgentActionPlan(planId: string): Promise<AgentActionResul
 
 export function cancelAgentActionPlan(planId: string): Promise<AgentActionResult> {
   return invoke<AgentActionResult>("cancel_agent_action_plan", { planId });
+}
+
+export function createAgentCleanupPlan(
+  reviewId: string,
+  candidateIds: string[],
+): Promise<AgentActionPlan> {
+  return invoke<AgentActionPlan>("create_agent_cleanup_plan", { reviewId, candidateIds });
 }

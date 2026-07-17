@@ -6,13 +6,17 @@ import {
   cancelAgentActionPlan,
   clearAgentSession,
   confirmAgentActionPlan,
+  createAgentCleanupPlan,
   getAgentSettings,
   startAgentTurn,
   type AgentActionPlan,
   type AgentActionResult,
+  type AgentCleanupReview,
+  type AgentCleanupReviewItem,
   type AgentEvent,
   type AgentSettings,
 } from "../api/agent";
+import { openModCleanupCandidateFolder } from "../api/modLibrary";
 
 interface ChatMessage {
   id: number;
@@ -21,12 +25,20 @@ interface ChatMessage {
   complete: boolean;
   renderedHtml: string;
   actionPlans: VisibleActionPlan[];
+  cleanupReviews: VisibleCleanupReview[];
 }
 
 interface VisibleActionPlan {
   plan: AgentActionPlan;
   status: "pending" | "executing" | "completed" | "partiallyFailed" | "cancelled" | "failed";
   result: AgentActionResult | null;
+  error: string;
+}
+
+interface VisibleCleanupReview {
+  review: AgentCleanupReview;
+  selectedCandidateIds: string[];
+  status: "selecting" | "creating" | "planned" | "failed";
   error: string;
 }
 
@@ -49,6 +61,8 @@ const error = ref("");
 const isLoadingSettings = ref(false);
 const isSending = ref(false);
 const activePlanId = ref("");
+const activeCleanupReviewId = ref("");
+const openingCleanupCandidateId = ref("");
 const messageList = ref<HTMLElement | null>(null);
 let nextMessageId = 1;
 const markdown = new MarkdownIt({
@@ -141,6 +155,22 @@ function applyAgentEvent(event: AgentEvent, assistant: ChatMessage) {
       void scrollToLatest();
     }
   }
+  if (event.kind === "cleanupReviewReady" && event.cleanupReview) {
+    const known = assistant.cleanupReviews.some(
+      (item) => item.review.reviewId === event.cleanupReview?.reviewId,
+    );
+    if (!known) {
+      assistant.cleanupReviews.push({
+        review: event.cleanupReview,
+        selectedCandidateIds: event.cleanupReview.items
+          .filter((item) => item.selectedByDefault)
+          .map((item) => item.candidateId),
+        status: "selecting",
+        error: "",
+      });
+      void scrollToLatest();
+    }
+  }
   if (event.kind === "failed") {
     error.value = event.message ?? "AI 回答失败。";
     statusMessage.value = "";
@@ -166,6 +196,7 @@ async function sendMessage() {
     complete: true,
     renderedHtml: "",
     actionPlans: [],
+    cleanupReviews: [],
   };
   const assistantMessage: ChatMessage = {
     id: nextMessageId++,
@@ -174,6 +205,7 @@ async function sendMessage() {
     complete: false,
     renderedHtml: "",
     actionPlans: [],
+    cleanupReviews: [],
   };
   messages.value.push(userMessage, assistantMessage);
   input.value = "";
@@ -203,6 +235,135 @@ async function sendMessage() {
       assistantMessage.complete = true;
     }
     await scrollToLatest();
+  }
+}
+
+async function sendQuickPrompt(prompt: string) {
+  if (isSending.value) {
+    return;
+  }
+  input.value = prompt;
+  await sendMessage();
+}
+
+function cleanupReviewGroups(review: AgentCleanupReview) {
+  const groups = new Map<string, { modId: string; modName: string; items: AgentCleanupReviewItem[] }>();
+  for (const item of review.items) {
+    const group = groups.get(item.modId) ?? {
+      modId: item.modId,
+      modName: item.modName,
+      items: [],
+    };
+    group.items.push(item);
+    groups.set(item.modId, group);
+  }
+  return [...groups.values()];
+}
+
+function cleanupRecommendationLabel(item: AgentCleanupReviewItem) {
+  if (item.recommendation === "remove") {
+    return "建议清理";
+  }
+  if (item.recommendation === "review") {
+    return "需要确认";
+  }
+  return "建议保留";
+}
+
+function formatFileSize(sizeBytes: number) {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function updateCleanupSelection(review: VisibleCleanupReview, candidateId: string, selected: boolean) {
+  const selectedIds = new Set(review.selectedCandidateIds);
+  if (selected) {
+    selectedIds.add(candidateId);
+  } else {
+    selectedIds.delete(candidateId);
+  }
+  review.selectedCandidateIds = [...selectedIds];
+}
+
+function updateCleanupSelectionFromEvent(
+  review: VisibleCleanupReview,
+  candidateId: string,
+  event: Event,
+) {
+  const target = event.target;
+  updateCleanupSelection(
+    review,
+    candidateId,
+    target instanceof HTMLInputElement && target.checked,
+  );
+}
+
+function cleanupReviewStatusLabel(review: VisibleCleanupReview) {
+  if (review.status === "creating") {
+    return "正在生成计划";
+  }
+  if (review.status === "planned") {
+    return "已生成计划";
+  }
+  if (review.status === "failed") {
+    return "生成失败";
+  }
+  return "待选择";
+}
+
+async function createCleanupPlan(message: ChatMessage, review: VisibleCleanupReview) {
+  if (
+    isSending.value
+    || activeCleanupReviewId.value
+    || review.status !== "selecting"
+    || review.selectedCandidateIds.length === 0
+  ) {
+    return;
+  }
+  activeCleanupReviewId.value = review.review.reviewId;
+  review.status = "creating";
+  review.error = "";
+  try {
+    const plan = await createAgentCleanupPlan(
+      review.review.reviewId,
+      review.selectedCandidateIds,
+    );
+    message.actionPlans.push({
+      plan,
+      status: "pending",
+      result: null,
+      error: "",
+    });
+    review.status = "planned";
+    await scrollToLatest();
+  } catch (value) {
+    review.status = "failed";
+    review.error = visibleError(value);
+  } finally {
+    activeCleanupReviewId.value = "";
+  }
+}
+
+async function openCleanupCandidateFolder(
+  review: VisibleCleanupReview,
+  item: AgentCleanupReviewItem,
+) {
+  if (openingCleanupCandidateId.value) {
+    return;
+  }
+  openingCleanupCandidateId.value = item.candidateId;
+  review.error = "";
+  try {
+    await openModCleanupCandidateFolder(item.modId, item.candidateId);
+  } catch (value) {
+    review.error = visibleError(value);
+  } finally {
+    openingCleanupCandidateId.value = "";
   }
 }
 
@@ -326,6 +487,14 @@ watch(
         <div v-if="messages.length === 0" class="welcome-message">
           <strong>DeepSeek V4 已就绪</strong>
           <span>可以询问已安装 MOD、启用状态、冲突和替换目标。</span>
+          <div class="agent-quick-actions">
+            <button type="button" @click="sendQuickPrompt('扫描全部已安装 MOD 中可以清理的图片、说明和教程文件')">
+              扫描可清理文件
+            </button>
+            <button type="button" @click="sendQuickPrompt('查看当前清理记录，并帮我恢复最近一次清理')">
+              恢复最近清理
+            </button>
+          </div>
         </div>
         <template v-for="message in messages" :key="message.id">
           <div class="chat-message" :class="message.role">
@@ -338,6 +507,97 @@ watch(
             />
             <p v-else>{{ message.text || "正在整理回答..." }}</p>
           </div>
+
+          <section
+            v-for="cleanup in message.cleanupReviews"
+            :key="cleanup.review.reviewId"
+            class="cleanup-review-card"
+          >
+            <div class="cleanup-review-heading">
+              <div>
+                <strong>MOD 文件清理建议</strong>
+                <span>{{ cleanup.review.candidateCount }} 个候选</span>
+              </div>
+              <span>{{ cleanupReviewStatusLabel(cleanup) }}</span>
+            </div>
+            <p>{{ cleanup.review.message }}</p>
+            <p class="cleanup-safety-note">只排除游戏目录部署，本地 MOD 库原始文件不会删除。</p>
+
+            <div class="cleanup-review-groups">
+              <details
+                v-for="group in cleanupReviewGroups(cleanup.review)"
+                :key="group.modId"
+                open
+              >
+                <summary>
+                  <strong>{{ group.modName }}</strong>
+                  <span>{{ group.items.length }} 个文件</span>
+                </summary>
+                <div class="cleanup-review-items">
+                  <div
+                    v-for="item in group.items"
+                    :key="item.candidateId"
+                    class="cleanup-review-item"
+                    :class="`recommendation-${item.recommendation}`"
+                  >
+                    <label class="cleanup-review-select">
+                      <input
+                        type="checkbox"
+                        :checked="cleanup.selectedCandidateIds.includes(item.candidateId)"
+                        :disabled="cleanup.status !== 'selecting'"
+                        @change="updateCleanupSelectionFromEvent(
+                          cleanup,
+                          item.candidateId,
+                          $event,
+                        )"
+                      />
+                      <span class="cleanup-item-content">
+                        <span class="cleanup-item-title">
+                          <strong>{{ item.libraryRelativePath }}</strong>
+                          <span :class="`recommendation-${item.recommendation}`">
+                            {{ cleanupRecommendationLabel(item) }}
+                          </span>
+                        </span>
+                        <span>{{ item.reason }}</span>
+                        <small>
+                          可信度 {{ Math.round(item.confidence * 100) }}%
+                          · {{ formatFileSize(item.sizeBytes) }}
+                          · {{ item.currentlyDeployed ? "当前已部署" : "当前未部署" }}
+                        </small>
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      class="cleanup-folder-button"
+                      :disabled="Boolean(openingCleanupCandidateId)"
+                      :aria-label="openingCleanupCandidateId === item.candidateId
+                        ? '正在打开所在文件夹'
+                        : '打开候选文件所在文件夹'"
+                      :data-tooltip="openingCleanupCandidateId === item.candidateId
+                        ? '正在打开文件夹'
+                        : '打开所在文件夹'"
+                      @click="openCleanupCandidateFolder(cleanup, item)"
+                    >
+                      <span v-if="openingCleanupCandidateId === item.candidateId" aria-hidden="true">&#8987;</span>
+                      <span v-else aria-hidden="true">&#128194;</span>
+                    </button>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <p v-if="cleanup.error" class="plan-error">{{ cleanup.error }}</p>
+            <div v-if="cleanup.status === 'selecting'" class="cleanup-review-actions">
+              <span>已选择 {{ cleanup.selectedCandidateIds.length }} 项</span>
+              <button
+                type="button"
+                :disabled="Boolean(activeCleanupReviewId) || cleanup.selectedCandidateIds.length === 0"
+                @click="createCleanupPlan(message, cleanup)"
+              >
+                生成清理计划
+              </button>
+            </div>
+          </section>
 
           <section
             v-for="item in message.actionPlans"
@@ -556,6 +816,167 @@ watch(
   font-size: 0.84rem;
 }
 
+.agent-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 5px;
+}
+
+.cleanup-review-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #9ebcaf;
+  border-radius: 6px;
+  color: #263d36;
+  background: #f7faf8;
+  font-size: 0.8rem;
+}
+
+.cleanup-review-card p {
+  margin: 0;
+}
+
+.cleanup-review-heading,
+.cleanup-review-heading > div,
+.cleanup-item-content {
+  display: grid;
+  gap: 3px;
+}
+
+.cleanup-review-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.cleanup-review-heading span,
+.cleanup-item-content > span,
+.cleanup-item-content small {
+  color: #647a73;
+}
+
+.cleanup-safety-note {
+  padding: 7px 8px;
+  border-left: 3px solid #4d8b72;
+  background: #edf6f2;
+}
+
+.cleanup-review-groups {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.cleanup-review-groups details {
+  border: 1px solid #d6e1dd;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.cleanup-review-groups summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.cleanup-review-items {
+  display: grid;
+  border-top: 1px solid #e2e9e6;
+}
+
+.cleanup-review-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: start;
+  gap: 9px;
+  padding: 9px 10px;
+}
+
+.cleanup-review-item + .cleanup-review-item {
+  border-top: 1px solid #edf1ef;
+}
+
+.cleanup-review-item:hover {
+  background: #f3f7f5;
+}
+
+.cleanup-review-select {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.cleanup-review-select input {
+  margin: 3px 0 0;
+}
+
+.cleanup-folder-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  align-self: start;
+  color: #356d5b;
+  border-color: #bfd2ca;
+  background: #ffffff;
+  font-size: 0.92rem;
+}
+
+.cleanup-item-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cleanup-item-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cleanup-item-title > span {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+
+.recommendation-remove {
+  color: #24745b;
+}
+
+.recommendation-review {
+  color: #a8661f;
+}
+
+.recommendation-keep {
+  color: #65746f;
+}
+
+.cleanup-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.cleanup-review-actions > span {
+  color: #647a73;
+}
+
+.cleanup-review-actions button {
+  color: #ffffff;
+  border-color: #24745b;
+  background: #24745b;
+}
+
 .action-plan-card {
   display: grid;
   gap: 9px;
@@ -721,6 +1142,7 @@ watch(
 
 .markdown-body {
   min-width: 0;
+  overflow-x: auto;
 }
 
 .markdown-body :deep(:first-child) {
@@ -793,9 +1215,10 @@ watch(
 }
 
 .markdown-body :deep(table) {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
   border-collapse: collapse;
 }
 

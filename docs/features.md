@@ -176,7 +176,7 @@ MVP 完成标准：
 - 数据层已从 Steam 版 `15.10.00` 原始 chunk 定向提取 462 个有效防具 EVAM，并生成 234 个防具模型的逐性别绑定表；其中 14 条明确没有飞翔爪，5 个模型的男女绑定不同。原始二进制文件不进入仓库，后续防具配套飞翔爪改绑必须使用该表，不再采用 `plNNN -> slgNNN` 同号猜测。
 - 人物语音只在 `sound/wwise/Windows` 下精确匹配 `pl_act_vo_f_*_m.nbnk` 或 `pl_act_vo_m_*_m.nbnk`，映射为角色创建界面的男女语音 1 至 20 号。
 - 武器语音只在同一 Wwise 目录下精确匹配 `wp_<武器代码>_(cmn|epvsp).nbnk` 或 `wpNN_<武器代码>_(cmn|epvsp).nbnk`，映射为“武器语音·太刀”等两级分类；公共音频包和未知代码不猜测。`nativePC/plugins` 下的内容统一识别为“插件”。
-- 识别结果写入当前 manifest schema 16，并在导入结果和已安装 MOD 列表展示；旧 manifest 在读取时结合本地库文件路径和 `.evam` 内容重新识别过期结果，避免保留早期误判并补充新类别。
+- 识别结果写入当前 manifest schema 17，并在导入结果和已安装 MOD 列表展示；模型识别规则版本仍为 16。旧 manifest 在读取时结合本地库文件路径和 `.evam` 内容重新识别过期结果，避免保留早期误判并补充新类别。
 - 模型 ID 和装备部位只匹配文件夹名称，文件名不参与模型识别；人物语音因游戏资源格式没有独立 ID 目录，是唯一的精确文件名匹配例外。
 - 发型优先显示角色创建界面的数字槽位，再显示经 CAPCOM Steam 页面或本地游戏文本确认的官方简体中文名称；NPC/联动角色英文名不作为游戏 ID 显示。
 - 同一个 MOD 可以返回多个 `ModelReplacement`。
@@ -315,9 +315,9 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 当前会话仅保存在内存，不持久化聊天记录。
 - 验收示例：“列出已启用的太刀 MOD”“这个 MOD 替换了什么”“当前有哪些启用冲突”。
 
-### AI Slice 2：自然语言受控操作（已完成实现，待手动验收）
+### AI Slice 2：自然语言受控操作（已完成）
 
-当前下一个切片。一次完成 AI 本地操作需要的通用计划框架，并接入现有传统管理能力：
+一次完成 AI 本地操作需要的通用计划框架，并接入现有传统管理能力：
 
 - Rust 保存带状态版本和过期时间的 `AgentActionPlan`；模型只能使用稳定 MOD ID 创建计划，不能直接执行。
 - 支持批量启用、禁用、卸载、冲突优先级调整，以及现有类别的模型改绑。
@@ -325,7 +325,7 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 参数不完整或目标含糊时先追问；状态漂移、计划过期或业务校验失败时拒绝执行。
 - 验收覆盖成功、取消、状态漂移和失败结果，并完成“禁用所有画质类 MOD”等批量指令。
 
-### AI Slice 3：全部 MOD 冗余文件清理
+### AI Slice 3：全部 MOD 冗余文件清理（已完成实现，待手动验收）
 
 - `scan_mod_cleanup_candidates` 扫描全部已安装 MOD，在 Rust 本地筛选图片、说明文档、网页链接和安装教程，再分批交给 DeepSeek 分类。
 - 悬浮窗口按 MOD 展示“建议清理、需要确认、建议保留”、理由和可信度，由用户逐项确认。
@@ -357,7 +357,7 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 配装前根据需要询问武器、游戏进度、已有装饰珠和生存/舒适/输出偏好，再给出有条件的候选方案。
 - 验收覆盖准确素材问答、简繁官方名称、开荒/毕业/缺少关键装饰珠等配装条件，以及无来源时拒绝编造。
 
-AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> agent command -> DeepSeek V4 client -> 只读工具 -> DTO/流式事件 -> 悬浮窗口`。AI Slice 2 已完成实现，写操作链路为：`DeepSeek 计划工具 -> Rust AgentActionPlan -> planReady -> 用户确认 -> 状态版本复核 -> OperationCoordinator -> 传统 mod_library service -> 工作区快照刷新`。当前先手动验收 Slice 2；Slice 3 至 Slice 6 均未开始。
+AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> agent command -> DeepSeek V4 client -> 只读工具 -> DTO/流式事件 -> 悬浮窗口`。AI Slice 2 已完成，写操作链路为：`DeepSeek 计划工具 -> Rust AgentActionPlan -> planReady -> 用户确认 -> 状态版本复核 -> OperationCoordinator -> 传统 mod_library service -> 工作区快照刷新`。AI Slice 3 已完成实现，清理链路为：`用户主动扫描 -> Rust 本地候选筛选 -> DeepSeek 完整分类 -> cleanupReviewReady -> 用户逐项选择 -> 短时计划 -> 传统部署排除与冲突恢复 service`。当前先手动验收 Slice 3；Slice 4 至 Slice 6 尚未开始。
 
 ## MVP 已完成任务顺序
 
@@ -385,7 +385,7 @@ AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> age
 2. Slice 12：MOD 分类、检索和浏览排序
    - 使用 `ModelReplacement` 自动生成分类，支持名称、原始名称、备注、类别、替换类型、游戏内名称、启用状态和冲突状态的搜索/筛选。
    - 支持按导入顺序、名称、类别和替换目标浏览排序，每种可计算排序均可切换升序或倒序；浏览排序不影响冲突组覆盖顺序。
-- Slice 12 由 manifest schema 9 引入显示名称、备注和单分类覆盖；Slice 14 由 schema 10 引入模型改绑，schema 11 更新防具套装识别语义，schema 12 扩充已核对的飞翔爪映射，schema 13 增加 `.evam` 关联识别，schema 14 改为统一 `categoryIds[]` 多分类，schema 15 增加盒子来源和观察所得部署记录，当前 schema 16 增加插件与武器语音识别；原始普通导入仍按名称去重，盒子导入额外按来源和完整内容关联。
+- Slice 12 由 manifest schema 9 引入显示名称、备注和单分类覆盖；Slice 14 由 schema 10 引入模型改绑，schema 11 更新防具套装识别语义，schema 12 扩充已核对的飞翔爪映射，schema 13 增加 `.evam` 关联识别，schema 14 改为统一 `categoryIds[]` 多分类，schema 15 增加盒子来源和观察所得部署记录，schema 16 增加插件与武器语音识别，当前 schema 17 增加部署排除记录；原始普通导入仍按名称去重，盒子导入额外按来源和完整内容关联。
 3. Slice 13：稳定 ID 扩展和同模型提示
    - 已接入脸型、怪物、噗吱猪服装、家具、玩家附件和随从附件路径识别。
    - 怪物和噗吱猪服装优先使用本地 `15.10.00` 简体中文名称；脸型、家具和附件在没有可核验中文名称时显示类别与底层 ID。
@@ -409,7 +409,7 @@ AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> age
 ### 实现约定
 
 - 全局分类存放于 schema 3 的 `AcumodData/mods/categories.json`，包含稳定分类 ID、名称、可选 `parentId`、创建时间，以及仅供 Rust 迁移和新导入复用的识别来源键；最多只支持一层子分类。
-- 每个 MOD 的 schema 16 manifest 保存 `categoryIds[]`。列表 DTO 返回已解析的 `ModCategory[]`，前端按任一分类筛选、搜索和排序。
+- 每个 MOD 的 schema 17 manifest 保存 `categoryIds[]`。列表 DTO 返回已解析的 `ModCategory[]`，前端按任一分类筛选、搜索和排序。
 - 元数据使用字段级 patch：名称、备注和 `categoryIds[]` 可以独立保存。空自定义名称表示回到原始导入名称，空数组表示未分类。
 - 新建、重命名、删除分类使用 `list/create/rename/delete_mod_category` Tauri command。删除分类时，Rust 扫描本地 MOD manifest 并清除全部引用；带识别来源的分类还会写入抑制列表，后续导入不会自动重建。
 - schema 13 及更早版本首次读取时，把有效 `categoryOverride` 与模型识别得到的分类取并集，写入当前 schema 的 `categoryIds[]`；模型识别版本仍独立维护。
@@ -435,7 +435,7 @@ AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> age
 - MOD 库的“替换信息”单元格是模型改绑的直接入口；已启用 MOD 仍可进入查看，但选择和保存会锁定并提示先禁用。
 - 弹窗单分组只显示一个“替换模型”下拉框，多分组用顶部标签切换；“恢复默认”清除当前改绑，飞翔爪手动编号收进“其他飞翔爪编号”。点击保存后内部调用 `preview_mod_remap` 校验，界面不展示文件数、MRL3 或 EVAM 技术统计。
 - 当新旧有效部署路径之间实际移动了防具目录中的 `.epv3` 特效触发文件时，预览必须返回“装备特效需要游戏内确认”的警告；前端复用现有保存确认框展示该提示。恢复默认同样适用，普通防具或飞翔爪改绑不额外提示。
-- manifest schema 10 新增 `modelRemaps`，当前 schema 16 继续只保存分组键和目标 ID，不复制或改写本地 MOD 文件。
+- manifest schema 10 新增 `modelRemaps`，当前 schema 17 继续只保存分组键和目标 ID，不复制或改写本地 MOD 文件。
 - Rust 根据原始文件、识别结果和 `modelRemaps` 生成有效部署路径；启用预览、实际复制、冲突检测、冲突顺序应用和禁用后的版本恢复都使用这份计划。
 - 路径改绑只替换经过验证的资源目录和文件名 token。`.mrl3` 仅对其中精确命中的贴图资源路径进行长度校验后的改写；飞翔爪改绑只改写已经通过识别关联到该模型的 26 字节 `.evam` 绑定字段；不修改 `.mod3`、`.tex` 或 `.nbnk` 文件内容。
 - 防具路径按 `plNNN_NNNN` 的完整模型 ID 重写；位于同一防具目录、且严格符合 `head/body/arm/wst/leg/epv/{f,m}_<部位>NNN.epv3` 的 EPV 文件只重写三位套装号，不把目标变体号写入 EPV 文件名。`vfx`、自定义资源目录和不符合该命名的文件保持原路径。

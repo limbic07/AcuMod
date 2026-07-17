@@ -1,3 +1,4 @@
+pub mod cleanup;
 mod deepseek;
 mod tools;
 
@@ -40,6 +41,7 @@ struct AgentCoordinatorInner {
     active: AtomicBool,
     history: Mutex<Vec<deepseek::DeepSeekMessage>>,
     plans: Mutex<HashMap<String, StoredAgentActionPlan>>,
+    cleanup_reviews: Mutex<HashMap<String, cleanup::AgentCleanupReview>>,
 }
 
 struct ActiveTurnGuard {
@@ -129,6 +131,13 @@ enum AgentPlanAction {
         group_key: String,
         target_id: Option<String>,
     },
+    CleanupExclude {
+        batch_id: String,
+        selections: Vec<mod_library::ModCleanupSelection>,
+    },
+    CleanupRestore {
+        candidate_ids: Vec<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -147,6 +156,7 @@ pub struct AgentEvent {
     pub tool_name: Option<String>,
     pub message: Option<String>,
     pub plan: Option<AgentActionPlan>,
+    pub cleanup_review: Option<cleanup::AgentCleanupReview>,
 }
 
 pub(crate) struct AgentEventSender {
@@ -181,6 +191,7 @@ impl AgentEventSender {
             tool_name,
             message,
             plan: None,
+            cleanup_review: None,
         });
     }
 
@@ -194,6 +205,21 @@ impl AgentEventSender {
             tool_name: None,
             message: Some("操作计划已生成，请确认后执行。".to_string()),
             plan: Some(plan),
+            cleanup_review: None,
+        });
+    }
+
+    pub(crate) fn emit_cleanup_review(&mut self, review: cleanup::AgentCleanupReview) {
+        self.sequence += 1;
+        let _ = self.channel.send(AgentEvent {
+            turn_id: self.turn_id.clone(),
+            sequence: self.sequence,
+            kind: "cleanupReviewReady".to_string(),
+            text: None,
+            tool_name: None,
+            message: Some(review.message.clone()),
+            plan: None,
+            cleanup_review: Some(review),
         });
     }
 }
@@ -240,6 +266,11 @@ impl AgentCoordinator {
             .lock()
             .map_err(|_| "AI 操作计划状态不可用，请重启 Acumod 后重试。".to_string())?
             .clear();
+        self.inner
+            .cleanup_reviews
+            .lock()
+            .map_err(|_| "AI 清理候选状态不可用，请重启 Acumod 后重试。".to_string())?
+            .clear();
         Ok(())
     }
 
@@ -276,6 +307,27 @@ impl AgentCoordinator {
             failed_count: 0,
             warnings: Vec::new(),
         })
+    }
+
+    pub(crate) fn store_cleanup_review(
+        &self,
+        review: cleanup::AgentCleanupReview,
+    ) -> Result<(), String> {
+        self.inner
+            .cleanup_reviews
+            .lock()
+            .map_err(|_| "AI 清理候选状态不可用，请重启 Acumod 后重试。".to_string())?
+            .insert(review.review_id.clone(), review);
+        Ok(())
+    }
+
+    fn take_cleanup_review(&self, review_id: &str) -> Result<cleanup::AgentCleanupReview, String> {
+        self.inner
+            .cleanup_reviews
+            .lock()
+            .map_err(|_| "AI 清理候选状态不可用，请重启 Acumod 后重试。".to_string())?
+            .remove(review_id)
+            .ok_or_else(|| "清理候选不存在或已经生成过计划。".to_string())
     }
 }
 
@@ -603,6 +655,160 @@ pub(crate) fn create_model_remap_plan(
     coordinator.store_plan(plan)
 }
 
+pub fn create_agent_cleanup_plan(
+    app: &AppHandle,
+    coordinator: &AgentCoordinator,
+    review_id: String,
+    candidate_ids: Vec<String>,
+) -> Result<AgentActionPlan, String> {
+    let review = coordinator.take_cleanup_review(&review_id)?;
+    let selected_ids = candidate_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<HashSet<_>>();
+    if selected_ids.is_empty() {
+        return Err("请至少选择一个要排除的文件。".to_string());
+    }
+    let review_ids = review
+        .items
+        .iter()
+        .map(|item| item.candidate_id.clone())
+        .collect::<HashSet<_>>();
+    if !selected_ids.is_subset(&review_ids) {
+        return Err("选择包含不属于当前清理结果的文件。".to_string());
+    }
+
+    let selected_items = review
+        .items
+        .into_iter()
+        .filter(|item| selected_ids.contains(&item.candidate_id))
+        .collect::<Vec<_>>();
+    let selections = selected_items
+        .iter()
+        .map(|item| mod_library::ModCleanupSelection {
+            candidate_id: item.candidate_id.clone(),
+            mod_id: item.mod_id.clone(),
+            library_relative_path: item.library_relative_path.clone(),
+            reason: item.reason.clone(),
+        })
+        .collect::<Vec<_>>();
+    let targets = selected_items
+        .iter()
+        .map(|item| AgentActionTarget {
+            mod_id: item.mod_id.clone(),
+            name: item.mod_name.clone(),
+            detail: format!("排除部署：{}", item.deploy_relative_path),
+        })
+        .collect::<Vec<_>>();
+    let deployed_count = selected_items
+        .iter()
+        .filter(|item| item.currently_deployed)
+        .count();
+    let plan = build_stored_plan(
+        app,
+        "应用 MOD 文件清理".to_string(),
+        "cleanupExclusions",
+        format!(
+            "将记录 {} 个部署排除项，其中 {deployed_count} 个当前已部署文件会从游戏目录移除或由冲突中的其它 MOD 接管。",
+            targets.len()
+        ),
+        targets,
+        vec![
+            "本地 MOD 库中的原始文件不会删除；清理结果可以恢复。".to_string(),
+            "清理仅改变后续部署内容，不依赖 AI 才能启用或禁用 MOD。".to_string(),
+        ],
+        false,
+        AgentPlanAction::CleanupExclude {
+            batch_id: review_id,
+            selections,
+        },
+    )?;
+    coordinator.store_plan(plan)
+}
+
+pub(crate) fn create_cleanup_restore_plan(
+    app: &AppHandle,
+    coordinator: &AgentCoordinator,
+    scope: &str,
+    mod_id: Option<String>,
+) -> Result<AgentActionPlan, String> {
+    let exclusions = mod_library::list_mod_cleanup_exclusions(app)?;
+    let selected = match scope {
+        "lastBatch" => {
+            let latest_batch_id = exclusions
+                .latest_batch_id
+                .as_ref()
+                .ok_or_else(|| "当前没有可以恢复的清理批次。".to_string())?;
+            exclusions
+                .groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .exclusions
+                        .iter()
+                        .filter(|exclusion| exclusion.batch_id == *latest_batch_id)
+                        .map(move |exclusion| (group, exclusion))
+                })
+                .collect::<Vec<_>>()
+        }
+        "mod" => {
+            let mod_id =
+                mod_id.ok_or_else(|| "恢复指定 MOD 时必须提供稳定 MOD ID。".to_string())?;
+            let group = exclusions
+                .groups
+                .iter()
+                .find(|group| group.mod_id == mod_id)
+                .ok_or_else(|| "该 MOD 当前没有部署排除项。".to_string())?;
+            group
+                .exclusions
+                .iter()
+                .map(|exclusion| (group, exclusion))
+                .collect::<Vec<_>>()
+        }
+        "all" => exclusions
+            .groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .exclusions
+                    .iter()
+                    .map(move |exclusion| (group, exclusion))
+            })
+            .collect::<Vec<_>>(),
+        _ => return Err("未知的清理恢复范围。".to_string()),
+    };
+    if selected.is_empty() {
+        return Err("当前没有符合范围的部署排除项。".to_string());
+    }
+    let candidate_ids = selected
+        .iter()
+        .map(|(_, exclusion)| exclusion.candidate_id.clone())
+        .collect::<Vec<_>>();
+    let targets = selected
+        .into_iter()
+        .map(|(group, exclusion)| AgentActionTarget {
+            mod_id: group.mod_id.clone(),
+            name: group.mod_name.clone(),
+            detail: format!("恢复部署：{}", exclusion.deploy_relative_path),
+        })
+        .collect::<Vec<_>>();
+    let plan = build_stored_plan(
+        app,
+        "恢复 MOD 清理项".to_string(),
+        "cleanupRestore",
+        format!(
+            "将恢复 {} 个部署排除项；已启用 MOD 会按当前冲突优先级重新部署对应文件。",
+            targets.len()
+        ),
+        targets,
+        Vec::new(),
+        false,
+        AgentPlanAction::CleanupRestore { candidate_ids },
+    )?;
+    coordinator.store_plan(plan)
+}
+
 pub async fn confirm_agent_action_plan(
     app: AppHandle,
     coordinator: AgentCoordinator,
@@ -617,6 +823,8 @@ pub async fn confirm_agent_action_plan(
         AgentPlanAction::BatchMods { .. } => ("agentBatchMods", "正在执行 AI 批量操作"),
         AgentPlanAction::ConflictOrder { .. } => ("agentConflictOrder", "正在应用 AI 冲突优先级"),
         AgentPlanAction::ModelRemap { .. } => ("agentModelRemap", "正在应用 AI 模型改绑"),
+        AgentPlanAction::CleanupExclude { .. } => ("agentCleanupApply", "正在应用 MOD 文件清理"),
+        AgentPlanAction::CleanupRestore { .. } => ("agentCleanupRestore", "正在恢复 MOD 清理项"),
     };
     let worker_app = app.clone();
     run_blocking_operation(app, kind, title, move |progress| {
@@ -704,6 +912,39 @@ fn execute_stored_plan(
                 succeeded_count: 1,
                 failed_count: 0,
                 warnings: Vec::new(),
+            })
+        }
+        AgentPlanAction::CleanupExclude {
+            batch_id,
+            selections,
+        } => {
+            let result = mod_library::apply_mod_cleanup_exclusions_with_progress(
+                app, batch_id, selections, progress,
+            )?;
+            Ok(AgentActionResult {
+                plan_id: public.plan_id,
+                status: "completed".to_string(),
+                title: public.title,
+                message: result.message,
+                succeeded_count: result.exclusion_count,
+                failed_count: 0,
+                warnings: result.warnings,
+            })
+        }
+        AgentPlanAction::CleanupRestore { candidate_ids } => {
+            let result = mod_library::restore_mod_cleanup_exclusions_with_progress(
+                app,
+                candidate_ids,
+                progress,
+            )?;
+            Ok(AgentActionResult {
+                plan_id: public.plan_id,
+                status: "completed".to_string(),
+                title: public.title,
+                message: result.message,
+                succeeded_count: result.restored_exclusion_count,
+                failed_count: 0,
+                warnings: result.warnings,
             })
         }
     }
@@ -821,6 +1062,49 @@ fn state_version_for_action(app: &AppHandle, action: &AgentPlanAction) -> Result
                 group.selected_target_id.as_deref().unwrap_or("default")
             )
         }
+        AgentPlanAction::CleanupExclude { selections, .. } => {
+            let candidates = cleanup::scan_candidates(app)?
+                .into_iter()
+                .map(|candidate| (candidate.candidate_id.clone(), candidate))
+                .collect::<HashMap<_, _>>();
+            let mut states = Vec::new();
+            for selection in selections {
+                let candidate = candidates
+                    .get(&selection.candidate_id)
+                    .ok_or_else(|| "清理候选已经变化，请重新扫描。".to_string())?;
+                if candidate.mod_id != selection.mod_id
+                    || conflict_path_key_for_agent(&candidate.library_relative_path)
+                        != conflict_path_key_for_agent(&selection.library_relative_path)
+                {
+                    return Err("清理候选路径已经变化，请重新扫描。".to_string());
+                }
+                states.push(format!(
+                    "{}:{}:{}",
+                    candidate.candidate_id, candidate.mod_id, candidate.currently_deployed
+                ));
+            }
+            states.sort();
+            format!("cleanup-exclude:{}", states.join(";"))
+        }
+        AgentPlanAction::CleanupRestore { candidate_ids } => {
+            let exclusions = mod_library::list_mod_cleanup_exclusions(app)?;
+            let available = exclusions
+                .groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .exclusions
+                        .iter()
+                        .map(|exclusion| exclusion.candidate_id.clone())
+                })
+                .collect::<HashSet<_>>();
+            if !candidate_ids.iter().all(|id| available.contains(id)) {
+                return Err("部署排除记录已经变化，请重新生成恢复计划。".to_string());
+            }
+            let mut ids = candidate_ids.clone();
+            ids.sort();
+            format!("cleanup-restore:{}", ids.join(";"))
+        }
     };
     let mut hasher = DefaultHasher::new();
     material.hash(&mut hasher);
@@ -861,6 +1145,10 @@ fn validate_plan_state_version(expected: &str, current: &str) -> Result<(), Stri
     } else {
         Err("MOD 状态在计划生成后发生变化，请重新生成操作计划。".to_string())
     }
+}
+
+fn conflict_path_key_for_agent(path: &str) -> String {
+    path.replace('\\', "/").to_lowercase()
 }
 
 fn unix_seconds_now() -> Result<u64, String> {

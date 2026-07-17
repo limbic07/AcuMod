@@ -621,6 +621,17 @@ export function openInstalledModFolder(modId: string): Promise<void> {
   });
 }
 
+/** Rust 会通过稳定候选 ID 反查 manifest，前端不传递本地绝对路径。 */
+export function openModCleanupCandidateFolder(
+  modId: string,
+  candidateId: string,
+): Promise<void> {
+  return invoke<void>("open_mod_cleanup_candidate_folder", {
+    modId,
+    candidateId,
+  });
+}
+
 export function getModRemapDetails(modId: string): Promise<ModRemapDetails> {
   return invoke<ModRemapDetails>("get_mod_remap_details", { modId });
 }

@@ -2,8 +2,8 @@ use tauri::{ipc::Channel, State};
 
 use crate::{
     services::agent::{
-        self, AgentActionResult, AgentConnectionResult, AgentCoordinator, AgentEvent,
-        AgentSettings, AgentTurnResult,
+        self, AgentActionPlan, AgentActionResult, AgentConnectionResult, AgentCoordinator,
+        AgentEvent, AgentSettings, AgentTurnResult,
     },
     storage::config::DeepSeekModel,
 };
@@ -72,6 +72,23 @@ pub fn cancel_agent_action_plan(
     plan_id: String,
 ) -> Result<AgentActionResult, String> {
     agent::cancel_agent_action_plan(coordinator.inner(), plan_id)
+}
+
+/// 根据用户在清理建议中的逐项选择生成待确认计划，不执行文件操作。
+#[tauri::command]
+pub async fn create_agent_cleanup_plan(
+    app: tauri::AppHandle,
+    coordinator: State<'_, AgentCoordinator>,
+    review_id: String,
+    candidate_ids: Vec<String>,
+) -> Result<AgentActionPlan, String> {
+    let worker_app = app.clone();
+    let worker_coordinator = coordinator.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        agent::create_agent_cleanup_plan(&worker_app, &worker_coordinator, review_id, candidate_ids)
+    })
+    .await
+    .map_err(|error| format!("清理计划生成任务失败：{error}"))?
 }
 
 /// 清空当前运行期间的 AI 会话，不修改任何 MOD 状态。

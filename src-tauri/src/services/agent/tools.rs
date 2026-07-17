@@ -7,7 +7,7 @@ use crate::{
     services::{game, mod_library, model_recognition},
 };
 
-use super::{AgentActionPlan, AgentCoordinator};
+use super::{cleanup, AgentActionPlan, AgentCoordinator};
 
 const DEFAULT_RESULT_LIMIT: usize = 100;
 const MAX_RESULT_LIMIT: usize = 100;
@@ -15,6 +15,7 @@ const MAX_RESULT_LIMIT: usize = 100;
 pub(crate) struct ToolExecution {
     pub content: String,
     pub plan: Option<AgentActionPlan>,
+    pub cleanup_review: Option<cleanup::AgentCleanupReview>,
 }
 
 impl ToolExecution {
@@ -22,6 +23,7 @@ impl ToolExecution {
         Self {
             content,
             plan: None,
+            cleanup_review: None,
         }
     }
 
@@ -39,6 +41,22 @@ impl ToolExecution {
         Ok(Self {
             content,
             plan: Some(plan),
+            cleanup_review: None,
+        })
+    }
+
+    fn cleanup_review(review: cleanup::AgentCleanupReview) -> Result<Self, String> {
+        let content = serde_json::to_string(&json!({
+            "ok": true,
+            "reviewId": review.review_id,
+            "candidateCount": review.candidate_count,
+            "awaitingUserSelection": true
+        }))
+        .map_err(|error| format!("无法序列化 AI 清理结果：{error}"))?;
+        Ok(Self {
+            content,
+            plan: None,
+            cleanup_review: Some(review),
         })
     }
 }
@@ -60,6 +78,79 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                         "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "每页数量，完整列表建议传 100" },
                         "includeDetails": { "type": "boolean", "description": "是否附带替换摘要；完整名称列表不需要开启" }
                     },
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "scan_mod_cleanup_candidates",
+                "description": "扫描全部已安装 MOD 中可能无需部署的图片、说明、网页链接和教程。支持分页；必须读取全部页面后再分类。扫描不修改任何文件。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "submit_mod_cleanup_review",
+                "description": "提交全部清理候选的结构化分类并展示给用户逐项选择。必须覆盖扫描得到的每个 candidateId，不能漏项或重复。不会执行清理。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "classifications": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 2000,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "candidateId": { "type": "string" },
+                                    "recommendation": { "type": "string", "enum": ["remove", "review", "keep"] },
+                                    "reason": { "type": "string" },
+                                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                                },
+                                "required": ["candidateId", "recommendation", "reason", "confidence"],
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["classifications"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "get_mod_cleanup_exclusions",
+                "description": "查询当前部署排除记录，用于回答或生成恢复计划。本地 MOD 库原始文件仍然存在。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "create_cleanup_restore_plan",
+                "description": "为部署排除项生成恢复计划。scope=lastBatch 恢复最近一次，scope=mod 恢复指定稳定 MOD ID，scope=all 恢复全部。只创建计划。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "scope": { "type": "string", "enum": ["lastBatch", "mod", "all"] },
+                        "modId": { "type": "string" }
+                    },
+                    "required": ["scope"],
                     "additionalProperties": false
                 }
             }
@@ -218,6 +309,10 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "create_mod_action_plan" => "生成 MOD 操作计划",
         "create_conflict_order_plan" => "生成冲突优先级计划",
         "create_model_remap_plan" => "生成模型改绑计划",
+        "scan_mod_cleanup_candidates" => "扫描可清理文件",
+        "submit_mod_cleanup_review" => "整理清理建议",
+        "get_mod_cleanup_exclusions" => "查询清理记录",
+        "create_cleanup_restore_plan" => "生成清理恢复计划",
         _ => "处理 AI 请求",
     }
 }
@@ -336,6 +431,85 @@ pub(crate) async fn execute_tool(
             .map_err(|error| format!("模型改绑计划生成任务失败：{error}"))??;
             ToolExecution::plan(plan)
         }
+        "scan_mod_cleanup_candidates" => {
+            let args = parse_arguments::<CleanupScanArgs>(arguments)?;
+            let worker_app = app.clone();
+            let candidates =
+                tauri::async_runtime::spawn_blocking(move || cleanup::scan_candidates(&worker_app))
+                    .await
+                    .map_err(|error| format!("清理候选扫描任务失败：{error}"))??;
+            let limit = args.limit.unwrap_or(100).clamp(1, 100);
+            let (start, end, next_offset) =
+                pagination_bounds(candidates.len(), args.offset.unwrap_or(0), limit);
+            let page = candidates[start..end]
+                .iter()
+                .map(|candidate| {
+                    json!({
+                        "candidateId": candidate.candidate_id,
+                        "modId": candidate.mod_id,
+                        "modName": candidate.mod_name,
+                        "libraryRelativePath": candidate.library_relative_path,
+                        "deployRelativePath": candidate.deploy_relative_path,
+                        "extension": candidate.extension,
+                        "sizeBytes": candidate.size_bytes,
+                        "localKind": candidate.local_kind,
+                        "localHint": candidate.local_hint,
+                        "currentlyDeployed": candidate.currently_deployed
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(ToolExecution::query(
+                json!({
+                    "ok": true,
+                    "total": candidates.len(),
+                    "offset": start,
+                    "returned": page.len(),
+                    "nextOffset": next_offset,
+                    "candidates": page
+                })
+                .to_string(),
+            ))
+        }
+        "submit_mod_cleanup_review" => {
+            let args = parse_arguments::<CleanupReviewArgs>(arguments)?;
+            let worker_app = app.clone();
+            let worker_coordinator = coordinator.clone();
+            let review = tauri::async_runtime::spawn_blocking(move || {
+                cleanup::create_review(&worker_app, &worker_coordinator, args.classifications)
+            })
+            .await
+            .map_err(|error| format!("清理建议生成任务失败：{error}"))??;
+            ToolExecution::cleanup_review(review)
+        }
+        "get_mod_cleanup_exclusions" => {
+            parse_arguments::<EmptyArgs>(arguments)?;
+            let worker_app = app.clone();
+            let exclusions = tauri::async_runtime::spawn_blocking(move || {
+                mod_library::list_mod_cleanup_exclusions(&worker_app)
+            })
+            .await
+            .map_err(|error| format!("清理记录查询任务失败：{error}"))??;
+            Ok(ToolExecution::query(
+                serde_json::to_string(&json!({ "ok": true, "exclusions": exclusions }))
+                    .map_err(|error| format!("无法序列化清理记录：{error}"))?,
+            ))
+        }
+        "create_cleanup_restore_plan" => {
+            let args = parse_arguments::<CleanupRestorePlanArgs>(arguments)?;
+            let worker_app = app.clone();
+            let worker_coordinator = coordinator.clone();
+            let plan = tauri::async_runtime::spawn_blocking(move || {
+                super::create_cleanup_restore_plan(
+                    &worker_app,
+                    &worker_coordinator,
+                    &args.scope,
+                    args.mod_id,
+                )
+            })
+            .await
+            .map_err(|error| format!("清理恢复计划生成任务失败：{error}"))??;
+            ToolExecution::plan(plan)
+        }
         _ => Err("模型请求了未开放的工具。".to_string()),
     }
 }
@@ -407,6 +581,26 @@ struct CreateModelRemapPlanArgs {
     target_id: Option<String>,
     #[serde(default)]
     restore_default: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupScanArgs {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupReviewArgs {
+    classifications: Vec<cleanup::CleanupClassification>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupRestorePlanArgs {
+    scope: String,
+    mod_id: Option<String>,
 }
 
 fn parse_arguments<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, String> {

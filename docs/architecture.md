@@ -159,7 +159,7 @@ Vue 操作
 - 本项目不提供任务取消。复制、删除和 manifest 写入一旦开始必须顺序完成，以保持部署记录与实际游戏目录一致。
 - `get_mod_workspace_snapshot` 优先读取 `AcumodData/mods/workspace-snapshot.json`；缓存缺失、损坏或 manifest schema 变化时才执行一次全量扫描并重建。快照 schema 4 在展示 DTO 之外保存每个 MOD 的有效部署路径、有效识别目标索引和自动分组需要的原始导入来源。普通导入、启停、卸载、批量操作、模型改绑和冲突应用只重读受影响的 manifest，再基于索引在内存中更新冲突报告；用户点击“刷新”时调用 `refresh_mod_workspace_snapshot` 强制重读全部 manifest、重新识别并分析冲突。
 - 工作区快照只是可丢弃、可重建的读取缓存，不保存独立部署状态。manifest、`conflict-orders.json` 和 `mod-library-order.json` 仍是事实来源。
-- `mod-library-order.json` schema 2 同时保存 `manualModIds` 和 `importModIds`。前者只控制 MOD 库手动浏览顺序，后者记录最早导入在上的恢复基准；启停、冲突应用、模型改绑和元数据编辑只能规范化失效 ID，不能重排已有项。旧 schema 1 `modIds` 作为 `manualModIds` 读取并保持原顺序，缺失的导入基准按安装时间和稳定 MOD ID 补建。
+- `mod-library-order.json` schema 2 同时保存 `manualModIds` 和 `importModIds`。前者只控制 MOD 库手动浏览顺序，后者记录最早导入在上的恢复基准；启停、冲突应用、模型改绑和元数据编辑不能重排已有项。只有持有完整 MOD 列表的全量刷新可以规范化并持久化失效 ID；单个 MOD 的局部快照更新只能替换摘要，不得调用完整顺序归一化。旧 schema 1 `modIds` 作为 `manualModIds` 读取并保持原顺序，缺失的导入基准按安装时间和稳定 MOD ID 补建。
 - 排序保存链路为 `ModLibraryToolbar -> App.vue 完整库排序 -> replaceModLibraryOrder typed invoke -> replace_mod_library_order Tauri command -> Rust 顺序校验与存储 -> ModLibraryOrderResult -> Vue 原地重排`。恢复导入顺序使用独立 command；两个命令都通过后台任务执行，优先使用工作区快照校验完整 MOD ID，快照缺失时只读取 manifest，不重新扫描模型或游戏目录。
 - 禁用 MOD 后恢复低优先级版本时，先按索引筛选包含同一有效路径的已启用候选，只加载这些 manifest；冲突预览和应用同样只加载当前冲突组及相关部署记录所有者。索引缺失时回退到全库兼容扫描，不牺牲旧数据可用性。
 - 单项启用预检在 `ModDeploymentPlan.conflicts` 中按已启用 MOD 汇总有效部署路径交集。快照存在时直接使用 `mod_index`，快照缺失时才读取 manifest；前端只在该数组非空时显示可展开的冲突确认框，确认后继续调用原有 `enable_mod`。普通游戏原文件和未跟踪文件不伪装成冲突 MOD。
@@ -376,7 +376,7 @@ MOD 文件列表
 
 繁体游戏名称使用独立的 `game-text-zh-hant.json`，由 `scripts/build-mhwi-traditional-game-text.mjs` 按 MHW-Editor 成对简体/繁体游戏文本键生成。manifest 和工作区快照继续保存稳定识别 ID 与现有名称；前端 `gameText` 解析层只在展示时替换名称，因此切换 `config.json.gameTextLanguage` 不需要扫描 MOD、迁移 manifest 或重新计算冲突。未收录名称必须回退原文，不能自动逐字转换。
 
-新导入 MOD 使用 manifest schema 16 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]` 和状态同步元数据。旧 manifest 会在读取时按迁移规则保留现有元数据并重新识别缺失或过期的模型结果。模型 ID 和装备部位只从目录组件识别；人物语音与武器语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。武器语音只接受 `wp_<代码>_(cmn|epvsp)` 或 `wpNN_<代码>_(cmn|epvsp)`，并映射到 14 种武器；无法确定武器的公共音频包不猜测分类。`nativePC/plugins` 下的内容统一识别为“插件”。
+新导入 MOD 使用 manifest schema 17 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]`、状态同步元数据和 `deploymentExclusions[]`。模型识别规则版本独立保持为 16。旧 manifest 会在读取时按迁移规则保留现有元数据并重新识别缺失或过期的模型结果。模型 ID 和装备部位只从目录组件识别；人物语音与武器语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。武器语音只接受 `wp_<代码>_(cmn|epvsp)` 或 `wpNN_<代码>_(cmn|epvsp)`，并映射到 14 种武器；无法确定武器的公共音频包不猜测分类。`nativePC/plugins` 下的内容统一识别为“插件”。
 
 投射器/飞翔爪接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录。已核对条目来自原始 MOD 页面；其它规范目录只返回 `pathPattern` 底层 ID，不按防具同号猜测。普通文件名不参与投射器识别，也不识别 `Assets/gm/gm000` 下的投射器弹药。
 
@@ -462,6 +462,7 @@ FloatingAgentPanel
 - `services/agent/mod.rs`：保存内存会话、协调单次 turn、管理 DeepSeek 设置和 Windows 凭据，不包含 MOD 文件操作实现。
 - `services/agent/deepseek.rs`：封装 DeepSeek V4 请求、流式 SSE 解析、工具调用消息和错误转换；项目不设计多供应商抽象。
 - `services/agent/tools.rs`：声明允许模型调用的工具、严格参数 schema、分页和 Rust handler。
+- `services/agent/cleanup.rs`：校验全量候选分类、生成清理审查 DTO 和默认选择；不执行任何文件操作。
 
 后续按实际复杂度在 `services/agent/` 下增加 `plans.rs`、`knowledge.rs` 和 `sources/` 等模块，分别承担短时计划、知识检索和联网来源适配；不要预先拆出没有独立职责的空文件。Agent DTO 继续靠近该模块维护，只有出现跨业务复用时再迁移到公共模型目录。
 
@@ -484,8 +485,9 @@ FloatingAgentPanel
 - `test_agent_connection`：发送最小请求，返回服务、模型、耗时和中文错误。
 - `start_agent_turn`：接收 `AgentTurnRequest` 和 Tauri `Channel<AgentEvent>`，立即开始异步对话。
 - `confirm_agent_action_plan` / `cancel_agent_action_plan`：按 `planId` 确认或丢弃 Rust 内存中的计划。
+- `create_agent_cleanup_plan`：把用户在审查卡片中的候选选择提交给 Rust，换取普通短时操作计划；前端不能直接应用排除项。
 
-`AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。事件类型固定为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`planReady`、`completed` 和 `failed`，每项携带 `turnId` 与递增序号。前端只拼接 `textDelta`，不解析 DeepSeek 的原始 SSE 数据。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
+`AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。事件类型固定为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`cleanupReviewReady`、`planReady`、`completed` 和 `failed`，每项携带 `turnId` 与递增序号。`cleanupReviewReady` 只携带经过 Rust 全量校验的候选审查 DTO，前端不能自行构造执行参数。前端只拼接 `textDelta`，不解析 DeepSeek 的原始 SSE 数据。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
 
 ### 工具分级
 
@@ -646,7 +648,7 @@ Nexus 搜索和下载由独立 Rust service 实现，不能写在模型工具循
 1. 文件夹或压缩包扫描到多个同级内容根时返回候选路径、部署根和文件数，Vue 使用单选列表让用户选择。
 2. `install_mod_from_candidate` 重新校验源目录和候选路径，拒绝导入候选列表以外的目录，并只复制所选分支。
 3. 生成脚本从 MHWI `15.10.00` 中文表及 curated 社区映射生成精简 JSON 索引，不把完整原始数据包编入应用。
-4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 schema 16 继续持久化并兼容旧识别结果；`vfx/mod` 附属资源不作为装备替换目标显示。
+4. Rust `model_recognition` service 返回 `ModelReplacement`；该切片最初使用 schema 9，当前 manifest schema 17 继续持久化并兼容旧识别结果，模型识别规则版本保持 16；`vfx/mod` 附属资源不作为装备替换目标显示。
 5. Vue 在导入结果和已安装 MOD 列表显示替换类型、模型 ID、游戏 ID 和游戏名称摘要。
 
 这个切片只读取路径并展示识别结果，不修改 MOD 的模型目标或文件内容；Slice 14 的受控改绑建立在该识别结果上。

@@ -33,7 +33,7 @@ use super::model_remap::{
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 16;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 17;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 16;
 const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
@@ -121,6 +121,91 @@ pub struct InstalledModFile {
     pub source_relative_path: String,
     pub deploy_relative_path: String,
     pub library_relative_path: String,
+}
+
+/// 本地库文件的部署排除记录。原始文件仍保留，只是不再进入游戏目录部署计划。
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDeploymentExclusion {
+    pub candidate_id: String,
+    pub library_relative_path: String,
+    pub deploy_relative_path: String,
+    pub reason: String,
+    pub batch_id: String,
+    pub excluded_at_unix_seconds: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupCandidate {
+    pub candidate_id: String,
+    pub mod_id: String,
+    pub mod_name: String,
+    pub library_relative_path: String,
+    pub deploy_relative_path: String,
+    pub extension: String,
+    pub size_bytes: u64,
+    pub local_kind: String,
+    pub local_hint: String,
+    pub currently_deployed: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupScan {
+    pub installed_mod_count: usize,
+    pub candidate_count: usize,
+    pub candidates: Vec<ModCleanupCandidate>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupSelection {
+    pub candidate_id: String,
+    pub mod_id: String,
+    pub library_relative_path: String,
+    pub reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupApplyResult {
+    pub batch_id: String,
+    pub affected_mod_count: usize,
+    pub exclusion_count: usize,
+    pub removed_deployed_file_count: usize,
+    pub restored_conflict_file_count: usize,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupExclusionGroup {
+    pub mod_id: String,
+    pub mod_name: String,
+    pub exclusions: Vec<ModDeploymentExclusion>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupExclusionList {
+    pub exclusion_count: usize,
+    pub latest_batch_id: Option<String>,
+    pub groups: Vec<ModCleanupExclusionGroup>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupRestoreResult {
+    pub affected_mod_count: usize,
+    pub restored_exclusion_count: usize,
+    pub deployed_file_count: usize,
+    pub warnings: Vec<String>,
+    pub message: String,
 }
 
 #[derive(Serialize)]
@@ -608,6 +693,9 @@ struct InstalledModManifest {
     model_replacements: Vec<ModelReplacement>,
     #[serde(default)]
     model_remaps: Vec<ModelRemapSelection>,
+    /// AI 清理只改变部署选择；本地库中的原始文件永不删除。
+    #[serde(default)]
+    deployment_exclusions: Vec<ModDeploymentExclusion>,
     #[serde(default)]
     deployed_files: Vec<DeployedModFile>,
 }
@@ -2183,6 +2271,55 @@ pub fn get_mod_workspace_snapshot_with_progress(
     refresh_mod_workspace_snapshot_with_progress(app, progress)
 }
 
+/// 扫描本地库中的非游戏资源候选。扫描只读取元数据，不修改本地库或游戏目录。
+pub fn scan_mod_cleanup_candidates_with_progress(
+    app: &tauri::AppHandle,
+    progress: &OperationReporter,
+) -> Result<ModCleanupScan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    progress.report("正在读取 MOD 清单", 0, None, None);
+    let contexts = load_all_installed_manifests_with_progress(&paths.installed_path, progress)?;
+    scan_mod_cleanup_candidates_from(&contexts, progress)
+}
+
+/// 返回当前全部部署排除项，用于生成恢复计划。
+pub fn list_mod_cleanup_exclusions(
+    app: &tauri::AppHandle,
+) -> Result<ModCleanupExclusionList, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let contexts = load_all_installed_manifests(&paths.installed_path)?;
+    Ok(mod_cleanup_exclusion_list_from(&contexts))
+}
+
+/// 保存部署排除项，并协调当前游戏目录中由这些路径产生的文件。
+pub fn apply_mod_cleanup_exclusions_with_progress(
+    app: &tauri::AppHandle,
+    batch_id: String,
+    selections: Vec<ModCleanupSelection>,
+    progress: &OperationReporter,
+) -> Result<ModCleanupApplyResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    apply_mod_cleanup_exclusions_from_with_progress(
+        &paths, &game_root, batch_id, selections, progress,
+    )
+}
+
+/// 移除指定部署排除项；已启用 MOD 的对应路径会按当前冲突优先级重新协调。
+pub fn restore_mod_cleanup_exclusions_with_progress(
+    app: &tauri::AppHandle,
+    candidate_ids: Vec<String>,
+    progress: &OperationReporter,
+) -> Result<ModCleanupRestoreResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let game_root = resolve_game_root(app)?;
+    restore_mod_cleanup_exclusions_from_with_progress(&paths, &game_root, candidate_ids, progress)
+}
+
 pub fn refresh_mod_workspace_snapshot_with_progress(
     app: &tauri::AppHandle,
     progress: &OperationReporter,
@@ -2212,7 +2349,7 @@ fn build_workspace_snapshot_from_contexts(
     progress: &OperationReporter,
 ) -> Result<ModWorkspaceSnapshot, String> {
     let installed_mods =
-        installed_mod_list_from_contexts(installed_root, contexts, category_store, progress)?;
+        installed_mod_list_from_contexts(installed_root, contexts, category_store, progress, true)?;
     progress.report("正在分析冲突信息", 0, None, None);
     let conflict_store = read_conflict_order_store(installed_root)?;
     let conflict_report = build_mod_conflict_report(contexts, &conflict_store)?;
@@ -2268,6 +2405,7 @@ fn update_workspace_snapshot_after_import(
         std::slice::from_ref(&context),
         &category_store,
         &OperationReporter::default(),
+        false,
     )?;
     let Some(imported_mod) = imported.mods.pop() else {
         return Err("导入完成，但无法生成 MOD 快照条目。".to_string());
@@ -2431,6 +2569,7 @@ fn update_workspace_snapshot_after_mod_changes_inner(
             std::slice::from_ref(&context),
             &category_store,
             &OperationReporter::default(),
+            false,
         )?;
         let Some(summary) = list.mods.pop() else {
             continue;
@@ -3042,6 +3181,50 @@ pub fn open_installed_mod_folder(app: &tauri::AppHandle, mod_id: String) -> Resu
         })
 }
 
+/// 打开清理候选在本地 MOD 库中的所在目录；候选 ID 会在 manifest 内重新校验。
+pub fn open_mod_cleanup_candidate_folder(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    candidate_id: String,
+) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let folder = mod_cleanup_candidate_folder_from(
+        &paths.installed_path,
+        mod_id.trim(),
+        candidate_id.trim(),
+    )?;
+
+    app.opener()
+        .open_path(path_to_string(&folder), None::<String>)
+        .map_err(|error| format!("无法打开清理候选所在文件夹 {}：{error}", folder.display()))
+}
+
+fn mod_cleanup_candidate_folder_from(
+    installed_root: &Path,
+    mod_id: &str,
+    candidate_id: &str,
+) -> Result<PathBuf, String> {
+    if mod_id.is_empty() || candidate_id.is_empty() {
+        return Err("清理候选标识无效。".to_string());
+    }
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    let file = context
+        .manifest
+        .files
+        .iter()
+        .find(|file| {
+            cleanup_candidate_metadata(file).is_some()
+                && cleanup_candidate_id(mod_id, &file.library_relative_path) == candidate_id
+        })
+        .ok_or_else(|| "清理候选已经变化，请重新扫描。".to_string())?;
+    let source_path = source_path_for_installed_file(&context, file)?;
+    source_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "无法确定清理候选所在文件夹。".to_string())
+}
+
 fn installed_mod_content_path(installed_root: &Path, mod_id: &str) -> Result<PathBuf, String> {
     let context = load_installed_manifest(installed_root, mod_id)?;
 
@@ -3550,6 +3733,7 @@ fn install_mod_from_folder_into_with_duplicate_name_check(
             files: installed_files.clone(),
             model_replacements: model_replacements.clone(),
             model_remaps: Vec::new(),
+            deployment_exclusions: Vec::new(),
             deployed_files: Vec::new(),
         };
         let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -4363,6 +4547,7 @@ fn installed_mod_list_from_contexts(
     contexts: &[InstalledManifestContext],
     category_store: &ModCategoryStore,
     progress: &OperationReporter,
+    apply_saved_order: bool,
 ) -> Result<InstalledModList, String> {
     let mut mods = Vec::new();
     let mut warnings = Vec::new();
@@ -4435,7 +4620,11 @@ fn installed_mod_list_from_contexts(
             .cmp(&left.installed_at_unix_seconds)
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
-    apply_mod_library_order(installed_root, &mut mods)?;
+    // 只有完整列表才能归一化并持久化全局顺序；局部快照若传入单个 MOD，
+    // 绝不能把其余 ID 当作已卸载项从 manualModIds 中删除。
+    if apply_saved_order {
+        apply_mod_library_order(installed_root, &mut mods)?;
+    }
 
     let message = if mods.is_empty() {
         "本地 MOD 库为空。".to_string()
@@ -4937,6 +5126,472 @@ fn armor_set_label(display_names: &[String], model_id: &str) -> String {
     model_id.to_string()
 }
 
+fn scan_mod_cleanup_candidates_from(
+    contexts: &[InstalledManifestContext],
+    progress: &OperationReporter,
+) -> Result<ModCleanupScan, String> {
+    let mut candidates = Vec::new();
+    let mut warnings = Vec::new();
+    progress.report("正在筛选可清理文件", 0, Some(contexts.len()), None);
+
+    for (index, context) in contexts.iter().enumerate() {
+        let excluded_paths = context
+            .manifest
+            .deployment_exclusions
+            .iter()
+            .map(|exclusion| conflict_path_key(&exclusion.library_relative_path))
+            .collect::<HashSet<_>>();
+        let effective_by_library_path = effective_installed_files_for_context(context)?
+            .into_iter()
+            .map(|file| {
+                (
+                    conflict_path_key(&file.installed_file.library_relative_path),
+                    file.deploy_relative_path,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let deployed_path_keys = context
+            .manifest
+            .deployed_files
+            .iter()
+            .map(|file| conflict_path_key(&file.deploy_relative_path))
+            .collect::<HashSet<_>>();
+
+        for file in &context.manifest.files {
+            let library_key = conflict_path_key(&file.library_relative_path);
+            if excluded_paths.contains(&library_key) {
+                continue;
+            }
+            let Some((extension, local_kind, local_hint)) = cleanup_candidate_metadata(file) else {
+                continue;
+            };
+            let source_path = match source_path_for_installed_file(context, file) {
+                Ok(path) => path,
+                Err(error) => {
+                    warnings.push(error);
+                    continue;
+                }
+            };
+            let size_bytes = match fs::metadata(&source_path) {
+                Ok(metadata) if metadata.is_file() => metadata.len(),
+                Ok(_) => continue,
+                Err(error) => {
+                    warnings.push(format!(
+                        "无法读取候选文件元数据 {}：{error}",
+                        file.library_relative_path
+                    ));
+                    continue;
+                }
+            };
+            let effective_deploy_path = effective_by_library_path
+                .get(&library_key)
+                .cloned()
+                .unwrap_or_else(|| file.deploy_relative_path.clone());
+            candidates.push(ModCleanupCandidate {
+                candidate_id: cleanup_candidate_id(
+                    &context.manifest.id,
+                    &file.library_relative_path,
+                ),
+                mod_id: context.manifest.id.clone(),
+                mod_name: manifest_display_name(&context.manifest),
+                library_relative_path: file.library_relative_path.clone(),
+                deploy_relative_path: effective_deploy_path.clone(),
+                extension,
+                size_bytes,
+                local_kind,
+                local_hint,
+                currently_deployed: deployed_path_keys
+                    .contains(&conflict_path_key(&effective_deploy_path)),
+            });
+        }
+
+        progress.report(
+            "正在筛选可清理文件",
+            index + 1,
+            Some(contexts.len()),
+            Some(manifest_display_name(&context.manifest)),
+        );
+    }
+
+    candidates.sort_by(|left, right| {
+        left.mod_name
+            .to_lowercase()
+            .cmp(&right.mod_name.to_lowercase())
+            .then_with(|| {
+                left.library_relative_path
+                    .to_lowercase()
+                    .cmp(&right.library_relative_path.to_lowercase())
+            })
+    });
+    let message = if candidates.is_empty() {
+        "没有发现图片、说明文档、网页链接或安装教程候选。".to_string()
+    } else {
+        format!("共发现 {} 个可能无需部署的文件。", candidates.len())
+    };
+    Ok(ModCleanupScan {
+        installed_mod_count: contexts.len(),
+        candidate_count: candidates.len(),
+        candidates,
+        warnings,
+        message,
+    })
+}
+
+fn cleanup_candidate_metadata(file: &InstalledModFile) -> Option<(String, String, String)> {
+    let path = file.deploy_relative_path.replace('\\', "/");
+    let lower_path = path.to_lowercase();
+    let file_name = lower_path.rsplit('/').next().unwrap_or(&lower_path);
+    let extension = file_name.rsplit_once('.')?.1.to_string();
+    let (local_kind, mut local_hint) = match extension.as_str() {
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" => {
+            ("image", "常见图片格式，可能是预览图或说明配图")
+        }
+        "txt" | "md" | "markdown" | "rtf" | "nfo" | "pdf" | "doc" | "docx" => {
+            ("document", "常见说明文档格式")
+        }
+        "html" | "htm" | "url" | "lnk" => ("link", "网页、链接或离线说明格式"),
+        _ => return None,
+    };
+    if lower_path.contains("/plugins/") || lower_path.starts_with("plugins/") {
+        local_hint = "位于插件目录，可能是运行时资源，不能仅按扩展名清理";
+    } else if [
+        "readme",
+        "install",
+        "tutorial",
+        "preview",
+        "screenshot",
+        "sample",
+    ]
+    .iter()
+    .any(|token| file_name.contains(token))
+        || ["说明", "安装", "教程", "预览", "截图", "示例"]
+            .iter()
+            .any(|token| file_name.contains(token))
+    {
+        local_hint = "文件名具有说明、安装教程或预览图特征";
+    }
+    Some((extension, local_kind.to_string(), local_hint.to_string()))
+}
+
+fn cleanup_candidate_id(mod_id: &str, library_relative_path: &str) -> String {
+    // 稳定 FNV-1a 足以作为本地候选键；执行时仍会同时复核 MOD ID 和相对路径。
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in format!("{mod_id}\0{}", conflict_path_key(library_relative_path)).bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("cleanup-{hash:016x}")
+}
+
+fn mod_cleanup_exclusion_list_from(
+    contexts: &[InstalledManifestContext],
+) -> ModCleanupExclusionList {
+    let mut latest = None::<(u64, String)>;
+    let mut groups = contexts
+        .iter()
+        .filter_map(|context| {
+            if context.manifest.deployment_exclusions.is_empty() {
+                return None;
+            }
+            for exclusion in &context.manifest.deployment_exclusions {
+                if latest
+                    .as_ref()
+                    .is_none_or(|(timestamp, _)| exclusion.excluded_at_unix_seconds >= *timestamp)
+                {
+                    latest = Some((
+                        exclusion.excluded_at_unix_seconds,
+                        exclusion.batch_id.clone(),
+                    ));
+                }
+            }
+            Some(ModCleanupExclusionGroup {
+                mod_id: context.manifest.id.clone(),
+                mod_name: manifest_display_name(&context.manifest),
+                exclusions: context.manifest.deployment_exclusions.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    groups.sort_by(|left, right| {
+        left.mod_name
+            .to_lowercase()
+            .cmp(&right.mod_name.to_lowercase())
+    });
+    let exclusion_count = groups.iter().map(|group| group.exclusions.len()).sum();
+    ModCleanupExclusionList {
+        exclusion_count,
+        latest_batch_id: latest.map(|(_, batch_id)| batch_id),
+        groups,
+        message: format!("当前共有 {exclusion_count} 个部署排除项。"),
+    }
+}
+
+fn apply_mod_cleanup_exclusions_from_with_progress(
+    paths: &LibraryPaths,
+    game_root: &Path,
+    batch_id: String,
+    selections: Vec<ModCleanupSelection>,
+    progress: &OperationReporter,
+) -> Result<ModCleanupApplyResult, String> {
+    let batch_id = batch_id.trim().to_string();
+    if batch_id.is_empty() || batch_id.len() > 128 {
+        return Err("清理批次 ID 无效。".to_string());
+    }
+    if selections.is_empty() || selections.len() > 2_000 {
+        return Err("一次清理计划必须包含 1 到 2000 个文件。".to_string());
+    }
+
+    let contexts = load_all_installed_manifests(&paths.installed_path)?;
+    let scan = scan_mod_cleanup_candidates_from(&contexts, &OperationReporter::default())?;
+    let candidates = scan
+        .candidates
+        .into_iter()
+        .map(|candidate| (candidate.candidate_id.clone(), candidate))
+        .collect::<HashMap<_, _>>();
+    let mut seen_ids = HashSet::new();
+    let mut selections_by_mod =
+        BTreeMap::<String, Vec<(ModCleanupSelection, ModCleanupCandidate)>>::new();
+    for mut selection in selections {
+        if !seen_ids.insert(selection.candidate_id.clone()) {
+            continue;
+        }
+        let candidate = candidates
+            .get(&selection.candidate_id)
+            .cloned()
+            .ok_or_else(|| format!("清理候选已经变化：{}", selection.candidate_id))?;
+        if candidate.mod_id != selection.mod_id
+            || conflict_path_key(&candidate.library_relative_path)
+                != conflict_path_key(&selection.library_relative_path)
+        {
+            return Err("清理候选的 MOD 或相对路径不匹配，请重新扫描。".to_string());
+        }
+        selection.reason = selection.reason.trim().chars().take(300).collect();
+        selections_by_mod
+            .entry(selection.mod_id.clone())
+            .or_default()
+            .push((selection, candidate));
+    }
+
+    let excluded_at = unix_seconds_now()?;
+    let mut changed_mod_ids = Vec::new();
+    let mut reconcile_paths = Vec::new();
+    let mut removed_deployed_file_count = 0;
+    let mut warnings = Vec::new();
+    let total_mods = selections_by_mod.len();
+    progress.report("正在保存部署排除项", 0, Some(total_mods), None);
+
+    for (index, (mod_id, mod_selections)) in selections_by_mod.into_iter().enumerate() {
+        let mut context = load_installed_manifest(&paths.installed_path, &mod_id)?;
+        let original_context = context.clone();
+        let effective_by_library_path = effective_installed_files_for_context(&context)?
+            .into_iter()
+            .map(|file| {
+                (
+                    conflict_path_key(&file.installed_file.library_relative_path),
+                    file.deploy_relative_path,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let selected_deploy_paths = mod_selections
+            .iter()
+            .filter_map(|(_, candidate)| {
+                effective_by_library_path
+                    .get(&conflict_path_key(&candidate.library_relative_path))
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        let selected_path_keys = selected_deploy_paths
+            .iter()
+            .map(|path| conflict_path_key(path))
+            .collect::<HashSet<_>>();
+        let selected_deployed_files = context
+            .manifest
+            .deployed_files
+            .iter()
+            .filter(|file| {
+                selected_path_keys.contains(&conflict_path_key(&file.deploy_relative_path))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for (selection, candidate) in mod_selections {
+            context
+                .manifest
+                .deployment_exclusions
+                .push(ModDeploymentExclusion {
+                    candidate_id: selection.candidate_id,
+                    library_relative_path: candidate.library_relative_path,
+                    deploy_relative_path: candidate.deploy_relative_path,
+                    reason: selection.reason,
+                    batch_id: batch_id.clone(),
+                    excluded_at_unix_seconds: excluded_at,
+                });
+        }
+
+        let removed_paths = remove_deployed_files_with_progress(
+            &paths.installed_path,
+            game_root,
+            &selected_deployed_files,
+            Some(&original_context),
+            &mut warnings,
+            progress,
+            "正在移除已排除的部署文件",
+        )?;
+        removed_deployed_file_count += removed_paths.len();
+        reconcile_paths.extend(
+            selected_deployed_files
+                .iter()
+                .map(|file| file.deploy_relative_path.clone()),
+        );
+        context.manifest.deployed_files.retain(|file| {
+            !selected_path_keys.contains(&conflict_path_key(&file.deploy_relative_path))
+        });
+        save_manifest(&context.manifest_path, &context.manifest)?;
+        changed_mod_ids.push(mod_id);
+        progress.report(
+            "正在保存部署排除项",
+            index + 1,
+            Some(total_mods),
+            Some(manifest_display_name(&context.manifest)),
+        );
+    }
+
+    update_workspace_snapshot_after_mod_changes(paths, &changed_mod_ids, &[])?;
+    let restored_conflict_file_count = reconcile_paths
+        .iter()
+        .map(|path| conflict_path_key(path))
+        .collect::<HashSet<_>>()
+        .len();
+    restore_enabled_versions_for_paths_with_progress(
+        &paths.installed_path,
+        game_root,
+        &reconcile_paths,
+        &mut warnings,
+        progress,
+    )?;
+    update_workspace_snapshot_after_mod_changes(paths, &changed_mod_ids, &[])?;
+    let exclusion_count = seen_ids.len();
+    Ok(ModCleanupApplyResult {
+        batch_id,
+        affected_mod_count: changed_mod_ids.len(),
+        exclusion_count,
+        removed_deployed_file_count,
+        restored_conflict_file_count,
+        warnings,
+        message: format!("已记录 {exclusion_count} 个部署排除项；本地 MOD 库原始文件均已保留。"),
+    })
+}
+
+fn restore_mod_cleanup_exclusions_from_with_progress(
+    paths: &LibraryPaths,
+    game_root: &Path,
+    candidate_ids: Vec<String>,
+    progress: &OperationReporter,
+) -> Result<ModCleanupRestoreResult, String> {
+    let requested_ids = candidate_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<HashSet<_>>();
+    if requested_ids.is_empty() || requested_ids.len() > 2_000 {
+        return Err("一次恢复计划必须包含 1 到 2000 个排除项。".to_string());
+    }
+    let contexts = load_all_installed_manifests(&paths.installed_path)?;
+    let available_ids = contexts
+        .iter()
+        .flat_map(|context| {
+            context
+                .manifest
+                .deployment_exclusions
+                .iter()
+                .map(|exclusion| exclusion.candidate_id.clone())
+        })
+        .collect::<HashSet<_>>();
+    if !requested_ids.is_subset(&available_ids) {
+        return Err("部署排除记录已经变化，请重新生成恢复计划。".to_string());
+    }
+
+    let mut changed_mod_ids = Vec::new();
+    let mut deploy_paths = Vec::new();
+    let mut restored_exclusion_count = 0;
+    let affected_contexts = contexts
+        .iter()
+        .filter(|context| {
+            context
+                .manifest
+                .deployment_exclusions
+                .iter()
+                .any(|exclusion| requested_ids.contains(&exclusion.candidate_id))
+        })
+        .count();
+    progress.report("正在恢复部署排除项", 0, Some(affected_contexts), None);
+
+    for context in contexts {
+        let selected_exclusions = context
+            .manifest
+            .deployment_exclusions
+            .iter()
+            .filter(|exclusion| requested_ids.contains(&exclusion.candidate_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected_exclusions.is_empty() {
+            continue;
+        }
+        let mut context = context;
+        let selected_library_keys = selected_exclusions
+            .iter()
+            .map(|exclusion| conflict_path_key(&exclusion.library_relative_path))
+            .collect::<HashSet<_>>();
+        context
+            .manifest
+            .deployment_exclusions
+            .retain(|exclusion| !requested_ids.contains(&exclusion.candidate_id));
+        if context.manifest.enabled {
+            deploy_paths.extend(
+                effective_installed_files_for_context(&context)?
+                    .into_iter()
+                    .filter(|file| {
+                        selected_library_keys.contains(&conflict_path_key(
+                            &file.installed_file.library_relative_path,
+                        ))
+                    })
+                    .map(|file| file.deploy_relative_path),
+            );
+        }
+        restored_exclusion_count += selected_exclusions.len();
+        save_manifest(&context.manifest_path, &context.manifest)?;
+        changed_mod_ids.push(context.manifest.id.clone());
+        progress.report(
+            "正在恢复部署排除项",
+            changed_mod_ids.len(),
+            Some(affected_contexts),
+            Some(manifest_display_name(&context.manifest)),
+        );
+    }
+
+    update_workspace_snapshot_after_mod_changes(paths, &changed_mod_ids, &[])?;
+    let mut warnings = Vec::new();
+    let deployed_file_count = deploy_paths
+        .iter()
+        .map(|path| conflict_path_key(path))
+        .collect::<HashSet<_>>()
+        .len();
+    restore_enabled_versions_for_paths_with_progress(
+        &paths.installed_path,
+        game_root,
+        &deploy_paths,
+        &mut warnings,
+        progress,
+    )?;
+    update_workspace_snapshot_after_mod_changes(paths, &changed_mod_ids, &[])?;
+    Ok(ModCleanupRestoreResult {
+        affected_mod_count: changed_mod_ids.len(),
+        restored_exclusion_count,
+        deployed_file_count,
+        warnings,
+        message: format!("已恢复 {restored_exclusion_count} 个部署排除项。"),
+    })
+}
+
 fn effective_remap_files_for_manifest(
     manifest: &InstalledModManifest,
     replacements: &[ModelReplacement],
@@ -4953,20 +5608,29 @@ fn effective_installed_files_for_manifest(
     manifest: &InstalledModManifest,
     replacements: &[ModelReplacement],
 ) -> Result<Vec<EffectiveInstalledModFile>, String> {
+    let excluded_library_paths = manifest
+        .deployment_exclusions
+        .iter()
+        .map(|exclusion| conflict_path_key(&exclusion.library_relative_path))
+        .collect::<HashSet<_>>();
     effective_remap_files_for_manifest(manifest, replacements)?
         .into_iter()
-        .map(|effective| {
-            let installed_file = manifest
-                .files
-                .get(effective.file_index)
-                .cloned()
-                .ok_or_else(|| "有效部署文件索引超出范围。".to_string())?;
-            Ok(EffectiveInstalledModFile {
+        .filter_map(|effective| {
+            let installed_file = manifest.files.get(effective.file_index).cloned();
+            let Some(installed_file) = installed_file else {
+                return Some(Err("有效部署文件索引超出范围。".to_string()));
+            };
+            if excluded_library_paths
+                .contains(&conflict_path_key(&installed_file.library_relative_path))
+            {
+                return None;
+            }
+            Some(Ok(EffectiveInstalledModFile {
                 installed_file,
                 deploy_relative_path: effective.deploy_relative_path,
                 texture_path_rewrites: effective.texture_path_rewrites,
                 evam_slinger_rewrite: effective.evam_slinger_rewrite,
-            })
+            }))
         })
         .collect()
 }
@@ -9005,18 +9669,21 @@ mod tests {
         apply_conflict_order_from, apply_mod_remap_from, armor_set_label,
         build_mod_conflict_report_from_workspace_index, build_workspace_mod_index,
         clear_import_staging, collect_nested_archives, copy_import_source_directory,
-        create_mod_branch_group_from, disable_mod_from, enable_mod_from,
-        find_installed_mod_by_content, get_mod_conflict_report_from,
+        create_mod_branch_group_from, disable_mod_from, effective_installed_files_for_context,
+        enable_mod_from, find_installed_mod_by_content, get_mod_conflict_report_from,
         install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
-        list_installed_mods_from, load_all_installed_manifests, load_normalized_mod_branch_groups,
-        load_or_initialize_mod_category_store_for_installed_root, move_conflict_participant_from,
+        installed_mod_list_from_contexts, list_installed_mods_from, load_all_installed_manifests,
+        load_installed_manifest, load_normalized_mod_branch_groups,
+        load_or_initialize_mod_category_store_for_installed_root,
+        mod_cleanup_candidate_folder_from, move_conflict_participant_from,
         move_mod_library_item_from, move_mod_library_items_from, preview_disable_mod_from,
         preview_enable_mod_from, preview_mod_import, preview_mod_remap_from,
         preview_restore_all_mods_from, preview_uninstall_mod_from, read_conflict_order_store,
         read_mod_library_order_store, remove_category_from_manifests,
         remove_mod_from_conflict_orders, replace_mod_library_order_from, restore_all_mods_from,
-        restore_mod_library_import_order_from, save_mod_category_store, uninstall_mod_from,
-        validate_archive_path, ModCategoryStore, ModLibraryOrderStore, StoredModCategory,
+        restore_mod_library_import_order_from, save_manifest, save_mod_category_store,
+        scan_mod_cleanup_candidates_from, uninstall_mod_from, validate_archive_path,
+        ModCategoryStore, ModDeploymentExclusion, ModLibraryOrderStore, StoredModCategory,
         MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
     use crate::operations::OperationReporter;
@@ -9312,6 +9979,72 @@ mod tests {
         assert!(content_path.join("nativePC/weapon/sword.mod3").is_file());
 
         cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn cleanup_exclusion_keeps_library_source_and_removes_file_from_effective_deployment() {
+        let source = temp_root("cleanup_exclusion_source");
+        let installed_root = temp_root("cleanup_exclusion_target");
+        write_file(&source.join("nativePC/wp/model.mod3"));
+        write_file(&source.join("nativePC/wp/preview.png"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source), false, &installed_root).unwrap();
+        let mut context = load_installed_manifest(&installed_root, &installed.mod_id).unwrap();
+        let scan =
+            scan_mod_cleanup_candidates_from(&[context.clone()], &OperationReporter::default())
+                .unwrap();
+        assert_eq!(scan.candidate_count, 1);
+        let candidate = scan.candidates.into_iter().next().unwrap();
+        let library_source = context.content_path.join(&candidate.library_relative_path);
+        assert!(library_source.is_file());
+        assert_eq!(
+            mod_cleanup_candidate_folder_from(
+                &installed_root,
+                &installed.mod_id,
+                &candidate.candidate_id,
+            )
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+            library_source.parent().unwrap().canonicalize().unwrap()
+        );
+        assert_eq!(
+            effective_installed_files_for_context(&context)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        context
+            .manifest
+            .deployment_exclusions
+            .push(ModDeploymentExclusion {
+                candidate_id: candidate.candidate_id,
+                library_relative_path: candidate.library_relative_path,
+                deploy_relative_path: candidate.deploy_relative_path,
+                reason: "预览图".to_string(),
+                batch_id: "test-batch".to_string(),
+                excluded_at_unix_seconds: 1,
+            });
+        save_manifest(&context.manifest_path, &context.manifest).unwrap();
+
+        let context = load_installed_manifest(&installed_root, &installed.mod_id).unwrap();
+        let effective_files = effective_installed_files_for_context(&context).unwrap();
+        assert_eq!(effective_files.len(), 1);
+        assert!(effective_files[0]
+            .deploy_relative_path
+            .ends_with("model.mod3"));
+        assert!(library_source.is_file());
+        assert_eq!(
+            scan_mod_cleanup_candidates_from(&[context], &OperationReporter::default())
+                .unwrap()
+                .candidate_count,
+            0
+        );
+
+        cleanup(source);
         cleanup(installed_root);
     }
 
@@ -10374,6 +11107,48 @@ mod tests {
             ordered_ids,
             vec![first.mod_id.as_str(), second.mod_id.as_str()]
         );
+
+        cleanup(first_source);
+        cleanup(second_source);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn partial_snapshot_summary_does_not_rewrite_complete_manual_order() {
+        let first_source = temp_root("partial_order_first_source");
+        let second_source = temp_root("partial_order_second_source");
+        let installed_root = temp_root("partial_order_installed");
+        write_file(&first_source.join("nativePC/weapon/first.mod3"));
+        write_file(&second_source.join("nativePC/weapon/second.mod3"));
+        install_mod_from_folder_into(root_to_string(&first_source), false, &installed_root)
+            .unwrap();
+        install_mod_from_folder_into(root_to_string(&second_source), false, &installed_root)
+            .unwrap();
+
+        list_installed_mods_from(&installed_root).unwrap();
+        let initial_store = read_mod_library_order_store(&installed_root).unwrap();
+        let mut manual_order = initial_store.import_mod_ids.clone();
+        manual_order.reverse();
+        replace_mod_library_order_from(
+            &installed_root,
+            manual_order.clone(),
+            &initial_store.import_mod_ids,
+        )
+        .unwrap();
+
+        let contexts = load_all_installed_manifests(&installed_root).unwrap();
+        installed_mod_list_from_contexts(
+            &installed_root,
+            std::slice::from_ref(&contexts[0]),
+            &ModCategoryStore::default(),
+            &OperationReporter::default(),
+            false,
+        )
+        .unwrap();
+
+        let stored = read_mod_library_order_store(&installed_root).unwrap();
+        assert_eq!(stored.manual_mod_ids, manual_order);
+        assert_eq!(stored.import_mod_ids, initial_store.import_mod_ids);
 
         cleanup(first_source);
         cleanup(second_source);

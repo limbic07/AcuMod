@@ -368,6 +368,16 @@ pub fn open_installed_mod_folder(app: tauri::AppHandle, mod_id: String) -> Resul
     mod_library::open_installed_mod_folder(&app, mod_id)
 }
 
+/// 打开 AI 清理候选在本地 MOD 库中的所在文件夹。
+#[tauri::command]
+pub fn open_mod_cleanup_candidate_folder(
+    app: tauri::AppHandle,
+    mod_id: String,
+    candidate_id: String,
+) -> Result<(), String> {
+    mod_library::open_mod_cleanup_candidate_folder(&app, mod_id, candidate_id)
+}
+
 #[tauri::command]
 pub async fn get_mod_remap_details(
     app: tauri::AppHandle,

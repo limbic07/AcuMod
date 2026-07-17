@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod game;
 pub mod legacy_box;
 pub mod mod_library;

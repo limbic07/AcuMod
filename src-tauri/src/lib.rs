@@ -7,8 +7,16 @@ mod storage;
 pub fn run() {
     tauri::Builder::default()
         .manage(operations::OperationCoordinator::default())
+        .manage(services::agent::AgentCoordinator::default())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            commands::agent::clear_agent_session,
+            commands::agent::delete_deepseek_api_key,
+            commands::agent::get_agent_settings,
+            commands::agent::save_agent_model,
+            commands::agent::set_deepseek_api_key,
+            commands::agent::start_agent_turn,
+            commands::agent::test_agent_connection,
             commands::app::get_app_info,
             commands::game::detect_game_directory,
             commands::game::get_game_directory_status,

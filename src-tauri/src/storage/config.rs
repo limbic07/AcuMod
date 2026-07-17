@@ -11,12 +11,38 @@ pub enum GameTextLanguage {
     TraditionalChinese,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeepSeekModel {
+    #[default]
+    V4Flash,
+    V4Pro,
+}
+
+impl DeepSeekModel {
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Self::V4Flash => "deepseek-v4-flash",
+            Self::V4Pro => "deepseek-v4-pro",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::V4Flash => "DeepSeek V4 Flash",
+            Self::V4Pro => "DeepSeek V4 Pro",
+        }
+    }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     pub game_directory: Option<String>,
     #[serde(default)]
     pub game_text_language: GameTextLanguage,
+    #[serde(default)]
+    pub deep_seek_model: DeepSeekModel,
 }
 
 pub fn path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -75,7 +101,7 @@ pub fn save(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, GameTextLanguage};
+    use super::{AppConfig, DeepSeekModel, GameTextLanguage};
 
     #[test]
     fn old_config_defaults_to_simplified_game_text() {
@@ -92,10 +118,18 @@ mod tests {
         let config = AppConfig {
             game_directory: None,
             game_text_language: GameTextLanguage::TraditionalChinese,
+            deep_seek_model: DeepSeekModel::V4Flash,
         };
 
         let json = serde_json::to_string(&config).unwrap();
 
         assert!(json.contains(r#""gameTextLanguage":"traditionalChinese""#));
+    }
+
+    #[test]
+    fn old_config_defaults_to_deepseek_v4_flash() {
+        let config = serde_json::from_str::<AppConfig>(r#"{"gameDirectory":"D:/MHW"}"#).unwrap();
+
+        assert!(matches!(config.deep_seek_model, DeepSeekModel::V4Flash));
     }
 }

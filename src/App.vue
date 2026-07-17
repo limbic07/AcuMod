@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
+import AgentSettingsPanel from "./components/AgentSettingsPanel.vue";
 import BranchGroupSuggestionDialog from "./components/BranchGroupSuggestionDialog.vue";
 import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
 import ModCategoryManager from "./components/ModCategoryManager.vue";
@@ -2393,6 +2394,8 @@ onBeforeUnmount(() => {
             <p v-if="gameTextError" class="error settings-inline-error">{{ gameTextError }}</p>
           </section>
 
+          <AgentSettingsPanel />
+
           <section class="panel secondary">
             <div class="panel-heading compact">
               <div>
@@ -3095,6 +3098,7 @@ onBeforeUnmount(() => {
       :open="isAgentPanelOpen"
       @open-panel="isAgentPanelOpen = true"
       @close="isAgentPanelOpen = false"
+      @open-settings="activeView = 'settings'"
     />
   </main>
 

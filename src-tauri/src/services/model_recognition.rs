@@ -9,6 +9,10 @@ const MODEL_INDEX_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../references/mhwi-data/curated/model-index.json"
 ));
+const TRADITIONAL_GAME_TEXT_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../references/mhwi-data/curated/game-text-zh-hant.json"
+));
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +108,131 @@ struct VoiceModelEntry {
     gender: String,
     voice_number: String,
     display_names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TraditionalGameText {
+    names: BTreeMap<String, String>,
+}
+
+/// AI 术语查询只返回游戏文本与稳定资源 ID，不暴露本地文件路径。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameTermMatch {
+    pub kind: String,
+    pub model_id: String,
+    pub simplified_name: String,
+    pub traditional_name: Option<String>,
+}
+
+/// 按简中、繁中、类别或资源 ID 查询内置 MHW 术语。
+pub fn search_game_terms(query: &str, limit: usize) -> Result<Vec<GameTermMatch>, String> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let index = model_index()?;
+    let traditional_names = traditional_game_text()?;
+    let mut candidates = Vec::new();
+
+    for entry in &index.weapon_models {
+        append_term_matches(
+            &mut candidates,
+            format!("武器·{}", entry.weapon_type),
+            &entry.model_path,
+            &entry.display_names,
+            traditional_names,
+        );
+    }
+    for entry in &index.armor_models {
+        append_term_matches(
+            &mut candidates,
+            "防具".to_string(),
+            &entry.model_path,
+            &entry.display_names,
+            traditional_names,
+        );
+    }
+    for entry in &index.hair_models {
+        append_term_matches(
+            &mut candidates,
+            "发型".to_string(),
+            &entry.model_id,
+            &entry.display_names,
+            traditional_names,
+        );
+    }
+    for entry in &index.asset_models {
+        append_term_matches(
+            &mut candidates,
+            entry.sub_kind.clone(),
+            &entry.model_id,
+            &entry.display_names,
+            traditional_names,
+        );
+    }
+    for entry in &index.voice_models {
+        append_term_matches(
+            &mut candidates,
+            "人物语音".to_string(),
+            &entry.model_id,
+            &entry.display_names,
+            traditional_names,
+        );
+    }
+
+    candidates.retain(|entry| {
+        entry.kind.to_lowercase().contains(&query)
+            || entry.model_id.to_lowercase().contains(&query)
+            || entry.simplified_name.to_lowercase().contains(&query)
+            || entry
+                .traditional_name
+                .as_deref()
+                .is_some_and(|name| name.to_lowercase().contains(&query))
+    });
+    candidates.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.simplified_name.cmp(&right.simplified_name))
+            .then_with(|| left.model_id.cmp(&right.model_id))
+    });
+    candidates.dedup_by(|left, right| {
+        left.kind == right.kind
+            && left.model_id == right.model_id
+            && left.simplified_name == right.simplified_name
+    });
+    candidates.truncate(limit.clamp(1, 30));
+    Ok(candidates)
+}
+
+fn append_term_matches(
+    output: &mut Vec<GameTermMatch>,
+    kind: String,
+    model_id: &str,
+    display_names: &[String],
+    traditional_names: &BTreeMap<String, String>,
+) {
+    for simplified_name in display_names {
+        output.push(GameTermMatch {
+            kind: kind.clone(),
+            model_id: model_id.to_string(),
+            simplified_name: simplified_name.clone(),
+            traditional_name: traditional_names.get(simplified_name).cloned(),
+        });
+    }
+}
+
+fn traditional_game_text() -> Result<&'static BTreeMap<String, String>, String> {
+    static INDEX: OnceLock<Result<BTreeMap<String, String>, String>> = OnceLock::new();
+    INDEX
+        .get_or_init(|| {
+            serde_json::from_str::<TraditionalGameText>(TRADITIONAL_GAME_TEXT_JSON)
+                .map(|data| data.names)
+                .map_err(|error| format!("无法解析繁体中文游戏文本：{error}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 pub fn recognize_model_replacements(
@@ -1129,7 +1258,8 @@ fn model_kind_order(model_kind: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        recognize_model_replacements, recognize_model_replacements_with_evam, EvamRecognitionFile,
+        recognize_model_replacements, recognize_model_replacements_with_evam, search_game_terms,
+        EvamRecognitionFile,
     };
 
     fn evam_bytes(slinger_id: u32) -> Vec<u8> {
@@ -1156,6 +1286,17 @@ mod tests {
         assert_eq!(weapon.sub_kind, "太刀");
         assert_eq!(weapon.model_id, "wp/swo/bs_swo001");
         assert!(weapon.display_names.iter().any(|name| name == "铁刀1"));
+    }
+
+    #[test]
+    fn searches_bundled_game_terms_without_file_paths() {
+        let terms = search_game_terms("铁刀1", 10).unwrap();
+
+        assert!(terms.iter().any(|term| {
+            term.kind == "武器·太刀"
+                && term.model_id == "wp/swo/bs_swo001"
+                && term.simplified_name == "铁刀1"
+        }));
     }
 
     #[test]

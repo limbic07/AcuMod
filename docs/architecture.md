@@ -432,30 +432,99 @@ MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和
 
 ## AI Agent 接入边界
 
-AI Agent 不应该直接操作文件系统，也不应该直接执行删除、覆盖、移动等动作。
+AI Agent 不是第二套 MOD 管理器。它只负责理解自然语言、查询受控数据和生成操作草案，不直接操作文件系统，也不能把任意字符串转换为 Tauri command、路径或 shell 命令。
 
-推荐未来链路：
+### 推荐链路
 
 ```text
-用户自然语言
-  -> AI 解析意图
-  -> 生成受控操作请求
-  -> Rust service 生成 OperationPlan
-  -> UI 展示计划和风险
-  -> 用户确认
-  -> Rust service 执行
-  -> DTO 返回结果
+FloatingAgentPanel
+  -> src/api/agent.ts typed invoke wrapper
+  -> commands/agent.rs
+  -> services/agent/orchestrator.rs
+  -> deepseek_client.rs（DeepSeek V4 Chat Completions）
+  -> tool_registry.rs（固定工具白名单）
+  -> 既有查询 service 或 OperationPlan 预览 service
+  -> AgentTurn / AgentActionPlan DTO
+  -> 悬浮窗口展示结果或待确认计划
+  -> 用户确认 planId
+  -> Rust 重新校验计划并调用既有执行 service
 ```
 
-也就是说，AI 只能进入与传统 UI 相同的操作入口。传统按钮能做什么，AI 才能申请做什么；传统管理器尚未实现的能力，AI 也不应绕过实现。MVP 不包含 AI Agent；Slice 14 已实现的五类模型改绑仍必须经过与传统 UI 相同的预览、校验和用户确认。
+模型侧使用 JSON Schema 描述函数工具。首期使用 DeepSeek 标准端点而不是 Beta `strict` 端点，因此 Rust 必须把模型返回的工具名和参数视为不可信请求，再完成枚举解析、未知字段拒绝、ID 存在性检查、状态检查和业务校验。禁止设计 `execute_command(name, args)`、`run_path(path)` 之类的通用工具。
 
-后续 AI Agent 可以扩展三类能力：
+### Rust 模块边界
 
-- MHW 术语感知翻译：翻译 MOD 名称和说明时使用 MHW 游戏术语表、文件 ID 表和已识别模型信息，保留原文，并避免误译武器名、装备名、怪物名、技能名。
-- 联网搜索辅助：根据用户自然语言需求搜索候选 MOD，返回来源链接、摘要、适用类型和风险提示，让用户自行下载安装。
-- Nexus Mods 集成：在用户完成 SSO 登录或授权后，通过 Nexus Mods API 搜索和下载 MOD，再交给传统导入、预览、安装流程处理。
+建议新增：
 
-AI Agent 的下载和安装能力仍应落到传统管理器的受控操作计划上，不应绕过本地 MOD 库、部署记录、冲突提示和用户确认。
+- `commands/agent.rs`：设置读取、连接测试、发起对话、确认或拒绝计划等 Tauri 边界。
+- `services/agent/orchestrator.rs`：维护单次对话的模型调用和工具循环，不包含 MOD 文件操作实现。
+- `services/agent/deepseek_client.rs`：封装 DeepSeek V4 请求、流式 SSE 解析、工具调用消息和错误转换；项目不设计多供应商抽象。
+- `services/agent/tool_registry.rs`：声明允许模型调用的工具、严格参数 schema 和 Rust handler。
+- `services/agent/context.rs`：从工作区快照和术语索引中裁剪最小上下文。
+- `services/agent/plans.rs`：保存短时有效的待确认计划，并在执行前重新校验。
+- `models/agent.rs`：`AgentTurn`、`AgentEvent`、`AgentActionPlan`、`AgentSettings` 等 DTO。
+
+现有 `mod_library`、冲突、模型改绑和任务 service 继续拥有业务规则。Agent handler 只能调用这些 service 的查询、预览和执行入口，不能复制一套部署逻辑。
+
+建议的首批 Tauri command：
+
+- `get_agent_settings`：只返回 DeepSeek V4 模型、是否已配置 Key 和脱敏标识。
+- `set_agent_api_key` / `delete_agent_api_key`：只在 Rust 中写入或删除系统凭据。
+- `test_agent_connection`：发送最小请求，返回服务、模型、耗时和中文错误。
+- `start_agent_turn`：接收 `AgentTurnRequest` 和 Tauri `Channel<AgentEvent>`，立即开始异步对话。
+- `confirm_agent_plan` / `reject_agent_plan`：按 `planId` 确认或丢弃 Rust 内存中的计划。
+
+`AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。事件类型固定为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`planReady`、`completed` 和 `failed`，每项携带 `turnId` 与递增序号。前端只拼接 `textDelta`，不解析 DeepSeek 的原始 SSE 数据。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
+
+### 工具分级
+
+只读工具可在一次对话中自动执行：
+
+- `search_local_mods`：按名称、备注、分类、状态和替换目标查询 MOD，返回稳定 MOD ID。
+- `get_mod_details`：读取选中 MOD 的状态、识别摘要和冲突摘要。
+- `get_enabled_conflicts`：查询当前已启用冲突组及优先级。
+- `lookup_mhw_terms`：从本地简中/繁中游戏文本和 ID 索引查询术语。
+- `get_game_directory_status`：只返回是否已配置和是否有效，不向模型发送完整本地路径。
+
+写操作工具只生成 `AgentActionPlan`，不能在工具调用阶段执行：
+
+- 启用、禁用或卸载一组 MOD。
+- 修改冲突组优先级。
+- 修改已支持类型的模型替换目标。
+- 接受 AI 翻译建议并写入用户可编辑名称或备注。
+
+每个计划至少包含 `planId`、操作枚举、目标稳定 ID、中文摘要、警告、状态版本、过期时间和 `requiresConfirmation=true`。用户确认后，Rust 使用当前 manifest 和工作区快照重新生成实际 `OperationPlan`；目标已卸载、状态已变化或计划过期时拒绝执行并要求重新生成。AI 发起的所有写操作统一确认，即使传统 UI 对某些低风险操作可以直接执行。
+
+### 模型与网络
+
+Acumod 只接入 DeepSeek V4，不支持 OpenAI API、其它模型供应商或自定义兼容地址。Rust 直接请求 `https://api.deepseek.com/chat/completions`，不在 Vue/WebView 中请求模型，也不引入 OpenAI SDK。DeepSeek 提供的 OpenAI 兼容格式只作为 HTTP 消息格式使用，所有网络请求仍只发送到 DeepSeek 官方域名。
+
+按 2026-07-17 的官方接口，默认模型为成本和速度优先的 `deepseek-v4-flash`，设置中可以切换 `deepseek-v4-pro`。不使用即将于 2026-07-24 停用的 `deepseek-chat` 和 `deepseek-reasoner` 旧别名。首个切片显式发送 `thinking: { type: "disabled" }`，使用标准工具调用和流式输出：这样不依赖 Beta `strict` 端点，也不需要在多轮工具调用中维护 `reasoning_content`。等只读工具链稳定后，再单独评估是否为复杂规划开启思考模式。
+
+Rust 负责 HTTPS、超时、流式响应解析和错误归一化。DeepSeek 访问密钥只在用户输入和提交期间短暂存在于前端，提交后立即清空；Rust 不向前端回传明文，也不写入日志或普通 JSON 配置。模型选择只接受上述两个固定枚举，不允许用户输入任意模型名或 Base URL。
+
+AI 文本请求使用独立的异步状态，不占用全局文件任务锁；真正执行启停、卸载、冲突应用或模型改绑时，仍进入现有 `OperationCoordinator`。首期同一时间只允许一个 Agent turn，网络失败或超时不会阻塞 MOD 库操作。
+
+### 上下文和会话
+
+- 不把整个 MOD 库、文件清单或游戏目录一次性发送给模型。先在 Rust 本地查询，再返回最多 30 条精简结果；超出时要求用户缩小条件。
+- 默认只发送稳定 ID、显示名、分类、启用状态、替换摘要和冲突数量，不发送本地绝对路径、文件内容、API Key 或完整日志。
+- MHW 术语通过 `lookup_mhw_terms` 按需查询，不把完整 ID 表塞进 system prompt。
+- 第一版只保存当前运行期间的会话，不把聊天记录持久化；设置中后续再增加可选历史记录。
+- DeepSeek API Key 应保存到 Windows Credential Manager。开发阶段可使用进程环境变量 `DEEPSEEK_API_KEY`，禁止写入 `AppData/config.json` 或 `AcumodData/`。
+
+### Nexus Mods 边界
+
+Nexus 下载继续先实现传统 UI 的账号验证、搜索、文件选择、下载和导入桥接，再向 Agent 暴露只读搜索工具和待确认下载计划。Nexus v3 是当前活跃 API；公开发行前需要按官方流程注册应用，开发期个人 API Key 只用于测试。Agent 不保存临时下载链接，不抓取网页代替 API，也不绕过会员或下载权限。
+
+外部接口依据（核对于 2026-07-17）：
+
+- [DeepSeek V4 模型与 Chat Completions](https://api-docs.deepseek.com/)
+- [DeepSeek V4 工具调用](https://api-docs.deepseek.com/guides/tool_calls)
+- [DeepSeek 思考模式和工具消息规则](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)
+- [DeepSeek API 更新记录](https://api-docs.deepseek.com/updates)
+- [Nexus Mods API v3](https://api-docs.nexusmods.com/)
+- [Nexus Mods API 使用政策与应用注册](https://help.nexusmods.com/article/114-api-acceptable-use-policy)
 
 ## 已完成的第一个 MVP 切片
 

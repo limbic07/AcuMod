@@ -19,6 +19,21 @@ pub(crate) struct ModSourceSearchResult {
     pub author: String,
     pub summary: String,
     pub nexus_mod_id: Option<u64>,
+    pub source_kind: String,
+    pub source_kind_label: String,
+    pub access_mode: String,
+    pub access_mode_label: String,
+    pub access_note: String,
+}
+
+#[derive(Clone, Copy)]
+struct SourceProfile {
+    name: &'static str,
+    kind: &'static str,
+    kind_label: &'static str,
+    access_mode: &'static str,
+    access_mode_label: &'static str,
+    access_note: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +79,8 @@ pub(crate) async fn search(
     let client = build_client()?;
     let user_prompt = format!(
         "搜索 Monster Hunter: World（MHW / MHWI）MOD：{query}\n\
-         只返回与需求直接相关的实际 MOD 页面，不返回搜索页、合集首页、视频或教程。\n\
+         优先返回 Nexus Mods、踩蘑菇、3DM、Mod DB、CurseForge 或 GitHub 上与需求直接相关的实际 MOD 页面。\n\
+         Bilibili 只返回明确介绍或分享具体 MOD 的视频或动态，不返回泛用安装教程、无具体资源的合集或搜索页。\n\
          最终仅输出 JSON：{{\"results\":[{{\"title\":\"\",\"url\":\"https://...\",\"author\":\"\",\"summary\":\"中文简述\"}}]}}。最多 8 项。"
     );
     let mut messages = vec![json!({ "role": "user", "content": user_prompt })];
@@ -114,7 +130,15 @@ async fn request_search(
                     "moddb.com",
                     "www.moddb.com",
                     "github.com",
-                    "www.curseforge.com"
+                    "www.curseforge.com",
+                    "caimogu.cc",
+                    "www.caimogu.cc",
+                    "caimogu.org",
+                    "www.caimogu.org",
+                    "bilibili.com",
+                    "www.bilibili.com",
+                    "mod.3dmgame.com",
+                    "dl.3dmgame.com"
                 ]
             }]
         }))
@@ -162,10 +186,15 @@ fn parse_and_validate_results(text: &str) -> Result<Vec<ModSourceSearchResult>, 
         results.push(ModSourceSearchResult {
             title: sanitized(candidate.title, 200),
             url: normalized_url,
-            source: source.to_string(),
+            source: source.name.to_string(),
             author: sanitized(candidate.author, 120),
             summary: sanitized(candidate.summary, 500),
             nexus_mod_id: nexus::parse_mod_id_from_url(&url),
+            source_kind: source.kind.to_string(),
+            source_kind_label: source.kind_label.to_string(),
+            access_mode: source.access_mode.to_string(),
+            access_mode_label: source.access_mode_label.to_string(),
+            access_note: source.access_note.to_string(),
         });
     }
     if results.is_empty() {
@@ -174,18 +203,157 @@ fn parse_and_validate_results(text: &str) -> Result<Vec<ModSourceSearchResult>, 
     Ok(results)
 }
 
-fn allowed_source(url: &Url) -> Option<&'static str> {
+fn allowed_source(url: &Url) -> Option<SourceProfile> {
     if url.scheme() != "https" {
         return None;
     }
     let host = url.host_str()?.to_ascii_lowercase();
     match host.as_str() {
-        "nexusmods.com" | "www.nexusmods.com" => Some("Nexus Mods"),
-        "moddb.com" | "www.moddb.com" => Some("Mod DB"),
-        "github.com" => Some("GitHub"),
-        "curseforge.com" | "www.curseforge.com" => Some("CurseForge"),
+        "nexusmods.com" | "www.nexusmods.com" if nexus::parse_mod_id_from_url(url).is_some() => {
+            Some(source_profile(
+                "Nexus Mods",
+                "modPage",
+                "MOD 页面",
+                "nexusApiOrBrowser",
+                "Nexus API 或浏览器",
+                "配置 Nexus Key 后可读取官方文件列表；下载权限取决于会员类型。",
+            ))
+        }
+        "moddb.com" | "www.moddb.com" if has_path_prefix(url, "mods") => Some(source_profile(
+            "Mod DB",
+            "modPage",
+            "MOD 页面",
+            "browserOnly",
+            "仅浏览器打开",
+            "Acumod 不自动下载该站文件。",
+        )),
+        "github.com" if has_at_least_path_segments(url, 2) => Some(source_profile(
+            "GitHub",
+            "repository",
+            "代码仓库",
+            "browserOnly",
+            "仅浏览器打开",
+            "请在仓库发布页核对版本和安装说明。",
+        )),
+        "curseforge.com" | "www.curseforge.com" if has_at_least_path_segments(url, 2) => {
+            Some(source_profile(
+                "CurseForge",
+                "modPage",
+                "MOD 页面",
+                "browserOnly",
+                "仅浏览器打开",
+                "Acumod 不自动下载该站文件。",
+            ))
+        }
+        "caimogu.cc" | "www.caimogu.cc" | "caimogu.org" | "www.caimogu.org"
+            if is_caimogu_post(url) =>
+        {
+            Some(source_profile(
+                "踩蘑菇",
+                "modPage",
+                "MOD 页面",
+                "browserOnly",
+                "仅浏览器打开",
+                "下载可能需要登录或满足站点权限，请在原页面操作。",
+            ))
+        }
+        "bilibili.com" | "www.bilibili.com" if is_bilibili_content(url) => Some(source_profile(
+            "哔哩哔哩",
+            "videoShare",
+            "视频或动态分享",
+            "browserOnly",
+            "仅浏览器打开",
+            "这是发现和演示来源，不代表页面内一定提供可直接下载的 MOD。",
+        )),
+        "mod.3dmgame.com" if is_3dm_mod_page(url) => Some(source_profile(
+            "3DM MOD 站",
+            "modPage",
+            "MOD 页面",
+            "browserOnly",
+            "仅浏览器打开",
+            "下载可能需要站点登录或专用客户端，请在原页面操作。",
+        )),
+        "dl.3dmgame.com" if is_3dm_download_page(url) => Some(source_profile(
+            "3DM 下载站",
+            "modPage",
+            "MOD 页面",
+            "browserOnly",
+            "仅浏览器打开",
+            "Acumod 不解析页面下载按钮，请在原页面手动下载。",
+        )),
         _ => None,
     }
+}
+
+fn source_profile(
+    name: &'static str,
+    kind: &'static str,
+    kind_label: &'static str,
+    access_mode: &'static str,
+    access_mode_label: &'static str,
+    access_note: &'static str,
+) -> SourceProfile {
+    SourceProfile {
+        name,
+        kind,
+        kind_label,
+        access_mode,
+        access_mode_label,
+        access_note,
+    }
+}
+
+fn path_segments(url: &Url) -> Vec<&str> {
+    url.path_segments()
+        .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+        .unwrap_or_default()
+}
+
+fn has_at_least_path_segments(url: &Url, minimum: usize) -> bool {
+    path_segments(url).len() >= minimum
+}
+
+fn has_path_prefix(url: &Url, prefix: &str) -> bool {
+    path_segments(url)
+        .first()
+        .is_some_and(|value| *value == prefix)
+}
+
+fn is_caimogu_post(url: &Url) -> bool {
+    let segments = path_segments(url);
+    segments.len() == 2
+        && segments[0] == "post"
+        && segments[1].strip_suffix(".html").is_some_and(|id| {
+            !id.is_empty() && id.chars().all(|character| character.is_ascii_digit())
+        })
+}
+
+fn is_bilibili_content(url: &Url) -> bool {
+    let segments = path_segments(url);
+    match segments.as_slice() {
+        ["video", id, ..] => {
+            id.starts_with("BV")
+                || id
+                    .strip_prefix("av")
+                    .is_some_and(|value| value.chars().all(|character| character.is_ascii_digit()))
+        }
+        ["opus", id, ..] => id.chars().all(|character| character.is_ascii_digit()),
+        ["read", id, ..] => id
+            .strip_prefix("cv")
+            .is_some_and(|value| value.chars().all(|character| character.is_ascii_digit())),
+        _ => false,
+    }
+}
+
+fn is_3dm_mod_page(url: &Url) -> bool {
+    let segments = path_segments(url);
+    matches!(segments.as_slice(), ["mod", id, ..] if id.chars().all(|character| character.is_ascii_digit()))
+}
+
+fn is_3dm_download_page(url: &Url) -> bool {
+    let segments = path_segments(url);
+    matches!(segments.as_slice(), ["patch", file, ..]
+        if file.strip_suffix(".html").is_some_and(|id| id.chars().all(|character| character.is_ascii_digit())))
 }
 
 fn normalized_public_url(url: &Url) -> String {
@@ -194,6 +362,7 @@ fn normalized_public_url(url: &Url) -> String {
     }
     let mut normalized = url.clone();
     normalized.set_fragment(None);
+    normalized.set_query(None);
     normalized.to_string()
 }
 
@@ -262,5 +431,41 @@ mod tests {
             results[0].url,
             "https://www.nexusmods.com/monsterhunterworld/mods/42"
         );
+    }
+
+    #[test]
+    fn accepts_specific_domestic_source_pages_and_labels_their_roles() {
+        let results = parse_and_validate_results(
+            r#"{"results":[
+                {"title":"踩蘑菇 MOD","url":"https://www.caimogu.cc/post/4814.html","author":"A","summary":"S"},
+                {"title":"B站分享","url":"https://www.bilibili.com/video/BV16S411K7zZ/?spm_id_from=333","author":"B","summary":"S"},
+                {"title":"3DM MOD","url":"https://mod.3dmgame.com/mod/197740","author":"C","summary":"S"}
+            ]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].source, "踩蘑菇");
+        assert_eq!(results[0].source_kind, "modPage");
+        assert_eq!(results[1].source_kind, "videoShare");
+        assert_eq!(
+            results[1].url,
+            "https://www.bilibili.com/video/BV16S411K7zZ/"
+        );
+        assert_eq!(results[2].source, "3DM MOD 站");
+    }
+
+    #[test]
+    fn rejects_domestic_home_search_and_category_pages() {
+        let result = parse_and_validate_results(
+            r#"{"results":[
+                {"title":"首页","url":"https://www.caimogu.cc/","author":"","summary":""},
+                {"title":"搜索页","url":"https://search.bilibili.com/all?keyword=MHW%20MOD","author":"","summary":""},
+                {"title":"分类页","url":"https://dl.3dmgame.com/patch/mhwmod.html","author":"","summary":""},
+                {"title":"伪造域名","url":"https://caimogu.cc.example.com/post/4814.html","author":"","summary":""}
+            ]}"#,
+        );
+
+        assert!(result.is_err());
     }
 }

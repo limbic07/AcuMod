@@ -343,7 +343,8 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 
 当前实现细节：
 
-- `search_mod_sources` 使用 DeepSeek 官方服务端联网搜索，只允许 Nexus Mods、Mod DB、GitHub 和 CurseForge 页面；Rust 再次验证 HTTPS、域名和 MHW Nexus 页面路径，其他站点只输出可点击链接。
+- `search_mod_sources` 使用 DeepSeek 官方服务端联网搜索，当前允许 Nexus Mods、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge；Rust 再次验证 HTTPS、精确域名和具体内容页面路径，首页、搜索页、分类页及伪造子域名不会进入结果。
+- 搜索结果区分“MOD 页面”“视频或动态分享”“代码仓库”，并标注“Nexus API 或浏览器”“仅浏览器打开”。踩蘑菇和 3DM 不模拟登录或下载，哔哩哔哩只用于发现和演示具体 MOD，不能冒充可安装文件。
 - `get_nexus_mod_files` 通过 Nexus 官方 API 读取 MOD 与最多 100 个最新/主要文件；设置页只显示 API Key 脱敏状态，并可验证账户和 Premium 权限。
 - `create_nexus_download_plan` 只接受已经明确选择的 `modId + fileId`。确认时重新读取远端文件状态，下载链接不进入模型上下文、不保存到聊天记录。
 - 下载写入 `AcumodData/mods/staging/downloads/*.part`，使用统一后台任务条显示字节进度；完整下载后才改为归档文件并调用现有 `install_mod_from_archive_with_progress`。

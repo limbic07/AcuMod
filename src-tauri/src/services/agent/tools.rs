@@ -301,7 +301,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "search_mod_sources",
-                "description": "联网搜索 MHW MOD 候选页面。只返回经过 Rust 来源白名单校验的 Nexus Mods、Mod DB、GitHub 或 CurseForge 链接；不会下载文件。",
+                "description": "联网搜索 MHW MOD 候选页面。返回经过 Rust 页面规则校验的 Nexus Mods、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 或 CurseForge 链接，并标注来源类型和访问方式；不会下载文件。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -600,7 +600,12 @@ pub(crate) async fn execute_tool(
                     "summary": result.summary,
                     "nexusModId": result.nexus_mod_id,
                     "nexusVerified": nexus_verified,
-                    "updatedAtUnixSeconds": updated_at_unix_seconds
+                    "updatedAtUnixSeconds": updated_at_unix_seconds,
+                    "sourceKind": result.source_kind,
+                    "sourceKindLabel": result.source_kind_label,
+                    "accessMode": result.access_mode,
+                    "accessModeLabel": result.access_mode_label,
+                    "accessNote": result.access_note
                 }));
             }
             Ok(ToolExecution::query(

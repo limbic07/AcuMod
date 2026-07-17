@@ -471,7 +471,7 @@ FloatingAgentPanel
 ### 五项能力的服务边界
 
 - **冗余文件清理**：传统部署 service 只增加通用的“部署排除记录和重新协调”能力；扫描和 AI 分类仅由 Agent 主动调用。模型只看到候选相对路径等精简元数据，清理计划确认后由部署 service 删除游戏副本或恢复其他冲突所有者，本地 MOD 库原始副本始终保留。
-- **联网搜索与安装**：新增来源适配层，Nexus 由官方 API adapter 负责，其他站点首期只返回可验证的外部链接。DeepSeek Chat Completions 负责选择固定工具和整理候选，不充当浏览器、下载器或站点抓取器。
+- **联网搜索与安装**：新增来源适配层，Nexus 由官方 API adapter 负责；踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge 只返回通过站点规则校验的外部链接。结果携带来源类型和访问方式，DeepSeek Chat Completions 只负责选择固定工具和整理候选，不充当浏览器、下载器或站点抓取器。
 - **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
 - **MOD 知识分析**：知识条目以 MOD ID、来源、版本/哈希、路径特征和文本来源为边界。精确冲突与部署状态继续查询工作区快照，检索文本只用于解释和诊断建议。
 - **游戏知识问答**：复用同一检索接口但使用独立 `game` 命名空间。素材、技能等精确数据来自版本化结构化索引，攻略和配装资料必须保留来源、版本与适用条件。
@@ -542,7 +542,7 @@ Nexus 下载执行链路：
 ```text
 search_mod_sources
   -> DeepSeek 官方联网搜索
-  -> Rust HTTPS/域名/MHW 页面校验
+  -> Rust HTTPS/精确域名/具体内容页面校验与来源分类
   -> get_nexus_mod_files（官方 API）
   -> create_nexus_download_plan
   -> 用户确认
@@ -552,6 +552,8 @@ search_mod_sources
 ```
 
 Nexus Key 使用独立的 Windows Credential Manager 条目；开发环境可用 `NEXUS_API_KEY`。普通会员没有 API 直接下载权限时只返回页面链接，当前实现不接收或伪造网页下载所需的临时参数。
+
+国内来源边界：踩蘑菇只接受 `/post/<数字>.html` 帖子，3DM 只接受具体 MOD 或数字补丁页面，哔哩哔哩只接受具体视频、动态或专栏。上述来源统一通过系统浏览器打开，不解析登录态、积分、私信、评论区、网盘链接或站点下载按钮。
 
 外部接口依据（核对于 2026-07-17）：
 

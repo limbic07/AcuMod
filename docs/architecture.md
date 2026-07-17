@@ -434,15 +434,17 @@ MVP 先使用 JSON 文件保存配置、MOD 元数据、启用状态、排序和
 
 AI Agent 不是第二套 MOD 管理器。它只负责理解自然语言、查询受控数据和生成操作草案，不直接操作文件系统，也不能把任意字符串转换为 Tauri command、路径或 shell 命令。
 
+AI Agent 是完全可选模块，严格遵守单向依赖：`services/agent` 可以调用传统查询、预览和执行 service，传统导入、部署、冲突、改绑和存储 service 不得导入 Agent 模块，也不得等待 DeepSeek 或网络结果。用户未配置访问密钥、断网或从不打开悬浮助手时，传统管理器行为必须与未实现 AI 时一致。
+
 ### 推荐链路
 
 ```text
 FloatingAgentPanel
   -> src/api/agent.ts typed invoke wrapper
   -> commands/agent.rs
-  -> services/agent/orchestrator.rs
-  -> deepseek_client.rs（DeepSeek V4 Chat Completions）
-  -> tool_registry.rs（固定工具白名单）
+  -> services/agent/mod.rs（会话和单 turn 协调）
+  -> services/agent/deepseek.rs（DeepSeek V4 Chat Completions）
+  -> services/agent/tools.rs（固定工具白名单）
   -> 既有查询 service 或 OperationPlan 预览 service
   -> AgentTurn / AgentActionPlan DTO
   -> 悬浮窗口展示结果或待确认计划
@@ -454,17 +456,26 @@ FloatingAgentPanel
 
 ### Rust 模块边界
 
-建议新增：
+当前模块：
 
 - `commands/agent.rs`：设置读取、连接测试、发起对话、确认或拒绝计划等 Tauri 边界。
-- `services/agent/orchestrator.rs`：维护单次对话的模型调用和工具循环，不包含 MOD 文件操作实现。
-- `services/agent/deepseek_client.rs`：封装 DeepSeek V4 请求、流式 SSE 解析、工具调用消息和错误转换；项目不设计多供应商抽象。
-- `services/agent/tool_registry.rs`：声明允许模型调用的工具、严格参数 schema 和 Rust handler。
-- `services/agent/context.rs`：从工作区快照和术语索引中裁剪最小上下文。
-- `services/agent/plans.rs`：保存短时有效的待确认计划，并在执行前重新校验。
-- `models/agent.rs`：`AgentTurn`、`AgentEvent`、`AgentActionPlan`、`AgentSettings` 等 DTO。
+- `services/agent/mod.rs`：保存内存会话、协调单次 turn、管理 DeepSeek 设置和 Windows 凭据，不包含 MOD 文件操作实现。
+- `services/agent/deepseek.rs`：封装 DeepSeek V4 请求、流式 SSE 解析、工具调用消息和错误转换；项目不设计多供应商抽象。
+- `services/agent/tools.rs`：声明允许模型调用的工具、严格参数 schema、分页和 Rust handler。
+
+后续按实际复杂度在 `services/agent/` 下增加 `plans.rs`、`knowledge.rs` 和 `sources/` 等模块，分别承担短时计划、知识检索和联网来源适配；不要预先拆出没有独立职责的空文件。Agent DTO 继续靠近该模块维护，只有出现跨业务复用时再迁移到公共模型目录。
 
 现有 `mod_library`、冲突、模型改绑和任务 service 继续拥有业务规则。Agent handler 只能调用这些 service 的查询、预览和执行入口，不能复制一套部署逻辑。
+
+### 五项能力的服务边界
+
+- **冗余文件清理**：传统部署 service 只增加通用的“部署排除记录和重新协调”能力；扫描和 AI 分类仅由 Agent 主动调用。模型只看到候选相对路径等精简元数据，清理计划确认后由部署 service 删除游戏副本或恢复其他冲突所有者，本地 MOD 库原始副本始终保留。
+- **联网搜索与安装**：新增来源适配层，Nexus 由官方 API adapter 负责，其他站点首期只返回可验证的外部链接。DeepSeek Chat Completions 负责选择固定工具和整理候选，不充当浏览器、下载器或站点抓取器。
+- **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
+- **MOD 知识分析**：知识条目以 MOD ID、来源、版本/哈希、路径特征和文本来源为边界。精确冲突与部署状态继续查询工作区快照，检索文本只用于解释和诊断建议。
+- **游戏知识问答**：复用同一检索接口但使用独立 `game` 命名空间。素材、技能等精确数据来自版本化结构化索引，攻略和配装资料必须保留来源、版本与适用条件。
+
+知识检索第一阶段采用结构化筛选加全文检索，不预设向量数据库。只有语义召回质量确实不足且数据来源、包体和更新机制明确后，才评估本地向量索引。MOD README、网页文本和社区攻略均作为不可信引用数据注入上下文，不能成为 system 指令或工具参数来源。
 
 建议的首批 Tauri command：
 
@@ -485,6 +496,9 @@ FloatingAgentPanel
 - `get_enabled_conflicts`：查询当前已启用冲突组及优先级。
 - `lookup_mhw_terms`：从本地简中/繁中游戏文本和 ID 索引查询术语。
 - `get_game_directory_status`：只返回是否已配置和是否有效，不向模型发送完整本地路径。
+- `scan_mod_cleanup_candidates`：从全部已安装 MOD 中返回可能为预览图、说明或教程的候选元数据，不修改文件。
+- `search_mod_knowledge` / `search_game_knowledge`：分别查询带来源的 MOD 与游戏知识片段。
+- `search_mod_sources`：通过固定来源 adapter 查询 MOD 候选，不接受任意 URL。
 
 写操作工具只生成 `AgentActionPlan`，不能在工具调用阶段执行：
 
@@ -492,6 +506,8 @@ FloatingAgentPanel
 - 修改冲突组优先级。
 - 修改已支持类型的模型替换目标。
 - 接受 AI 翻译建议并写入用户可编辑名称或备注。
+- 应用或恢复一组已确认的部署排除项。
+- 下载并导入用户已选择的 Nexus 文件。
 
 每个计划至少包含 `planId`、操作枚举、目标稳定 ID、中文摘要、警告、状态版本、过期时间和 `requiresConfirmation=true`。用户确认后，Rust 使用当前 manifest 和工作区快照重新生成实际 `OperationPlan`；目标已卸载、状态已变化或计划过期时拒绝执行并要求重新生成。AI 发起的所有写操作统一确认，即使传统 UI 对某些低风险操作可以直接执行。
 
@@ -507,15 +523,17 @@ AI 文本请求使用独立的异步状态，不占用全局文件任务锁；�
 
 ### 上下文和会话
 
-- 不把整个 MOD 库、文件清单或游戏目录一次性发送给模型。先在 Rust 本地查询，再返回最多 30 条精简结果；超出时要求用户缩小条件。
+- 不把整个 MOD 库、文件清单或游戏目录一次性发送给模型。先在 Rust 本地筛选并分页；普通查询只返回完成回答所需的精简结果，用户明确要求完整列表时按 `nextOffset` 查询到末页。
 - 默认只发送稳定 ID、显示名、分类、启用状态、替换摘要和冲突数量，不发送本地绝对路径、文件内容、API Key 或完整日志。
 - MHW 术语通过 `lookup_mhw_terms` 按需查询，不把完整 ID 表塞进 system prompt。
+- 清理分析默认只发送候选文件的 MOD ID、相对路径、扩展名、大小和部署状态；不上传图片、二进制文件或整个 MOD 压缩包。
+- 知识问答只发送命中的最小片段及来源元数据，`mods` 与 `game` 两个知识域不得混成无来源的长上下文。
 - 第一版只保存当前运行期间的会话，不把聊天记录持久化；设置中后续再增加可选历史记录。
 - DeepSeek API Key 应保存到 Windows Credential Manager。开发阶段可使用进程环境变量 `DEEPSEEK_API_KEY`，禁止写入 `AppData/config.json` 或 `AcumodData/`。
 
 ### Nexus Mods 边界
 
-Nexus 下载继续先实现传统 UI 的账号验证、搜索、文件选择、下载和导入桥接，再向 Agent 暴露只读搜索工具和待确认下载计划。Nexus v3 是当前活跃 API；公开发行前需要按官方流程注册应用，开发期个人 API Key 只用于测试。Agent 不保存临时下载链接，不抓取网页代替 API，也不绕过会员或下载权限。
+Nexus 搜索和下载由独立 Rust service 实现，不能写在模型工具循环中。该 service 可由 Agent 的待确认计划调用，传统管理器本身不依赖 Agent；后续是否增加独立下载页面不影响此边界。Nexus v3 是当前活跃 API；公开发行前需要按官方流程注册应用，开发期个人 API Key 只用于测试。Agent 不保存临时下载链接，不抓取网页代替 API，也不绕过会员或下载权限。
 
 外部接口依据（核对于 2026-07-17）：
 

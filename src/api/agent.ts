@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { ModArchiveImportOutcome } from "./modLibrary";
 
 export type DeepSeekModel = "v4Flash" | "v4Pro";
 
@@ -8,6 +9,9 @@ export interface AgentSettings {
   apiKeyConfigured: boolean;
   apiKeyHint: string | null;
   apiKeySource: "credentialManager" | "environment" | null;
+  nexusApiKeyConfigured: boolean;
+  nexusApiKeyHint: string | null;
+  nexusApiKeySource: "credentialManager" | "environment" | null;
 }
 
 export interface AgentConnectionResult {
@@ -30,7 +34,8 @@ export interface AgentActionPlan {
     | "conflictOrder"
     | "modelRemap"
     | "cleanupExclusions"
-    | "cleanupRestore";
+    | "cleanupRestore"
+    | "nexusDownloadInstall";
   title: string;
   summary: string;
   stateVersion: string;
@@ -72,6 +77,13 @@ export interface AgentActionResult {
   succeededCount: number;
   failedCount: number;
   warnings: string[];
+  archiveImport: ModArchiveImportOutcome | null;
+}
+
+export interface NexusConnectionResult {
+  userName: string;
+  isPremium: boolean;
+  message: string;
 }
 
 export type AgentEventKind =
@@ -118,6 +130,18 @@ export function deleteDeepSeekApiKey(): Promise<AgentSettings> {
 
 export function testAgentConnection(): Promise<AgentConnectionResult> {
   return invoke<AgentConnectionResult>("test_agent_connection");
+}
+
+export function setNexusApiKey(apiKey: string): Promise<AgentSettings> {
+  return invoke<AgentSettings>("set_nexus_api_key", { apiKey });
+}
+
+export function deleteNexusApiKey(): Promise<AgentSettings> {
+  return invoke<AgentSettings>("delete_nexus_api_key");
+}
+
+export function testNexusConnection(): Promise<NexusConnectionResult> {
+  return invoke<NexusConnectionResult>("test_nexus_connection");
 }
 
 /** Channel 保证同一轮流式片段有序到达，前端不接触 DeepSeek 原始 SSE。 */

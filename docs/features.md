@@ -333,13 +333,22 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 支持恢复刚才、指定 MOD 或全部排除文件；启停、一键还原、改绑和快照更新都必须识别排除记录。
 - AI 不可用或用户不发起扫描时不运行任何清理逻辑，也不影响传统管理器。
 
-### AI Slice 4：联网搜索与 Nexus 安装
+### AI Slice 4：联网搜索与 Nexus 安装（已完成实现，待手动验收）
 
 - 建立不依赖模型的来源 adapter：Nexus 返回结构化数据，其他网站第一阶段只提供可验证的页面链接并由系统浏览器打开。
 - Agent 使用 MHW 术语扩展查询，展示来源、标题、作者、更新时间、摘要和文件候选；搜索内容始终视为不可信输入。
 - Nexus 使用用户授权凭据；选择具体文件后生成下载计划，确认后由 Rust 下载到暂存目录并展示真实进度。
-- 完成响应、大小和可用哈希校验后，复用现有压缩包识别、分支选择、导入与冲突检测；下载完成不等于自动启用。
+- 完成 HTTPS 来源、响应大小、实际下载长度和压缩包类型校验后，复用现有压缩包识别、分支选择、导入与冲突检测；Nexus 当前文件接口未提供可依赖的内容哈希，因此不伪造哈希校验。下载完成不等于自动启用。
 - 验收覆盖无结果、超时、限流、授权失败、下载中断、校验失败、多分支和重复 MOD。
+
+当前实现细节：
+
+- `search_mod_sources` 使用 DeepSeek 官方服务端联网搜索，只允许 Nexus Mods、Mod DB、GitHub 和 CurseForge 页面；Rust 再次验证 HTTPS、域名和 MHW Nexus 页面路径，其他站点只输出可点击链接。
+- `get_nexus_mod_files` 通过 Nexus 官方 API 读取 MOD 与最多 100 个最新/主要文件；设置页只显示 API Key 脱敏状态，并可验证账户和 Premium 权限。
+- `create_nexus_download_plan` 只接受已经明确选择的 `modId + fileId`。确认时重新读取远端文件状态，下载链接不进入模型上下文、不保存到聊天记录。
+- 下载写入 `AcumodData/mods/staging/downloads/*.part`，使用统一后台任务条显示字节进度；完整下载后才改为归档文件并调用现有 `install_mod_from_archive_with_progress`。
+- 单一内容压缩包安装完成后删除下载归档；多分支归档保留到用户完成分支选择，随后同时清理导入暂存目录和下载归档。
+- Nexus 普通会员只能打开页面手动下载；Acumod 不绕过 Nexus 权限，也暂不接收网页 `nxm` 链接中的临时参数。
 
 ### AI Slice 5：MOD 知识分析与诊断
 
@@ -357,7 +366,7 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 配装前根据需要询问武器、游戏进度、已有装饰珠和生存/舒适/输出偏好，再给出有条件的候选方案。
 - 验收覆盖准确素材问答、简繁官方名称、开荒/毕业/缺少关键装饰珠等配装条件，以及无来源时拒绝编造。
 
-AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> agent command -> DeepSeek V4 client -> 只读工具 -> DTO/流式事件 -> 悬浮窗口`。AI Slice 2 已完成，写操作链路为：`DeepSeek 计划工具 -> Rust AgentActionPlan -> planReady -> 用户确认 -> 状态版本复核 -> OperationCoordinator -> 传统 mod_library service -> 工作区快照刷新`。AI Slice 3 已完成实现，清理链路为：`用户主动扫描 -> Rust 本地候选筛选 -> DeepSeek 完整分类 -> cleanupReviewReady -> 用户逐项选择 -> 短时计划 -> 传统部署排除与冲突恢复 service`。当前先手动验收 Slice 3；Slice 4 至 Slice 6 尚未开始。
+AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> agent command -> DeepSeek V4 client -> 只读工具 -> DTO/流式事件 -> 悬浮窗口`。AI Slice 2 已完成，写操作链路为：`DeepSeek 计划工具 -> Rust AgentActionPlan -> planReady -> 用户确认 -> 状态版本复核 -> OperationCoordinator -> 传统 mod_library service -> 工作区快照刷新`。AI Slice 3 已完成实现，清理链路为：`用户主动扫描 -> Rust 本地候选筛选 -> DeepSeek 完整分类 -> cleanupReviewReady -> 用户逐项选择 -> 短时计划 -> 传统部署排除与冲突恢复 service`。AI Slice 4 已完成实现，联网安装链路为：`用户需求 -> DeepSeek 联网搜索 -> Rust 来源校验 -> Nexus 官方文件列表 -> 短时下载计划 -> 用户确认 -> 下载暂存与真实进度 -> 传统压缩包导入/分支选择`。当前手动验收 Slice 3 和 Slice 4；Slice 5、Slice 6 尚未开始。
 
 ## MVP 已完成任务顺序
 

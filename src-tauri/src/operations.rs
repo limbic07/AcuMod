@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::{
     env,
     fs::{self, OpenOptions},
@@ -233,6 +234,34 @@ where
         reporter.finish(false, message.clone());
         message
     })?
+}
+
+/// 运行包含网络等待的后台任务，并继续占用统一任务协调器。
+///
+/// 网络下载不能放进 `spawn_blocking`，但仍需与部署、卸载等写操作串行，
+/// 因此单独提供异步入口并复用相同的进度与耗时记录。
+pub async fn run_async_operation<T, F, Fut>(
+    app: AppHandle,
+    kind: &'static str,
+    title: &'static str,
+    operation: F,
+) -> Result<T, String>
+where
+    F: FnOnce(OperationReporter) -> Fut,
+    Fut: Future<Output = Result<T, String>>,
+{
+    let coordinator = app.state::<OperationCoordinator>().inner().clone();
+    let lease = coordinator.begin(app, kind, title)?;
+    let reporter = lease.reporter.clone();
+    reporter.report("准备中", 0, None, None);
+
+    let result = operation(reporter.clone()).await;
+    match &result {
+        Ok(_) => reporter.finish(true, "任务完成。".to_string()),
+        Err(error) => reporter.finish(false, error.clone()),
+    }
+    drop(lease);
+    result
 }
 
 fn append_timing_log(kind: &str, title: &str, success: bool, elapsed_millis: u128, message: &str) {

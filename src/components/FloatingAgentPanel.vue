@@ -17,6 +17,7 @@ import {
   type AgentSettings,
 } from "../api/agent";
 import { openModCleanupCandidateFolder } from "../api/modLibrary";
+import type { ModArchiveImportOutcome } from "../api/modLibrary";
 
 interface ChatMessage {
   id: number;
@@ -51,6 +52,7 @@ const emit = defineEmits<{
   close: [];
   openSettings: [];
   workspaceChanged: [];
+  archiveImportReady: [outcome: ModArchiveImportOutcome];
 }>();
 
 const settings = ref<AgentSettings | null>(null);
@@ -399,7 +401,11 @@ async function confirmPlan(item: VisibleActionPlan) {
     const result = await confirmAgentActionPlan(item.plan.planId);
     item.result = result;
     item.status = result.status;
-    emit("workspaceChanged");
+    if (result.archiveImport?.status === "ambiguous") {
+      emit("archiveImportReady", result.archiveImport);
+    } else {
+      emit("workspaceChanged");
+    }
   } catch (value) {
     // 后端计划在确认时即被消费；状态漂移或业务失败后必须重新生成，不能重复提交旧计划。
     item.status = "failed";
@@ -486,7 +492,7 @@ watch(
       <div ref="messageList" class="message-list" aria-live="polite">
         <div v-if="messages.length === 0" class="welcome-message">
           <strong>DeepSeek V4 已就绪</strong>
-          <span>可以询问已安装 MOD、启用状态、冲突和替换目标。</span>
+          <span>可以查询本地 MOD，也可以直接描述想要的 MOD，由助手联网搜索。</span>
           <div class="agent-quick-actions">
             <button type="button" @click="sendQuickPrompt('扫描全部已安装 MOD 中可以清理的图片、说明和教程文件')">
               扫描可清理文件
@@ -687,7 +693,7 @@ watch(
           rows="3"
           maxlength="4000"
           :disabled="isSending"
-          placeholder="询问本地 MOD 或 MHW 游戏术语"
+          placeholder="询问本地 MOD，或描述想找的 MHW MOD"
           @keydown.enter.exact.prevent="sendMessage"
         />
         <button type="submit" :disabled="isSending || !input.trim()">

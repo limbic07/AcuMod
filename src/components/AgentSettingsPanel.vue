@@ -2,21 +2,27 @@
 import { onMounted, ref } from "vue";
 import {
   deleteDeepSeekApiKey,
+  deleteNexusApiKey,
   getAgentSettings,
   saveAgentModel,
   setDeepSeekApiKey,
+  setNexusApiKey,
   testAgentConnection,
+  testNexusConnection,
   type AgentSettings,
   type DeepSeekModel,
 } from "../api/agent";
 
 const settings = ref<AgentSettings | null>(null);
 const apiKey = ref("");
+const nexusApiKey = ref("");
 const error = ref("");
 const resultMessage = ref("");
 const isLoading = ref(false);
 const isSavingKey = ref(false);
 const isTesting = ref(false);
+const isSavingNexusKey = ref(false);
+const isTestingNexus = ref(false);
 
 function visibleError(value: unknown) {
   return value instanceof Error ? value.message : String(value);
@@ -91,6 +97,51 @@ async function testConnection() {
   }
 }
 
+async function saveNexusKey() {
+  isSavingNexusKey.value = true;
+  error.value = "";
+  resultMessage.value = "";
+  try {
+    settings.value = await setNexusApiKey(nexusApiKey.value);
+    nexusApiKey.value = "";
+    resultMessage.value = "Nexus API Key 已保存到 Windows 凭据管理器。";
+  } catch (value) {
+    error.value = visibleError(value);
+  } finally {
+    isSavingNexusKey.value = false;
+  }
+}
+
+async function removeNexusKey() {
+  isSavingNexusKey.value = true;
+  error.value = "";
+  resultMessage.value = "";
+  try {
+    settings.value = await deleteNexusApiKey();
+    resultMessage.value = settings.value.nexusApiKeyConfigured
+      ? "已删除凭据管理器中的 Nexus Key，环境变量仍在生效。"
+      : "Nexus API Key 已删除。";
+  } catch (value) {
+    error.value = visibleError(value);
+  } finally {
+    isSavingNexusKey.value = false;
+  }
+}
+
+async function testNexus() {
+  isTestingNexus.value = true;
+  error.value = "";
+  resultMessage.value = "";
+  try {
+    const result = await testNexusConnection();
+    resultMessage.value = `${result.message} 账户：${result.userName || "未返回名称"}`;
+  } catch (value) {
+    error.value = visibleError(value);
+  } finally {
+    isTestingNexus.value = false;
+  }
+}
+
 onMounted(() => {
   void loadSettings();
 });
@@ -156,6 +207,59 @@ onMounted(() => {
       </div>
     </form>
 
+    <section class="nexus-settings">
+      <div class="nexus-settings-heading">
+        <div>
+          <h3>Nexus Mods</h3>
+          <p>用于读取官方文件列表；Premium 账户可在确认计划后直接下载并导入。</p>
+        </div>
+        <button
+          type="button"
+          :disabled="isTestingNexus || !settings?.nexusApiKeyConfigured"
+          @click="testNexus"
+        >
+          {{ isTestingNexus ? "测试中" : "测试 Nexus" }}
+        </button>
+      </div>
+
+      <div v-if="settings" class="credential-status">
+        <span>Nexus Personal API Key</span>
+        <strong v-if="settings.nexusApiKeyConfigured">
+          {{ settings.nexusApiKeyHint }} ·
+          {{ settings.nexusApiKeySource === "environment" ? "环境变量" : "Windows 凭据" }}
+        </strong>
+        <strong v-else>未配置</strong>
+      </div>
+
+      <form class="api-key-form" @submit.prevent="saveNexusKey">
+        <label for="nexus-api-key">Nexus Personal API Key</label>
+        <div>
+          <input
+            id="nexus-api-key"
+            v-model="nexusApiKey"
+            type="password"
+            autocomplete="off"
+            placeholder="输入 Nexus API Key"
+          />
+          <button type="submit" :disabled="isSavingNexusKey || !nexusApiKey.trim()">
+            {{ isSavingNexusKey ? "保存中" : "保存" }}
+          </button>
+          <button
+            v-if="settings?.nexusApiKeySource === 'credentialManager'"
+            type="button"
+            class="secondary-command"
+            :disabled="isSavingNexusKey"
+            @click="removeNexusKey"
+          >
+            删除
+          </button>
+        </div>
+      </form>
+      <p class="nexus-note">
+        Personal API Key 仅适合个人使用和开发测试。普通会员仍需打开 Nexus 页面手动下载。
+      </p>
+    </section>
+
     <p v-if="isLoading" class="settings-message">正在读取 AI 设置...</p>
     <p v-else-if="error" class="settings-message error">{{ error }}</p>
     <p v-else-if="resultMessage" class="settings-message success">{{ resultMessage }}</p>
@@ -207,6 +311,33 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(220px, 0.45fr) minmax(220px, 1fr);
   gap: 16px;
+}
+
+.nexus-settings {
+  display: grid;
+  gap: 14px;
+  padding-top: 18px;
+  border-top: 1px solid #dbe5e1;
+}
+
+.nexus-settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.nexus-settings-heading h3,
+.nexus-settings-heading p,
+.nexus-note {
+  margin: 0;
+}
+
+.nexus-settings-heading p,
+.nexus-note {
+  margin-top: 5px;
+  color: #61756f;
+  font-size: 0.84rem;
 }
 
 .agent-settings-grid label,

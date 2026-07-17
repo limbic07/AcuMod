@@ -1,5 +1,6 @@
 pub mod cleanup;
 mod deepseek;
+mod source_search;
 mod tools;
 
 use std::{
@@ -18,8 +19,11 @@ use serde::Serialize;
 use tauri::{ipc::Channel, AppHandle};
 
 use crate::{
-    operations::{run_blocking_operation, OperationReporter},
-    services::mod_library::{self, BatchModAction, ModWorkspaceSnapshot},
+    operations::{run_async_operation, run_blocking_operation, OperationReporter},
+    services::{
+        mod_library::{self, BatchModAction, ModWorkspaceSnapshot},
+        nexus::{self, NexusDownloadTarget},
+    },
     storage::config::{self, DeepSeekModel},
 };
 
@@ -62,6 +66,9 @@ pub struct AgentSettings {
     pub api_key_configured: bool,
     pub api_key_hint: Option<String>,
     pub api_key_source: Option<String>,
+    pub nexus_api_key_configured: bool,
+    pub nexus_api_key_hint: Option<String>,
+    pub nexus_api_key_source: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -104,7 +111,7 @@ pub struct AgentActionTarget {
     pub detail: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentActionResult {
     pub plan_id: String,
@@ -114,6 +121,7 @@ pub struct AgentActionResult {
     pub succeeded_count: usize,
     pub failed_count: usize,
     pub warnings: Vec<String>,
+    pub archive_import: Option<mod_library::ModArchiveImportOutcome>,
 }
 
 #[derive(Clone)]
@@ -137,6 +145,9 @@ enum AgentPlanAction {
     },
     CleanupRestore {
         candidate_ids: Vec<String>,
+    },
+    NexusDownloadInstall {
+        target: NexusDownloadTarget,
     },
 }
 
@@ -306,6 +317,7 @@ impl AgentCoordinator {
             succeeded_count: 0,
             failed_count: 0,
             warnings: Vec::new(),
+            archive_import: None,
         })
     }
 
@@ -334,13 +346,31 @@ impl AgentCoordinator {
 pub fn get_agent_settings(app: &AppHandle) -> Result<AgentSettings, String> {
     let model = config::load(app)?.deep_seek_model;
     let credential = load_deepseek_api_key()?;
+    let nexus_credential = nexus::credential_status()?;
     Ok(AgentSettings {
         model,
         model_api_name: model.api_name().to_string(),
         api_key_configured: credential.is_some(),
         api_key_hint: credential.as_ref().map(|value| api_key_hint(&value.key)),
         api_key_source: credential.map(|value| value.source),
+        nexus_api_key_configured: nexus_credential.configured,
+        nexus_api_key_hint: nexus_credential.hint,
+        nexus_api_key_source: nexus_credential.source,
     })
+}
+
+pub fn set_nexus_api_key(app: &AppHandle, api_key: String) -> Result<AgentSettings, String> {
+    nexus::set_api_key(api_key)?;
+    get_agent_settings(app)
+}
+
+pub fn delete_nexus_api_key(app: &AppHandle) -> Result<AgentSettings, String> {
+    nexus::delete_api_key()?;
+    get_agent_settings(app)
+}
+
+pub async fn test_nexus_connection() -> Result<nexus::NexusConnectionResult, String> {
+    nexus::test_connection().await
 }
 
 pub fn save_agent_model(app: &AppHandle, model: DeepSeekModel) -> Result<AgentSettings, String> {
@@ -809,6 +839,45 @@ pub(crate) fn create_cleanup_restore_plan(
     coordinator.store_plan(plan)
 }
 
+pub(crate) fn create_nexus_download_plan(
+    app: &AppHandle,
+    coordinator: &AgentCoordinator,
+    target: NexusDownloadTarget,
+) -> Result<AgentActionPlan, String> {
+    let detail = format!(
+        "文件：{} · 版本 {} · {}",
+        target.file.file_name,
+        if target.file.version.is_empty() {
+            "未标注"
+        } else {
+            &target.file.version
+        },
+        human_file_size(target.file.size_bytes)
+    );
+    let plan = build_stored_plan(
+        app,
+        "下载并导入 Nexus MOD".to_string(),
+        "nexusDownloadInstall",
+        format!(
+            "将从 Nexus Mods 下载“{}”的已选文件，并交给 Acumod 现有压缩包导入流程。",
+            target.mod_info.name
+        ),
+        vec![AgentActionTarget {
+            mod_id: format!("nexus:{}:{}", target.mod_info.mod_id, target.file.file_id),
+            name: target.mod_info.name.clone(),
+            detail,
+        }],
+        vec![
+            format!("来源：{}", target.mod_info.page_url),
+            "下载完成后只导入本地 MOD 库，不会自动启用。".to_string(),
+            "压缩包存在多个内容分支时，会转到导入页由你选择，不会自行安装全部分支。".to_string(),
+        ],
+        false,
+        AgentPlanAction::NexusDownloadInstall { target },
+    )?;
+    coordinator.store_plan(plan)
+}
+
 pub async fn confirm_agent_action_plan(
     app: AppHandle,
     coordinator: AgentCoordinator,
@@ -825,7 +894,19 @@ pub async fn confirm_agent_action_plan(
         AgentPlanAction::ModelRemap { .. } => ("agentModelRemap", "正在应用 AI 模型改绑"),
         AgentPlanAction::CleanupExclude { .. } => ("agentCleanupApply", "正在应用 MOD 文件清理"),
         AgentPlanAction::CleanupRestore { .. } => ("agentCleanupRestore", "正在恢复 MOD 清理项"),
+        AgentPlanAction::NexusDownloadInstall { .. } => {
+            ("agentNexusDownload", "正在下载并导入 Nexus MOD")
+        }
     };
+    if matches!(&stored.action, AgentPlanAction::NexusDownloadInstall { .. }) {
+        let worker_app = app.clone();
+        return run_async_operation(app, kind, title, move |progress| async move {
+            let current_version = state_version_for_action(&worker_app, &stored.action)?;
+            validate_plan_state_version(&stored.public.state_version, &current_version)?;
+            execute_nexus_download_plan(&worker_app, stored, &progress).await
+        })
+        .await;
+    }
     let worker_app = app.clone();
     run_blocking_operation(app, kind, title, move |progress| {
         let current_version = state_version_for_action(&worker_app, &stored.action)?;
@@ -872,6 +953,7 @@ fn execute_stored_plan(
                 succeeded_count: result.succeeded_count,
                 failed_count: result.failed_count,
                 warnings,
+                archive_import: None,
             })
         }
         AgentPlanAction::ConflictOrder {
@@ -894,6 +976,7 @@ fn execute_stored_plan(
                 succeeded_count: 1,
                 failed_count: 0,
                 warnings: result.warnings,
+                archive_import: None,
             })
         }
         AgentPlanAction::ModelRemap {
@@ -912,6 +995,7 @@ fn execute_stored_plan(
                 succeeded_count: 1,
                 failed_count: 0,
                 warnings: Vec::new(),
+                archive_import: None,
             })
         }
         AgentPlanAction::CleanupExclude {
@@ -929,6 +1013,7 @@ fn execute_stored_plan(
                 succeeded_count: result.exclusion_count,
                 failed_count: 0,
                 warnings: result.warnings,
+                archive_import: None,
             })
         }
         AgentPlanAction::CleanupRestore { candidate_ids } => {
@@ -945,9 +1030,74 @@ fn execute_stored_plan(
                 succeeded_count: result.restored_exclusion_count,
                 failed_count: 0,
                 warnings: result.warnings,
+                archive_import: None,
             })
         }
+        AgentPlanAction::NexusDownloadInstall { .. } => {
+            Err("Nexus 下载计划必须通过异步后台任务执行。".to_string())
+        }
     }
+}
+
+async fn execute_nexus_download_plan(
+    app: &AppHandle,
+    stored: StoredAgentActionPlan,
+    progress: &OperationReporter,
+) -> Result<AgentActionResult, String> {
+    let public = stored.public;
+    let AgentPlanAction::NexusDownloadInstall { target } = stored.action else {
+        return Err("下载计划类型无效。".to_string());
+    };
+    let archive_path = nexus::download_archive(app, &target, progress).await?;
+    progress.report(
+        "正在识别下载的 MOD 压缩包",
+        0,
+        None,
+        Some(target.file.file_name.clone()),
+    );
+    let worker_app = app.clone();
+    let worker_archive_path = archive_path.to_string_lossy().into_owned();
+    let worker_progress = progress.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        mod_library::install_mod_from_archive_with_progress(
+            &worker_app,
+            worker_archive_path,
+            false,
+            &worker_progress,
+        )
+    })
+    .await
+    .map_err(|error| format!("Nexus MOD 导入任务失败：{error}"))?;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let _ = mod_library::remove_download_staging_file(app, &archive_path);
+            return Err(error);
+        }
+    };
+    let mut warnings = Vec::new();
+    if outcome.status != "ambiguous" {
+        if let Err(error) = mod_library::remove_download_staging_file(app, &archive_path) {
+            warnings.push(error);
+        }
+    }
+    let message = if outcome.status == "ambiguous" {
+        "下载完成，压缩包包含多个 MOD 内容分支，请在导入页选择。".to_string()
+    } else if outcome.status == "alreadyInstalled" {
+        "下载完成；相同 MOD 已在本地库中，没有重复安装。".to_string()
+    } else {
+        "Nexus MOD 已下载并导入本地库，当前保持未启用。".to_string()
+    };
+    Ok(AgentActionResult {
+        plan_id: public.plan_id,
+        status: "completed".to_string(),
+        title: public.title,
+        message,
+        succeeded_count: 1,
+        failed_count: 0,
+        warnings,
+        archive_import: Some(outcome),
+    })
 }
 
 fn build_stored_plan(
@@ -1105,6 +1255,14 @@ fn state_version_for_action(app: &AppHandle, action: &AgentPlanAction) -> Result
             ids.sort();
             format!("cleanup-restore:{}", ids.join(";"))
         }
+        AgentPlanAction::NexusDownloadInstall { target } => format!(
+            "nexus-download:{}:{}:{}:{}:{}",
+            target.mod_info.mod_id,
+            target.file.file_id,
+            target.file.file_name,
+            target.file.size_bytes,
+            target.file.uploaded_at_unix_seconds
+        ),
     };
     let mut hasher = DefaultHasher::new();
     material.hash(&mut hasher);
@@ -1225,6 +1383,18 @@ fn api_key_hint(api_key: &str) -> String {
     let suffix = api_key.chars().rev().take(4).collect::<Vec<_>>();
     let suffix = suffix.into_iter().rev().collect::<String>();
     format!("****{suffix}")
+}
+
+fn human_file_size(size_bytes: u64) -> String {
+    if size_bytes < 1024 {
+        format!("{size_bytes} B")
+    } else if size_bytes < 1024 * 1024 {
+        format!("{:.1} KB", size_bytes as f64 / 1024.0)
+    } else if size_bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", size_bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", size_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }
 
 #[cfg(test)]

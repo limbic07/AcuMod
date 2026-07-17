@@ -79,6 +79,7 @@ import {
   type ModConflictReport,
   type ModDeploymentConflict,
   type ModImportPreview,
+  type ModArchiveImportOutcome,
   type ModInstallResult,
   type ModLibraryStatus,
   type ModStateSyncResult,
@@ -1512,21 +1513,33 @@ async function installArchive() {
 
   try {
     const outcome = await installModFromArchive(archivePath.value, false);
-    installResult.value = outcome.installResult;
-    archiveError.value = "";
-    importPreview.value = outcome.preview;
-    candidateImportSourcePath.value = outcome.status === "ambiguous" ? outcome.sourcePath : "";
-    candidateOriginalSourcePath.value =
-      outcome.status === "ambiguous" ? outcome.originalArchivePath : null;
-    prepareCandidateSelection(outcome.preview, outcome.originalArchivePath);
-    await revealCandidateSelection(outcome.preview);
-    await loadModLibraryStatus();
-    await loadModViewsFromSnapshot();
+    await applyArchiveImportOutcome(outcome);
   } catch (error) {
     archiveError.value = userFacingError(error);
   } finally {
     isInstallingArchive.value = false;
   }
+}
+
+async function applyArchiveImportOutcome(outcome: ModArchiveImportOutcome) {
+  installResult.value = outcome.installResult;
+  archiveError.value = "";
+  importPreview.value = outcome.preview;
+  candidateImportSourcePath.value = outcome.status === "ambiguous" ? outcome.sourcePath : "";
+  candidateOriginalSourcePath.value =
+    outcome.status === "ambiguous" ? outcome.originalArchivePath : null;
+  prepareCandidateSelection(outcome.preview, outcome.originalArchivePath);
+  await revealCandidateSelection(outcome.preview);
+  await loadModLibraryStatus();
+  await loadModViewsFromSnapshot();
+}
+
+async function handleAgentArchiveImportReady(outcome: ModArchiveImportOutcome) {
+  // AI 下载只负责把归档交回传统导入链路；分支选择和游戏根目录确认仍由导入页负责。
+  isAgentPanelOpen.value = false;
+  activeView.value = "import";
+  archivePath.value = outcome.originalArchivePath;
+  await applyArchiveImportOutcome(outcome);
 }
 
 async function installSelectedCandidate() {
@@ -3104,6 +3117,7 @@ onBeforeUnmount(() => {
       @close="isAgentPanelOpen = false"
       @open-settings="activeView = 'settings'"
       @workspace-changed="handleAgentWorkspaceChanged"
+      @archive-import-ready="handleAgentArchiveImportReady"
     />
   </main>
 

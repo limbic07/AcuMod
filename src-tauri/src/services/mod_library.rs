@@ -56,6 +56,7 @@ pub struct ModLibraryStatus {
     pub installed_path: String,
     pub staging_path: String,
     pub import_staging_path: String,
+    pub download_staging_path: String,
     pub is_ready: bool,
     pub message: String,
 }
@@ -869,6 +870,7 @@ pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus
         installed_path: path_to_string(&paths.installed_path),
         staging_path: path_to_string(&paths.staging_path),
         import_staging_path: path_to_string(&paths.import_staging_path),
+        download_staging_path: path_to_string(&paths.download_staging_path),
         is_ready: true,
         message: "MOD library directories are ready.".to_string(),
     })
@@ -1496,11 +1498,16 @@ pub fn install_mod_branches_with_progress(
     })?;
     let should_cleanup_staging =
         original_source_path.is_some() && source.starts_with(&staging_root);
+    let download_staging_root = paths.download_staging_path.canonicalize().ok();
 
     let original_source = original_source_path
         .as_deref()
         .map(normalize_user_path)
         .unwrap_or_else(|| source.clone());
+    let should_cleanup_download = original_source_path.is_some()
+        && download_staging_root
+            .as_ref()
+            .is_some_and(|root| original_source.starts_with(root));
     let mut contexts = load_all_installed_manifests(&paths.installed_path)?;
     let mut results = Vec::new();
     let mut newly_installed_ids = Vec::new();
@@ -1616,6 +1623,15 @@ pub fn install_mod_branches_with_progress(
                 result
                     .message
                     .push_str(&format!(" 导入已完成，但暂存目录清理失败：{error}"));
+            }
+        }
+    }
+    if should_cleanup_download {
+        if let Err(error) = fs::remove_file(&original_source) {
+            if error.kind() != ErrorKind::NotFound {
+                result
+                    .message
+                    .push_str(&format!(" 下载归档清理失败：{error}"));
             }
         }
     }
@@ -9053,6 +9069,7 @@ struct LibraryPaths {
     workspace_snapshot_path: PathBuf,
     staging_path: PathBuf,
     import_staging_path: PathBuf,
+    download_staging_path: PathBuf,
 }
 
 fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
@@ -9063,6 +9080,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
     let workspace_snapshot_path = mods_path.join("workspace-snapshot.json");
     let staging_path = mods_path.join("staging");
     let import_staging_path = staging_path.join("imports");
+    let download_staging_path = staging_path.join("downloads");
 
     Ok(LibraryPaths {
         software_data_path,
@@ -9072,6 +9090,7 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
         workspace_snapshot_path,
         staging_path,
         import_staging_path,
+        download_staging_path,
     })
 }
 
@@ -9081,12 +9100,84 @@ fn ensure_library_directories(paths: &LibraryPaths) -> Result<(), String> {
         &paths.installed_path,
         &paths.staging_path,
         &paths.import_staging_path,
+        &paths.download_staging_path,
     ] {
         fs::create_dir_all(path)
             .map_err(|error| format!("Could not create directory {}: {error}", path.display()))?;
     }
 
     Ok(())
+}
+
+/// 为受控下载创建位于 Acumod 暂存目录内的最终文件和 `.part` 路径。
+pub fn prepare_download_staging_archive(
+    app: &tauri::AppHandle,
+    file_stem: &str,
+    extension: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let extension = extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "zip" | "7z" | "rar") {
+        return Err("Nexus 文件不是 Acumod 支持的 ZIP、7Z 或 RAR 压缩包。".to_string());
+    }
+    let safe_stem = file_stem
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(96)
+        .collect::<String>();
+    let safe_stem = safe_stem.trim_matches('-');
+    if safe_stem.is_empty() {
+        return Err("无法生成下载暂存文件名。".to_string());
+    }
+    let final_path = paths
+        .download_staging_path
+        .join(format!("{safe_stem}.{extension}"));
+    let part_path = paths
+        .download_staging_path
+        .join(format!("{safe_stem}.{extension}.part"));
+    Ok((final_path, part_path))
+}
+
+/// 删除下载暂存文件前再次校验边界，避免网络元数据影响任意本地路径。
+pub fn remove_download_staging_file(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let root = paths
+        .download_staging_path
+        .canonicalize()
+        .map_err(|error| {
+            format!(
+                "无法确认下载暂存目录 {}：{error}",
+                paths.download_staging_path.display()
+            )
+        })?;
+    let normalized = if path.exists() {
+        path.canonicalize()
+            .map_err(|error| format!("无法确认下载暂存文件 {}：{error}", path.display()))?
+    } else {
+        path.to_path_buf()
+    };
+    if !normalized.starts_with(&root) {
+        return Err("拒绝清理 Acumod 下载暂存目录之外的文件。".to_string());
+    }
+    match fs::remove_file(&normalized) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "无法清理下载暂存文件 {}：{error}",
+            normalized.display()
+        )),
+    }
 }
 
 fn load_or_initialize_mod_category_store(paths: &LibraryPaths) -> Result<ModCategoryStore, String> {

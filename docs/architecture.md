@@ -214,7 +214,7 @@ AppData/
 
 MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装包时，需要确保软件目录对普通用户可写；如果安装到 `Program Files` 等受限目录，应提供 MOD 库位置设置或选择用户可写安装位置。
 
-`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`staging/downloads` 后续只保存 Nexus 下载中的 `.part` 文件和等待用户确认导入的归档。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
+`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`staging/downloads` 只保存 Nexus 下载中的 `.part` 文件和等待导入或分支选择的归档；普通归档导入完成后立即删除，多分支归档在选择完成后删除。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
 ## 狩技 MOD 盒子导入与自动状态同步
 
@@ -535,7 +535,23 @@ AI 文本请求使用独立的异步状态，不占用全局文件任务锁；�
 
 ### Nexus Mods 边界
 
-Nexus 搜索和下载由独立 Rust service 实现，不能写在模型工具循环中。该 service 可由 Agent 的待确认计划调用，传统管理器本身不依赖 Agent；后续是否增加独立下载页面不影响此边界。Nexus v3 是当前活跃 API；公开发行前需要按官方流程注册应用，开发期个人 API Key 只用于测试。Agent 不保存临时下载链接，不抓取网页代替 API，也不绕过会员或下载权限。
+Nexus 元数据和下载由独立 Rust `services/nexus.rs` 实现，不能写在模型工具循环中。该 service 可由 Agent 的待确认计划调用，传统管理器本身不依赖 Agent；后续是否增加独立下载页面不影响此边界。当前 Nexus v3 规范没有关键词搜索和直接下载接口，因此候选检索使用 DeepSeek 官方服务端搜索并由 Rust 校验固定来源；选定 Nexus 页面后，文件列表和 Premium 下载使用 Nexus 官方兼容 API。公开发行前需要按官方流程注册应用，开发期个人 API Key 只用于测试。Agent 不保存临时下载链接，不抓取网页代替 API，也不绕过会员或下载权限。
+
+Nexus 下载执行链路：
+
+```text
+search_mod_sources
+  -> DeepSeek 官方联网搜索
+  -> Rust HTTPS/域名/MHW 页面校验
+  -> get_nexus_mod_files（官方 API）
+  -> create_nexus_download_plan
+  -> 用户确认
+  -> services/nexus.rs 下载到 staging/downloads
+  -> mod_library::install_mod_from_archive_with_progress
+  -> 普通安装完成，或 App.vue 继续现有多分支选择
+```
+
+Nexus Key 使用独立的 Windows Credential Manager 条目；开发环境可用 `NEXUS_API_KEY`。普通会员没有 API 直接下载权限时只返回页面链接，当前实现不接收或伪造网页下载所需的临时参数。
 
 外部接口依据（核对于 2026-07-17）：
 

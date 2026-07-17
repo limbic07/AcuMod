@@ -3,9 +3,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import MarkdownIt from "markdown-it";
 import { nextTick, ref, watch } from "vue";
 import {
+  cancelAgentActionPlan,
   clearAgentSession,
+  confirmAgentActionPlan,
   getAgentSettings,
   startAgentTurn,
+  type AgentActionPlan,
+  type AgentActionResult,
   type AgentEvent,
   type AgentSettings,
 } from "../api/agent";
@@ -16,6 +20,14 @@ interface ChatMessage {
   text: string;
   complete: boolean;
   renderedHtml: string;
+  actionPlans: VisibleActionPlan[];
+}
+
+interface VisibleActionPlan {
+  plan: AgentActionPlan;
+  status: "pending" | "executing" | "completed" | "partiallyFailed" | "cancelled" | "failed";
+  result: AgentActionResult | null;
+  error: string;
 }
 
 const props = defineProps<{
@@ -26,6 +38,7 @@ const emit = defineEmits<{
   openPanel: [];
   close: [];
   openSettings: [];
+  workspaceChanged: [];
 }>();
 
 const settings = ref<AgentSettings | null>(null);
@@ -35,6 +48,7 @@ const statusMessage = ref("");
 const error = ref("");
 const isLoadingSettings = ref(false);
 const isSending = ref(false);
+const activePlanId = ref("");
 const messageList = ref<HTMLElement | null>(null);
 let nextMessageId = 1;
 const markdown = new MarkdownIt({
@@ -114,6 +128,19 @@ function applyAgentEvent(event: AgentEvent, assistant: ChatMessage) {
   if (event.kind === "completed") {
     statusMessage.value = "";
   }
+  if (event.kind === "planReady" && event.plan) {
+    const known = assistant.actionPlans.some((item) => item.plan.planId === event.plan?.planId);
+    if (!known) {
+      // 计划属于生成它的这一轮回复，后续对话不会把历史计划挤到列表末尾。
+      assistant.actionPlans.push({
+        plan: event.plan,
+        status: "pending",
+        result: null,
+        error: "",
+      });
+      void scrollToLatest();
+    }
+  }
   if (event.kind === "failed") {
     error.value = event.message ?? "AI 回答失败。";
     statusMessage.value = "";
@@ -138,6 +165,7 @@ async function sendMessage() {
     text: message,
     complete: true,
     renderedHtml: "",
+    actionPlans: [],
   };
   const assistantMessage: ChatMessage = {
     id: nextMessageId++,
@@ -145,6 +173,7 @@ async function sendMessage() {
     text: "",
     complete: false,
     renderedHtml: "",
+    actionPlans: [],
   };
   messages.value.push(userMessage, assistantMessage);
   input.value = "";
@@ -190,6 +219,52 @@ async function clearConversation() {
   }
 }
 
+function planExpiryLabel(plan: AgentActionPlan) {
+  return new Date(plan.expiresAtUnixSeconds * 1000).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function confirmPlan(item: VisibleActionPlan) {
+  if (activePlanId.value || item.status !== "pending") {
+    return;
+  }
+  activePlanId.value = item.plan.planId;
+  item.status = "executing";
+  item.error = "";
+  error.value = "";
+  try {
+    const result = await confirmAgentActionPlan(item.plan.planId);
+    item.result = result;
+    item.status = result.status;
+    emit("workspaceChanged");
+  } catch (value) {
+    // 后端计划在确认时即被消费；状态漂移或业务失败后必须重新生成，不能重复提交旧计划。
+    item.status = "failed";
+    item.error = visibleError(value);
+  } finally {
+    activePlanId.value = "";
+  }
+}
+
+async function cancelPlan(item: VisibleActionPlan) {
+  if (activePlanId.value || item.status !== "pending") {
+    return;
+  }
+  activePlanId.value = item.plan.planId;
+  item.error = "";
+  try {
+    const result = await cancelAgentActionPlan(item.plan.planId);
+    item.result = result;
+    item.status = "cancelled";
+  } catch (value) {
+    item.error = visibleError(value);
+  } finally {
+    activePlanId.value = "";
+  }
+}
+
 function openSettings() {
   emit("openSettings");
   emit("close");
@@ -228,7 +303,15 @@ watch(
         <button type="button" title="清空当前对话" :disabled="isSending" @click="clearConversation">
           清空
         </button>
-        <button type="button" title="收起 AI 助手" @click="$emit('close')">收起</button>
+        <button
+          type="button"
+          class="close-button"
+          title="关闭 AI 助手"
+          aria-label="关闭 AI 助手"
+          @click="$emit('close')"
+        >
+          ×
+        </button>
       </div>
     </header>
 
@@ -244,21 +327,95 @@ watch(
           <strong>DeepSeek V4 已就绪</strong>
           <span>可以询问已安装 MOD、启用状态、冲突和替换目标。</span>
         </div>
-        <div
-          v-for="message in messages"
-          :key="message.id"
-          class="chat-message"
-          :class="message.role"
-        >
-          <span>{{ message.role === "user" ? "你" : "AI" }}</span>
-          <div
-            v-if="message.role === 'assistant' && message.complete !== false"
-            class="message-content markdown-body"
-            @click="openMarkdownLink"
-            v-html="renderedMarkdown(message)"
-          />
-          <p v-else>{{ message.text || "正在整理回答..." }}</p>
-        </div>
+        <template v-for="message in messages" :key="message.id">
+          <div class="chat-message" :class="message.role">
+            <span>{{ message.role === "user" ? "你" : "AI" }}</span>
+            <div
+              v-if="message.role === 'assistant' && message.complete !== false"
+              class="message-content markdown-body"
+              @click="openMarkdownLink"
+              v-html="renderedMarkdown(message)"
+            />
+            <p v-else>{{ message.text || "正在整理回答..." }}</p>
+          </div>
+
+          <section
+            v-for="item in message.actionPlans"
+            :key="item.plan.planId"
+            class="action-plan-card"
+            :class="{ destructive: item.plan.destructive }"
+          >
+          <div class="plan-heading">
+            <div>
+              <strong>{{ item.plan.title }}</strong>
+              <span>{{ item.plan.targetCount }} 个目标 · {{ planExpiryLabel(item.plan) }} 前有效</span>
+            </div>
+            <span class="plan-status">
+              {{
+                item.status === "pending"
+                  ? "待确认"
+                  : item.status === "executing"
+                    ? "执行中"
+                    : item.status === "cancelled"
+                      ? "已取消"
+                      : item.status === "failed"
+                        ? "执行失败"
+                      : item.status === "partiallyFailed"
+                        ? "部分失败"
+                        : "已完成"
+              }}
+            </span>
+          </div>
+          <p>{{ item.plan.summary }}</p>
+
+          <details open>
+            <summary>查看全部目标（{{ item.plan.targetCount }}）</summary>
+            <ol class="plan-targets">
+              <li v-for="target in item.plan.targets" :key="target.modId">
+                <strong>{{ target.name }}</strong>
+                <span>{{ target.detail }}</span>
+              </li>
+            </ol>
+          </details>
+
+          <details v-if="item.plan.warnings.length" open class="plan-warnings">
+            <summary>注意事项（{{ item.plan.warnings.length }}）</summary>
+            <ul>
+              <li v-for="warning in item.plan.warnings" :key="warning">{{ warning }}</li>
+            </ul>
+          </details>
+
+          <div v-if="item.result" class="plan-result">
+            <strong>{{ item.result.message }}</strong>
+            <span v-if="item.result.failedCount">
+              成功 {{ item.result.succeededCount }}，失败 {{ item.result.failedCount }}
+            </span>
+            <ul v-if="item.result.warnings.length">
+              <li v-for="warning in item.result.warnings" :key="warning">{{ warning }}</li>
+            </ul>
+          </div>
+          <p v-if="item.error" class="plan-error">{{ item.error }}</p>
+
+          <div v-if="item.status === 'pending'" class="plan-actions">
+            <button
+              type="button"
+              :disabled="isSending || Boolean(activePlanId)"
+              @click="cancelPlan(item)"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="confirm-plan-button"
+              :class="{ danger: item.plan.destructive }"
+              :disabled="isSending || Boolean(activePlanId)"
+              @click="confirmPlan(item)"
+            >
+              确认执行
+            </button>
+          </div>
+          </section>
+        </template>
       </div>
 
       <div v-if="statusMessage" class="agent-status">{{ statusMessage }}</div>
@@ -312,8 +469,8 @@ watch(
 
 .agent-panel {
   display: flex;
-  width: min(380px, calc(100vw - 32px));
-  height: min(560px, calc(100vh - 92px));
+  width: min(760px, calc(100vw - 32px));
+  height: min(780px, calc(100vh - 72px));
   flex-direction: column;
   overflow: hidden;
   border: 1px solid #c9d9d2;
@@ -351,7 +508,26 @@ watch(
 
 .header-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
+}
+
+.agent-panel .close-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  place-items: center;
+  color: #526862;
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.agent-panel .close-button:hover {
+  color: #17211f;
+  background: #f2f6f4;
 }
 
 .agent-panel button {
@@ -378,6 +554,105 @@ watch(
   gap: 7px;
   color: #61756f;
   font-size: 0.84rem;
+}
+
+.action-plan-card {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid #8fb6a7;
+  border-radius: 6px;
+  color: #263d36;
+  background: #f4faf7;
+  font-size: 0.78rem;
+}
+
+.action-plan-card.destructive {
+  border-color: #d6a397;
+  background: #fff8f6;
+}
+
+.action-plan-card p,
+.action-plan-card ul,
+.action-plan-card ol {
+  margin: 0;
+}
+
+.plan-heading,
+.plan-heading > div,
+.plan-targets li,
+.plan-result {
+  display: grid;
+  gap: 3px;
+}
+
+.plan-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.plan-heading span,
+.plan-targets span,
+.plan-result span {
+  color: #647a73;
+}
+
+.plan-status {
+  padding: 2px 5px;
+  border: 1px solid #b8cec5;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: #ffffff;
+}
+
+.action-plan-card details summary {
+  cursor: pointer;
+  color: #245e4b;
+  font-weight: 700;
+}
+
+.plan-targets,
+.plan-warnings ul,
+.plan-result ul {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 7px;
+  padding-left: 20px;
+}
+
+.plan-warnings {
+  color: #8c521d;
+}
+
+.plan-result {
+  padding: 8px;
+  border: 1px solid #c7d9d1;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.plan-error {
+  color: #a34133;
+}
+
+.plan-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.agent-panel .confirm-plan-button {
+  color: #ffffff;
+  border-color: #24745b;
+  background: #24745b;
+}
+
+.agent-panel .confirm-plan-button.danger {
+  border-color: #a94b3d;
+  background: #a94b3d;
 }
 
 .agent-empty {

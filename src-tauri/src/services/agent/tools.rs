@@ -7,8 +7,41 @@ use crate::{
     services::{game, mod_library, model_recognition},
 };
 
+use super::{AgentActionPlan, AgentCoordinator};
+
 const DEFAULT_RESULT_LIMIT: usize = 100;
 const MAX_RESULT_LIMIT: usize = 100;
+
+pub(crate) struct ToolExecution {
+    pub content: String,
+    pub plan: Option<AgentActionPlan>,
+}
+
+impl ToolExecution {
+    fn query(content: String) -> Self {
+        Self {
+            content,
+            plan: None,
+        }
+    }
+
+    fn plan(plan: AgentActionPlan) -> Result<Self, String> {
+        // 完整计划通过本地 Channel 交给界面；只把最小回执发回模型，避免再次上传目标清单。
+        let content = serde_json::to_string(&json!({
+            "ok": true,
+            "planId": plan.plan_id,
+            "title": plan.title,
+            "targetCount": plan.target_count,
+            "warningCount": plan.warnings.len(),
+            "awaitingUserConfirmation": true
+        }))
+        .map_err(|error| format!("无法序列化 AI 操作计划：{error}"))?;
+        Ok(Self {
+            content,
+            plan: Some(plan),
+        })
+    }
+}
 
 pub(crate) fn tool_definitions() -> Vec<Value> {
     vec![
@@ -93,6 +126,84 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "get_mod_remap_options",
+                "description": "按稳定 MOD ID 查询可改绑分组和目标。模型改绑前必须先调用；query 可按游戏名称或资源 ID 缩小目标。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "modId": { "type": "string" },
+                        "groupKey": { "type": "string", "description": "已知分组时传入；可省略" },
+                        "query": { "type": "string", "description": "目标游戏名称或资源 ID；可省略" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 30 }
+                    },
+                    "required": ["modId"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "create_mod_action_plan",
+                "description": "为已经用稳定 ID 明确选中的 MOD 创建批量启用、禁用或卸载计划。只创建计划，不直接执行。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["enable", "disable", "uninstall"] },
+                        "modIds": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 1,
+                            "maxItems": 500
+                        }
+                    },
+                    "required": ["action", "modIds"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "create_conflict_order_plan",
+                "description": "为一个已查询的冲突组创建完整优先级计划。orderedModIds 必须包含组内全部稳定 MOD ID，数组越靠前优先级越高。只创建计划。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "groupId": { "type": "string" },
+                        "orderedModIds": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 2,
+                            "maxItems": 500
+                        }
+                    },
+                    "required": ["groupId", "orderedModIds"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "create_model_remap_plan",
+                "description": "为已禁用 MOD 的一个已查询模型分组创建改绑计划。恢复导入时目标用 restoreDefault=true；否则传精确 targetId。只创建计划。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "modId": { "type": "string" },
+                        "groupKey": { "type": "string" },
+                        "targetId": { "type": "string" },
+                        "restoreDefault": { "type": "boolean" }
+                    },
+                    "required": ["modId", "groupKey"],
+                    "additionalProperties": false
+                }
+            }
+        }),
     ]
 }
 
@@ -103,41 +214,48 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "get_enabled_conflicts" => "分析启用冲突",
         "get_game_directory_status" => "检查游戏目录",
         "lookup_mhw_terms" => "查询 MHW 术语",
-        _ => "处理只读查询",
+        "get_mod_remap_options" => "查询模型改绑目标",
+        "create_mod_action_plan" => "生成 MOD 操作计划",
+        "create_conflict_order_plan" => "生成冲突优先级计划",
+        "create_model_remap_plan" => "生成模型改绑计划",
+        _ => "处理 AI 请求",
     }
 }
 
 pub(crate) async fn execute_tool(
     app: &AppHandle,
+    coordinator: &AgentCoordinator,
     name: &str,
     arguments: &str,
-) -> Result<String, String> {
+) -> Result<ToolExecution, String> {
     match name {
         "search_local_mods" => {
             let args = parse_arguments::<SearchLocalModsArgs>(arguments)?;
             let snapshot = load_snapshot(app).await?;
-            search_local_mods(snapshot, args)
+            search_local_mods(snapshot, args).map(ToolExecution::query)
         }
         "get_mod_details" => {
             let args = parse_arguments::<GetModDetailsArgs>(arguments)?;
             let snapshot = load_snapshot(app).await?;
-            get_mod_details(snapshot, args)
+            get_mod_details(snapshot, args).map(ToolExecution::query)
         }
         "get_enabled_conflicts" => {
             let args = parse_arguments::<ConflictArgs>(arguments)?;
             let snapshot = load_snapshot(app).await?;
-            get_enabled_conflicts(snapshot, args)
+            get_enabled_conflicts(snapshot, args).map(ToolExecution::query)
         }
         "get_game_directory_status" => {
             parse_arguments::<EmptyArgs>(arguments)?;
             let status = game::get_game_directory_status(app)?;
-            Ok(json!({
-                "ok": true,
-                "isConfigured": status.is_configured,
-                "isValid": status.is_valid,
-                "message": status.message
-            })
-            .to_string())
+            Ok(ToolExecution::query(
+                json!({
+                    "ok": true,
+                    "isConfigured": status.is_configured,
+                    "isValid": status.is_valid,
+                    "message": status.message
+                })
+                .to_string(),
+            ))
         }
         "lookup_mhw_terms" => {
             let args = parse_arguments::<LookupTermsArgs>(arguments)?;
@@ -148,7 +266,75 @@ pub(crate) async fn execute_tool(
             })
             .await
             .map_err(|error| format!("MHW 术语查询任务失败：{error}"))??;
-            Ok(json!({ "ok": true, "terms": terms }).to_string())
+            Ok(ToolExecution::query(
+                json!({ "ok": true, "terms": terms }).to_string(),
+            ))
+        }
+        "get_mod_remap_options" => {
+            let args = parse_arguments::<GetRemapOptionsArgs>(arguments)?;
+            let worker_app = app.clone();
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                get_mod_remap_options(&worker_app, args)
+            })
+            .await
+            .map_err(|error| format!("模型改绑目标查询任务失败：{error}"))??;
+            Ok(ToolExecution::query(result))
+        }
+        "create_mod_action_plan" => {
+            let args = parse_arguments::<CreateModActionPlanArgs>(arguments)?;
+            let worker_app = app.clone();
+            let worker_coordinator = coordinator.clone();
+            let plan = tauri::async_runtime::spawn_blocking(move || {
+                super::create_batch_action_plan(
+                    &worker_app,
+                    &worker_coordinator,
+                    &args.action,
+                    args.mod_ids,
+                )
+            })
+            .await
+            .map_err(|error| format!("MOD 操作计划生成任务失败：{error}"))??;
+            ToolExecution::plan(plan)
+        }
+        "create_conflict_order_plan" => {
+            let args = parse_arguments::<CreateConflictOrderPlanArgs>(arguments)?;
+            let worker_app = app.clone();
+            let worker_coordinator = coordinator.clone();
+            let plan = tauri::async_runtime::spawn_blocking(move || {
+                super::create_conflict_order_plan(
+                    &worker_app,
+                    &worker_coordinator,
+                    args.group_id,
+                    args.ordered_mod_ids,
+                )
+            })
+            .await
+            .map_err(|error| format!("冲突优先级计划生成任务失败：{error}"))??;
+            ToolExecution::plan(plan)
+        }
+        "create_model_remap_plan" => {
+            let args = parse_arguments::<CreateModelRemapPlanArgs>(arguments)?;
+            if args.restore_default && args.target_id.is_some() {
+                return Err("恢复默认和指定目标不能同时设置。".to_string());
+            }
+            if !args.restore_default && args.target_id.is_none() {
+                return Err("请指定模型目标，或明确选择恢复导入时目标。".to_string());
+            }
+            let worker_app = app.clone();
+            let worker_coordinator = coordinator.clone();
+            let target_id = (!args.restore_default).then_some(args.target_id).flatten();
+            let plan = tauri::async_runtime::spawn_blocking(move || {
+                super::create_model_remap_plan(
+                    &worker_app,
+                    &worker_coordinator,
+                    args.mod_id,
+                    args.group_key,
+                    target_id,
+                )
+            })
+            .await
+            .map_err(|error| format!("模型改绑计划生成任务失败：{error}"))??;
+            ToolExecution::plan(plan)
         }
         _ => Err("模型请求了未开放的工具。".to_string()),
     }
@@ -190,6 +376,39 @@ struct LookupTermsArgs {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GetRemapOptionsArgs {
+    mod_id: String,
+    group_key: Option<String>,
+    query: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateModActionPlanArgs {
+    action: String,
+    mod_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateConflictOrderPlanArgs {
+    group_id: String,
+    ordered_mod_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateModelRemapPlanArgs {
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+    #[serde(default)]
+    restore_default: bool,
+}
+
 fn parse_arguments<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, String> {
     serde_json::from_str(arguments).map_err(|error| format!("AI 工具参数格式无效：{error}"))
 }
@@ -204,6 +423,77 @@ async fn load_snapshot(app: &AppHandle) -> Result<mod_library::ModWorkspaceSnaps
     })
     .await
     .map_err(|error| format!("本地 MOD 查询任务失败：{error}"))?
+}
+
+fn get_mod_remap_options(app: &AppHandle, args: GetRemapOptionsArgs) -> Result<String, String> {
+    let details = mod_library::get_mod_remap_details(app, args.mod_id)?;
+    let query = args.query.unwrap_or_default().trim().to_lowercase();
+    let limit = args.limit.unwrap_or(30).clamp(1, 30);
+    let groups = details
+        .groups
+        .into_iter()
+        .filter(|group| {
+            args.group_key
+                .as_ref()
+                .is_none_or(|group_key| group.group_key == *group_key)
+        })
+        .map(|group| {
+            let matches = group
+                .targets
+                .iter()
+                .filter(|target| {
+                    query.is_empty()
+                        || target.target_id.to_lowercase().contains(&query)
+                        || target.model_id.to_lowercase().contains(&query)
+                        || target
+                            .game_ids
+                            .iter()
+                            .chain(target.display_names.iter())
+                            .any(|value| value.to_lowercase().contains(&query))
+                })
+                .collect::<Vec<_>>();
+            let total = matches.len();
+            let targets = matches
+                .into_iter()
+                .take(limit)
+                .map(|target| {
+                    json!({
+                        "targetId": target.target_id,
+                        "modelId": target.model_id,
+                        "gameIds": target.game_ids,
+                        "displayNames": target.display_names,
+                        "affectedParts": target.affected_parts
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "groupKey": group.group_key,
+                "modelKind": group.model_kind,
+                "subKind": group.sub_kind,
+                "sourceModelIds": group.source_model_ids,
+                "sourceDisplayNames": group.source_display_names,
+                "selectedTargetId": group.selected_target_id,
+                "originalTargetId": group.original_target_id,
+                "allowsManualTarget": group.allows_manual_target,
+                "targetCount": total,
+                "returned": targets.len(),
+                "truncated": total > targets.len(),
+                "targets": targets
+            })
+        })
+        .collect::<Vec<_>>();
+    if groups.is_empty() {
+        return Err("没有找到匹配的模型替换分组。".to_string());
+    }
+    Ok(json!({
+        "ok": true,
+        "modId": details.mod_id,
+        "name": details.name,
+        "enabled": details.enabled,
+        "groups": groups,
+        "warnings": details.warnings
+    })
+    .to_string())
 }
 
 fn search_local_mods(

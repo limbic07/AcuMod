@@ -315,7 +315,7 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 当前会话仅保存在内存，不持久化聊天记录。
 - 验收示例：“列出已启用的太刀 MOD”“这个 MOD 替换了什么”“当前有哪些启用冲突”。
 
-### AI Slice 2：自然语言受控操作
+### AI Slice 2：自然语言受控操作（已完成实现，待手动验收）
 
 当前下一个切片。一次完成 AI 本地操作需要的通用计划框架，并接入现有传统管理能力：
 
@@ -357,7 +357,7 @@ Wiki 与本地 `15.10.00` 数据包中还有可扩展的路径识别类别，均
 - 配装前根据需要询问武器、游戏进度、已有装饰珠和生存/舒适/输出偏好，再给出有条件的候选方案。
 - 验收覆盖准确素材问答、简繁官方名称、开荒/毕业/缺少关键装饰珠等配装条件，以及无来源时拒绝编造。
 
-AI Slice 1 已完成实现，其端到端链路为：`悬浮窗口 -> typed invoke -> agent command -> DeepSeek V4 client -> 只读工具 -> DTO/流式事件 -> 悬浮窗口`。当前开发截点停在 Slice 1：进入 Slice 2 前还需手动回归最新 Markdown 静态渲染和 100 项以上完整列表。回归通过后的下一步是 Slice 2“自然语言受控操作”；Slice 3 至 Slice 6 均未开始。
+AI Slice 1 已完成，其只读链路为：`悬浮窗口 -> typed invoke -> agent command -> DeepSeek V4 client -> 只读工具 -> DTO/流式事件 -> 悬浮窗口`。AI Slice 2 已完成实现，写操作链路为：`DeepSeek 计划工具 -> Rust AgentActionPlan -> planReady -> 用户确认 -> 状态版本复核 -> OperationCoordinator -> 传统 mod_library service -> 工作区快照刷新`。当前先手动验收 Slice 2；Slice 3 至 Slice 6 均未开始。
 
 ## MVP 已完成任务顺序
 

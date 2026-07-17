@@ -2,23 +2,33 @@ mod deepseek;
 mod tools;
 
 use std::{
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     env,
+    hash::{Hash, Hasher},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use keyring::Entry;
 use serde::Serialize;
 use tauri::{ipc::Channel, AppHandle};
 
-use crate::storage::config::{self, DeepSeekModel};
+use crate::{
+    operations::{run_blocking_operation, OperationReporter},
+    services::mod_library::{self, BatchModAction, ModWorkspaceSnapshot},
+    storage::config::{self, DeepSeekModel},
+};
 
 const KEYRING_SERVICE: &str = "Acumen MOD Manager";
 const KEYRING_USER: &str = "deepseek-api-key";
 const MAX_USER_MESSAGE_CHARS: usize = 4_000;
+const ACTION_PLAN_TTL_SECONDS: u64 = 5 * 60;
+const MAX_PLAN_TARGETS: usize = 500;
 static NEXT_TURN_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Default)]
 pub struct AgentCoordinator {
@@ -29,6 +39,7 @@ pub struct AgentCoordinator {
 struct AgentCoordinatorInner {
     active: AtomicBool,
     history: Mutex<Vec<deepseek::DeepSeekMessage>>,
+    plans: Mutex<HashMap<String, StoredAgentActionPlan>>,
 }
 
 struct ActiveTurnGuard {
@@ -67,6 +78,65 @@ pub struct AgentTurnResult {
     pub message: String,
 }
 
+/// 等待用户确认的受控操作计划。这里只暴露展示信息，不暴露文件路径或底层命令。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionPlan {
+    pub plan_id: String,
+    pub kind: String,
+    pub title: String,
+    pub summary: String,
+    pub state_version: String,
+    pub expires_at_unix_seconds: u64,
+    pub target_count: usize,
+    pub targets: Vec<AgentActionTarget>,
+    pub warnings: Vec<String>,
+    pub destructive: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionTarget {
+    pub mod_id: String,
+    pub name: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionResult {
+    pub plan_id: String,
+    pub status: String,
+    pub title: String,
+    pub message: String,
+    pub succeeded_count: usize,
+    pub failed_count: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone)]
+enum AgentPlanAction {
+    BatchMods {
+        action: BatchModAction,
+        mod_ids: Vec<String>,
+    },
+    ConflictOrder {
+        group_id: String,
+        participant_order: Vec<String>,
+    },
+    ModelRemap {
+        mod_id: String,
+        group_key: String,
+        target_id: Option<String>,
+    },
+}
+
+#[derive(Clone)]
+struct StoredAgentActionPlan {
+    public: AgentActionPlan,
+    action: AgentPlanAction,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEvent {
@@ -76,6 +146,7 @@ pub struct AgentEvent {
     pub text: Option<String>,
     pub tool_name: Option<String>,
     pub message: Option<String>,
+    pub plan: Option<AgentActionPlan>,
 }
 
 pub(crate) struct AgentEventSender {
@@ -109,6 +180,20 @@ impl AgentEventSender {
             text,
             tool_name,
             message,
+            plan: None,
+        });
+    }
+
+    pub(crate) fn emit_plan(&mut self, plan: AgentActionPlan) {
+        self.sequence += 1;
+        let _ = self.channel.send(AgentEvent {
+            turn_id: self.turn_id.clone(),
+            sequence: self.sequence,
+            kind: "planReady".to_string(),
+            text: None,
+            tool_name: None,
+            message: Some("操作计划已生成，请确认后执行。".to_string()),
+            plan: Some(plan),
         });
     }
 }
@@ -150,7 +235,47 @@ impl AgentCoordinator {
             .lock()
             .map_err(|_| "AI 会话状态不可用，请重启 Acumod 后重试。".to_string())?
             .clear();
+        self.inner
+            .plans
+            .lock()
+            .map_err(|_| "AI 操作计划状态不可用，请重启 Acumod 后重试。".to_string())?
+            .clear();
         Ok(())
+    }
+
+    fn store_plan(&self, plan: StoredAgentActionPlan) -> Result<AgentActionPlan, String> {
+        let now = unix_seconds_now()?;
+        let public = plan.public.clone();
+        let mut plans = self
+            .inner
+            .plans
+            .lock()
+            .map_err(|_| "AI 操作计划状态不可用，请重启 Acumod 后重试。".to_string())?;
+        plans.retain(|_, stored| stored.public.expires_at_unix_seconds > now);
+        plans.insert(public.plan_id.clone(), plan);
+        Ok(public)
+    }
+
+    fn take_plan(&self, plan_id: &str) -> Result<StoredAgentActionPlan, String> {
+        self.inner
+            .plans
+            .lock()
+            .map_err(|_| "AI 操作计划状态不可用，请重启 Acumod 后重试。".to_string())?
+            .remove(plan_id)
+            .ok_or_else(|| "操作计划不存在、已取消或已经执行。".to_string())
+    }
+
+    fn cancel_plan(&self, plan_id: &str) -> Result<AgentActionResult, String> {
+        let plan = self.take_plan(plan_id)?;
+        Ok(AgentActionResult {
+            plan_id: plan.public.plan_id,
+            status: "cancelled".to_string(),
+            title: plan.public.title,
+            message: "已取消操作计划，未修改任何 MOD。".to_string(),
+            succeeded_count: 0,
+            failed_count: 0,
+            warnings: Vec::new(),
+        })
     }
 }
 
@@ -223,7 +348,17 @@ pub async fn start_agent_turn(
     );
 
     let history = coordinator.history()?;
-    match deepseek::run_turn(&app, &key, model, history, message, &mut sender).await {
+    match deepseek::run_turn(
+        &app,
+        &coordinator,
+        &key,
+        model,
+        history,
+        message,
+        &mut sender,
+    )
+    .await
+    {
         Ok((history, reply)) => {
             coordinator.replace_history(history)?;
             sender.emit("completed", None, None, Some("回答完成".to_string()));
@@ -237,6 +372,502 @@ pub async fn start_agent_turn(
             Err(error)
         }
     }
+}
+
+pub(crate) fn create_batch_action_plan(
+    app: &AppHandle,
+    coordinator: &AgentCoordinator,
+    action_name: &str,
+    mod_ids: Vec<String>,
+) -> Result<AgentActionPlan, String> {
+    let action = match action_name {
+        "enable" => BatchModAction::Enable,
+        "disable" => BatchModAction::Disable,
+        "uninstall" => BatchModAction::Uninstall,
+        _ => return Err("AI 提交了不支持的 MOD 操作类型。".to_string()),
+    };
+    let mod_ids = normalized_plan_mod_ids(mod_ids)?;
+    let snapshot = load_workspace_snapshot(app)?;
+    let mut targets = Vec::with_capacity(mod_ids.len());
+    let mut warnings = Vec::new();
+    let mut no_op_count = 0;
+
+    for mod_id in &mod_ids {
+        let item = snapshot
+            .installed_mods
+            .mods
+            .iter()
+            .find(|item| item.id == *mod_id)
+            .ok_or_else(|| format!("计划中的 MOD 已不存在：{mod_id}"))?;
+        let detail = match action {
+            BatchModAction::Enable if item.enabled => {
+                no_op_count += 1;
+                "当前已启用，执行时会跳过".to_string()
+            }
+            BatchModAction::Enable => {
+                let preview = mod_library::preview_enable_mod(app, mod_id.clone())?;
+                warnings.extend(
+                    preview
+                        .warnings
+                        .into_iter()
+                        .map(|warning| format!("{}：{warning}", item.name)),
+                );
+                if preview.requires_overwrite_confirmation {
+                    warnings.push(format!(
+                        "{} 启用时会覆盖游戏目录中未被 Acumod 记录的文件。",
+                        item.name
+                    ));
+                }
+                if !preview.conflicts.is_empty() {
+                    warnings.push(format!(
+                        "{} 会与 {} 个已启用 MOD 发生文件冲突，后启用者优先。",
+                        item.name,
+                        preview.conflicts.len()
+                    ));
+                }
+                format!("将启用并部署 {} 个文件", preview.file_count)
+            }
+            BatchModAction::Disable if !item.enabled => {
+                no_op_count += 1;
+                "当前未启用，执行时会跳过".to_string()
+            }
+            BatchModAction::Disable => {
+                let preview = mod_library::preview_disable_mod(app, mod_id.clone())?;
+                warnings.extend(
+                    preview
+                        .warnings
+                        .into_iter()
+                        .map(|warning| format!("{}：{warning}", item.name)),
+                );
+                format!("将禁用并移除 {} 个部署文件", preview.file_count)
+            }
+            BatchModAction::Uninstall => {
+                let preview = mod_library::preview_uninstall_mod(app, mod_id.clone())?;
+                warnings.extend(
+                    preview
+                        .warnings
+                        .into_iter()
+                        .map(|warning| format!("{}：{warning}", item.name)),
+                );
+                format!(
+                    "将卸载并删除本地库中的 {} 个文件",
+                    preview.library_file_count
+                )
+            }
+        };
+        targets.push(AgentActionTarget {
+            mod_id: item.id.clone(),
+            name: item.name.clone(),
+            detail,
+        });
+    }
+
+    if no_op_count > 0 {
+        warnings.push(format!(
+            "有 {no_op_count} 个 MOD 已处于目标状态，执行时会安全跳过。"
+        ));
+    }
+    if matches!(action, BatchModAction::Uninstall) {
+        warnings.insert(
+            0,
+            "卸载会删除 Acumod 本地库副本；如 MOD 已启用，也会先移除游戏目录中的部署文件。"
+                .to_string(),
+        );
+    }
+
+    let action_label = batch_action_label(action);
+    let plan_action = AgentPlanAction::BatchMods { action, mod_ids };
+    let plan = build_stored_plan(
+        app,
+        format!("批量{action_label} MOD"),
+        "batchModAction",
+        format!("将对 {} 个 MOD 执行{action_label}。", targets.len()),
+        targets,
+        warnings,
+        matches!(action, BatchModAction::Uninstall),
+        plan_action,
+    )?;
+    coordinator.store_plan(plan)
+}
+
+pub(crate) fn create_conflict_order_plan(
+    app: &AppHandle,
+    coordinator: &AgentCoordinator,
+    group_id: String,
+    participant_order: Vec<String>,
+) -> Result<AgentActionPlan, String> {
+    let snapshot = load_workspace_snapshot(app)?;
+    let group = snapshot
+        .conflict_report
+        .groups
+        .iter()
+        .find(|group| group.group_id == group_id)
+        .ok_or_else(|| "冲突组已经不存在，请重新查询冲突。".to_string())?;
+    let participant_order = normalized_plan_mod_ids(participant_order)?;
+    let current_ids = group
+        .participants
+        .iter()
+        .map(|participant| participant.mod_id.clone())
+        .collect::<HashSet<_>>();
+    let planned_ids = participant_order.iter().cloned().collect::<HashSet<_>>();
+    if current_ids != planned_ids {
+        return Err("必须提供冲突组全部成员且不能包含其它 MOD。".to_string());
+    }
+
+    let targets = participant_order
+        .iter()
+        .enumerate()
+        .map(|(index, mod_id)| {
+            let participant = group
+                .participants
+                .iter()
+                .find(|participant| participant.mod_id == *mod_id)
+                .expect("participant set was validated");
+            AgentActionTarget {
+                mod_id: mod_id.clone(),
+                name: participant.name.clone(),
+                detail: format!("优先级第 {} 位", index + 1),
+            }
+        })
+        .collect::<Vec<_>>();
+    let preview = mod_library::preview_apply_conflict_order(app, group_id.clone())?;
+    let mut warnings = preview.warnings;
+    if preview.requires_overwrite_confirmation {
+        warnings.push("应用顺序时会覆盖游戏目录中未被 Acumod 记录的文件。".to_string());
+    }
+    let plan = build_stored_plan(
+        app,
+        "调整冲突优先级".to_string(),
+        "conflictOrder",
+        format!(
+            "将按从上到下的优先级更新 {} 个 MOD，并重新部署 {} 个冲突文件。",
+            targets.len(),
+            preview.applicable_file_count
+        ),
+        targets,
+        warnings,
+        false,
+        AgentPlanAction::ConflictOrder {
+            group_id,
+            participant_order,
+        },
+    )?;
+    coordinator.store_plan(plan)
+}
+
+pub(crate) fn create_model_remap_plan(
+    app: &AppHandle,
+    coordinator: &AgentCoordinator,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<AgentActionPlan, String> {
+    let details = mod_library::get_mod_remap_details(app, mod_id.clone())?;
+    if details.enabled {
+        return Err("模型改绑前必须先禁用该 MOD。".to_string());
+    }
+    let group = details
+        .groups
+        .iter()
+        .find(|group| group.group_key == group_key)
+        .ok_or_else(|| "模型替换分组已经变化，请重新查询可选目标。".to_string())?;
+    let preview =
+        mod_library::preview_mod_remap(app, mod_id.clone(), group_key.clone(), target_id.clone())?;
+    let detail = if target_id.is_none() {
+        "恢复为导入时的替换模型".to_string()
+    } else {
+        format!("改为替换 {}", preview.target_label)
+    };
+    let target = AgentActionTarget {
+        mod_id: details.mod_id.clone(),
+        name: details.name,
+        detail,
+    };
+    let plan = build_stored_plan(
+        app,
+        "修改替换模型".to_string(),
+        "modelRemap",
+        format!(
+            "将修改“{}”分组，重写 {} 个本地 MOD 文件。",
+            group.sub_kind, preview.changed_file_count
+        ),
+        vec![target],
+        preview.warnings,
+        false,
+        AgentPlanAction::ModelRemap {
+            mod_id,
+            group_key,
+            target_id,
+        },
+    )?;
+    coordinator.store_plan(plan)
+}
+
+pub async fn confirm_agent_action_plan(
+    app: AppHandle,
+    coordinator: AgentCoordinator,
+    plan_id: String,
+) -> Result<AgentActionResult, String> {
+    let stored = coordinator.take_plan(&plan_id)?;
+    if stored.public.expires_at_unix_seconds <= unix_seconds_now()? {
+        return Err("操作计划已过期，请让 AI 根据当前状态重新生成。".to_string());
+    }
+
+    let (kind, title) = match stored.action {
+        AgentPlanAction::BatchMods { .. } => ("agentBatchMods", "正在执行 AI 批量操作"),
+        AgentPlanAction::ConflictOrder { .. } => ("agentConflictOrder", "正在应用 AI 冲突优先级"),
+        AgentPlanAction::ModelRemap { .. } => ("agentModelRemap", "正在应用 AI 模型改绑"),
+    };
+    let worker_app = app.clone();
+    run_blocking_operation(app, kind, title, move |progress| {
+        let current_version = state_version_for_action(&worker_app, &stored.action)?;
+        validate_plan_state_version(&stored.public.state_version, &current_version)?;
+        execute_stored_plan(&worker_app, stored, &progress)
+    })
+    .await
+}
+
+pub fn cancel_agent_action_plan(
+    coordinator: &AgentCoordinator,
+    plan_id: String,
+) -> Result<AgentActionResult, String> {
+    coordinator.cancel_plan(&plan_id)
+}
+
+fn execute_stored_plan(
+    app: &AppHandle,
+    stored: StoredAgentActionPlan,
+    progress: &OperationReporter,
+) -> Result<AgentActionResult, String> {
+    let public = stored.public;
+    match stored.action {
+        AgentPlanAction::BatchMods { action, mod_ids } => {
+            let result =
+                mod_library::batch_update_mods_with_progress(app, action, mod_ids, progress)?;
+            let mut warnings = result.warnings;
+            warnings.extend(
+                result
+                    .items
+                    .iter()
+                    .filter(|item| item.status == "failed")
+                    .map(|item| format!("{}：{}", item.name, item.message)),
+            );
+            Ok(AgentActionResult {
+                plan_id: public.plan_id,
+                status: if result.failed_count == 0 {
+                    "completed".to_string()
+                } else {
+                    "partiallyFailed".to_string()
+                },
+                title: public.title,
+                message: result.message,
+                succeeded_count: result.succeeded_count,
+                failed_count: result.failed_count,
+                warnings,
+            })
+        }
+        AgentPlanAction::ConflictOrder {
+            group_id,
+            participant_order,
+        } => {
+            mod_library::set_conflict_participant_order(app, group_id.clone(), participant_order)?;
+            let preview = mod_library::preview_apply_conflict_order(app, group_id.clone())?;
+            let result = mod_library::apply_conflict_order_with_progress(
+                app,
+                group_id,
+                preview.requires_overwrite_confirmation,
+                progress,
+            )?;
+            Ok(AgentActionResult {
+                plan_id: public.plan_id,
+                status: "completed".to_string(),
+                title: public.title,
+                message: result.message,
+                succeeded_count: 1,
+                failed_count: 0,
+                warnings: result.warnings,
+            })
+        }
+        AgentPlanAction::ModelRemap {
+            mod_id,
+            group_key,
+            target_id,
+        } => {
+            let result = mod_library::apply_mod_remap_with_progress(
+                app, mod_id, group_key, target_id, progress,
+            )?;
+            Ok(AgentActionResult {
+                plan_id: public.plan_id,
+                status: "completed".to_string(),
+                title: public.title,
+                message: result.message,
+                succeeded_count: 1,
+                failed_count: 0,
+                warnings: Vec::new(),
+            })
+        }
+    }
+}
+
+fn build_stored_plan(
+    app: &AppHandle,
+    title: String,
+    kind: &str,
+    summary: String,
+    targets: Vec<AgentActionTarget>,
+    warnings: Vec<String>,
+    destructive: bool,
+    action: AgentPlanAction,
+) -> Result<StoredAgentActionPlan, String> {
+    let now = unix_seconds_now()?;
+    let state_version = state_version_for_action(app, &action)?;
+    Ok(StoredAgentActionPlan {
+        public: AgentActionPlan {
+            plan_id: format!(
+                "agent-plan-{}",
+                NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed)
+            ),
+            kind: kind.to_string(),
+            title,
+            summary,
+            state_version,
+            expires_at_unix_seconds: now + ACTION_PLAN_TTL_SECONDS,
+            target_count: targets.len(),
+            targets,
+            warnings,
+            destructive,
+        },
+        action,
+    })
+}
+
+fn state_version_for_action(app: &AppHandle, action: &AgentPlanAction) -> Result<String, String> {
+    let material = match action {
+        AgentPlanAction::BatchMods { mod_ids, .. } => {
+            let snapshot = load_workspace_snapshot(app)?;
+            let mut states = snapshot
+                .installed_mods
+                .mods
+                .iter()
+                .map(|item| format!("{}:{}", item.id, item.enabled))
+                .collect::<Vec<_>>();
+            states.sort();
+            for mod_id in mod_ids {
+                if !snapshot
+                    .installed_mods
+                    .mods
+                    .iter()
+                    .any(|item| item.id == *mod_id)
+                {
+                    return Err(format!("计划中的 MOD 已不存在：{mod_id}"));
+                }
+            }
+            let mut conflict_orders = snapshot
+                .conflict_report
+                .groups
+                .iter()
+                .map(|group| {
+                    let order = group
+                        .participants
+                        .iter()
+                        .map(|participant| format!("{}:{}", participant.mod_id, participant.order))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("{}={order}", group.group_id)
+                })
+                .collect::<Vec<_>>();
+            conflict_orders.sort();
+            format!(
+                "mods:{}|conflicts:{}",
+                states.join(";"),
+                conflict_orders.join(";")
+            )
+        }
+        AgentPlanAction::ConflictOrder { group_id, .. } => {
+            let snapshot = load_workspace_snapshot(app)?;
+            let group = snapshot
+                .conflict_report
+                .groups
+                .iter()
+                .find(|group| group.group_id == *group_id)
+                .ok_or_else(|| "冲突组已经不存在。".to_string())?;
+            let participants = group
+                .participants
+                .iter()
+                .map(|participant| {
+                    format!(
+                        "{}:{}:{}",
+                        participant.mod_id, participant.enabled, participant.order
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(";");
+            format!("conflict:{group_id}|{participants}")
+        }
+        AgentPlanAction::ModelRemap {
+            mod_id, group_key, ..
+        } => {
+            let details = mod_library::get_mod_remap_details(app, mod_id.clone())?;
+            let group = details
+                .groups
+                .iter()
+                .find(|group| group.group_key == *group_key)
+                .ok_or_else(|| "模型替换分组已经不存在。".to_string())?;
+            format!(
+                "remap:{}:{}:{}:{}",
+                details.mod_id,
+                details.enabled,
+                group.group_key,
+                group.selected_target_id.as_deref().unwrap_or("default")
+            )
+        }
+    };
+    let mut hasher = DefaultHasher::new();
+    material.hash(&mut hasher);
+    Ok(format!("state-{:016x}", hasher.finish()))
+}
+
+fn load_workspace_snapshot(app: &AppHandle) -> Result<ModWorkspaceSnapshot, String> {
+    mod_library::get_mod_workspace_snapshot_with_progress(app, &OperationReporter::default())
+}
+
+fn normalized_plan_mod_ids(mod_ids: Vec<String>) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mod_ids = mod_ids
+        .into_iter()
+        .map(|mod_id| mod_id.trim().to_string())
+        .filter(|mod_id| !mod_id.is_empty() && seen.insert(mod_id.clone()))
+        .collect::<Vec<_>>();
+    if mod_ids.is_empty() {
+        return Err("操作计划至少需要一个 MOD。".to_string());
+    }
+    if mod_ids.len() > MAX_PLAN_TARGETS {
+        return Err(format!("一次操作计划最多包含 {MAX_PLAN_TARGETS} 个 MOD。"));
+    }
+    Ok(mod_ids)
+}
+
+fn batch_action_label(action: BatchModAction) -> &'static str {
+    match action {
+        BatchModAction::Enable => "启用",
+        BatchModAction::Disable => "禁用",
+        BatchModAction::Uninstall => "卸载",
+    }
+}
+
+fn validate_plan_state_version(expected: &str, current: &str) -> Result<(), String> {
+    if expected == current {
+        Ok(())
+    } else {
+        Err("MOD 状态在计划生成后发生变化，请重新生成操作计划。".to_string())
+    }
+}
+
+fn unix_seconds_now() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|error| format!("系统时间不可用：{error}"))
 }
 
 struct StoredCredential {
@@ -310,7 +941,10 @@ fn api_key_hint(api_key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_key_hint, validate_api_key, validate_user_message};
+    use super::{
+        api_key_hint, normalized_plan_mod_ids, validate_api_key, validate_plan_state_version,
+        validate_user_message,
+    };
 
     #[test]
     fn api_key_hint_only_exposes_last_four_characters() {
@@ -328,5 +962,24 @@ mod tests {
             validate_user_message("  查询太刀 MOD  ".to_string()).unwrap(),
             "查询太刀 MOD"
         );
+    }
+
+    #[test]
+    fn action_plan_ids_are_trimmed_and_deduplicated_without_reordering() {
+        assert_eq!(
+            normalized_plan_mod_ids(vec![
+                " mod-b ".to_string(),
+                "mod-a".to_string(),
+                "mod-b".to_string(),
+            ])
+            .unwrap(),
+            vec!["mod-b", "mod-a"]
+        );
+    }
+
+    #[test]
+    fn changed_state_version_rejects_a_stale_plan() {
+        assert!(validate_plan_state_version("state-old", "state-old").is_ok());
+        assert!(validate_plan_state_version("state-old", "state-new").is_err());
     }
 }

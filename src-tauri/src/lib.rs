@@ -10,7 +10,9 @@ pub fn run() {
         .manage(services::agent::AgentCoordinator::default())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            commands::agent::cancel_agent_action_plan,
             commands::agent::clear_agent_session,
+            commands::agent::confirm_agent_action_plan,
             commands::agent::delete_deepseek_api_key,
             commands::agent::get_agent_settings,
             commands::agent::save_agent_model,

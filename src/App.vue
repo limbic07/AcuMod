@@ -974,6 +974,10 @@ async function loadModViewsFromSnapshot(options?: { preserveModOrder?: boolean }
   }
 }
 
+async function handleAgentWorkspaceChanged() {
+  await loadModViewsFromSnapshot({ preserveModOrder: true });
+}
+
 async function refreshCurrentWorkspace() {
   if (activeView.value === "settings") {
     await Promise.all([loadGameStatus(), loadGameTextSettings(), loadAppInfo()]);
@@ -3099,6 +3103,7 @@ onBeforeUnmount(() => {
       @open-panel="isAgentPanelOpen = true"
       @close="isAgentPanelOpen = false"
       @open-settings="activeView = 'settings'"
+      @workspace-changed="handleAgentWorkspaceChanged"
     />
   </main>
 

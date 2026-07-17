@@ -17,6 +17,35 @@ export interface AgentConnectionResult {
   message: string;
 }
 
+export interface AgentActionTarget {
+  modId: string;
+  name: string;
+  detail: string;
+}
+
+export interface AgentActionPlan {
+  planId: string;
+  kind: "batchModAction" | "conflictOrder" | "modelRemap";
+  title: string;
+  summary: string;
+  stateVersion: string;
+  expiresAtUnixSeconds: number;
+  targetCount: number;
+  targets: AgentActionTarget[];
+  warnings: string[];
+  destructive: boolean;
+}
+
+export interface AgentActionResult {
+  planId: string;
+  status: "completed" | "partiallyFailed" | "cancelled";
+  title: string;
+  message: string;
+  succeededCount: number;
+  failedCount: number;
+  warnings: string[];
+}
+
 export type AgentEventKind =
   | "started"
   | "textDelta"
@@ -33,6 +62,7 @@ export interface AgentEvent {
   text: string | null;
   toolName: string | null;
   message: string | null;
+  plan: AgentActionPlan | null;
 }
 
 export interface AgentTurnResult {
@@ -72,4 +102,12 @@ export function startAgentTurn(
 
 export function clearAgentSession(): Promise<void> {
   return invoke<void>("clear_agent_session");
+}
+
+export function confirmAgentActionPlan(planId: string): Promise<AgentActionResult> {
+  return invoke<AgentActionResult>("confirm_agent_action_plan", { planId });
+}
+
+export function cancelAgentActionPlan(planId: string): Promise<AgentActionResult> {
+  return invoke<AgentActionResult>("cancel_agent_action_plan", { planId });
 }

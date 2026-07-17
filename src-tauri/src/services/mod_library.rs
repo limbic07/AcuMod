@@ -3311,6 +3311,19 @@ pub fn move_conflict_participant(
     )
 }
 
+/// 按界面展示的“上方优先”规则保存一个冲突组的完整顺序。
+///
+/// Agent 使用完整列表而不是连续模拟上下移动，避免批量意图在中途留下半套顺序。
+pub fn set_conflict_participant_order(
+    app: &tauri::AppHandle,
+    group_id: String,
+    participant_order: Vec<String>,
+) -> Result<(), String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    set_conflict_participant_order_from(&paths.installed_path, &group_id, participant_order)
+}
+
 pub fn preview_apply_conflict_order(
     app: &tauri::AppHandle,
     group_id: String,
@@ -5803,6 +5816,42 @@ fn move_conflict_participant_from(
     })
 }
 
+fn set_conflict_participant_order_from(
+    installed_root: &Path,
+    group_id: &str,
+    participant_order: Vec<String>,
+) -> Result<(), String> {
+    if participant_order.len() < 2 {
+        return Err("冲突组至少需要两个 MOD。".to_string());
+    }
+
+    let mut unique_ids = HashSet::new();
+    for participant_id in &participant_order {
+        validate_mod_id(participant_id)?;
+        if !unique_ids.insert(participant_id.clone()) {
+            return Err("冲突组顺序包含重复 MOD。".to_string());
+        }
+    }
+
+    let report = get_mod_conflict_report_from(installed_root)?;
+    let group = find_conflict_group(&report, group_id)?;
+    let current_ids = group
+        .participants
+        .iter()
+        .map(|participant| participant.mod_id.clone())
+        .collect::<HashSet<_>>();
+    if current_ids != unique_ids {
+        return Err("冲突组成员已经变化，请重新生成操作计划。".to_string());
+    }
+
+    let mut store = read_conflict_order_store(installed_root)?;
+    store
+        .orders
+        .insert(group_id.to_string(), participant_order.clone());
+    save_conflict_order_store(installed_root, &store)?;
+    update_workspace_snapshot_conflict_order(installed_root, group_id, &participant_order)
+}
+
 fn update_workspace_snapshot_conflict_order(
     installed_root: &Path,
     group_id: &str,
@@ -5878,17 +5927,17 @@ fn preview_apply_conflict_order_from(
         {
             requires_overwrite_confirmation = true;
             warnings.push(format!(
-                "Target exists but is not recorded as Acumod-managed: {}",
+                "目标文件已存在，但未记录为 Acumod 管理的文件：{}",
                 target_path.display()
             ));
         }
     }
 
     let message = if applicable_file_count == 0 {
-        "No conflict files have an enabled MOD version to apply.".to_string()
+        "当前没有已启用 MOD 的冲突文件可应用。".to_string()
     } else {
         format!(
-            "Applying this order will update {applicable_file_count} of {} conflicting file(s).",
+            "应用此优先级将更新 {applicable_file_count} / {} 个冲突文件。",
             conflict_paths.len()
         )
     };
@@ -6040,7 +6089,7 @@ fn apply_conflict_order_from_with_progress(
         applied_file_count,
         skipped_file_count: plan.conflict_file_count - applied_file_count,
         warnings: plan.warnings,
-        message: format!("Applied the MOD order to {applied_file_count} conflicting file(s)."),
+        message: format!("已按当前 MOD 优先级更新 {applied_file_count} 个冲突文件。"),
     })
 }
 

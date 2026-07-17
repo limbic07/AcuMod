@@ -483,7 +483,7 @@ FloatingAgentPanel
 - `set_agent_api_key` / `delete_agent_api_key`：只在 Rust 中写入或删除系统凭据。
 - `test_agent_connection`：发送最小请求，返回服务、模型、耗时和中文错误。
 - `start_agent_turn`：接收 `AgentTurnRequest` 和 Tauri `Channel<AgentEvent>`，立即开始异步对话。
-- `confirm_agent_plan` / `reject_agent_plan`：按 `planId` 确认或丢弃 Rust 内存中的计划。
+- `confirm_agent_action_plan` / `cancel_agent_action_plan`：按 `planId` 确认或丢弃 Rust 内存中的计划。
 
 `AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。事件类型固定为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`planReady`、`completed` 和 `failed`，每项携带 `turnId` 与递增序号。前端只拼接 `textDelta`，不解析 DeepSeek 的原始 SSE 数据。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
 
@@ -509,7 +509,7 @@ FloatingAgentPanel
 - 应用或恢复一组已确认的部署排除项。
 - 下载并导入用户已选择的 Nexus 文件。
 
-每个计划至少包含 `planId`、操作枚举、目标稳定 ID、中文摘要、警告、状态版本、过期时间和 `requiresConfirmation=true`。用户确认后，Rust 使用当前 manifest 和工作区快照重新生成实际 `OperationPlan`；目标已卸载、状态已变化或计划过期时拒绝执行并要求重新生成。AI 发起的所有写操作统一确认，即使传统 UI 对某些低风险操作可以直接执行。
+每个计划至少包含 `planId`、操作枚举、目标稳定 ID、中文摘要、警告、状态版本和过期时间。当前计划有效期为 5 分钟，只保存在 Rust 内存；前端只能提交 `planId`，不能修改执行参数。用户确认后，Rust 使用当前 manifest 和工作区快照重新检查目标状态，再通过 `OperationCoordinator` 调用传统 service；目标已卸载、状态已变化或计划过期时拒绝执行并要求重新生成。AI 发起的所有写操作统一确认，即使传统 UI 对某些低风险操作可以直接执行。
 
 ### 模型与网络
 

@@ -2,7 +2,8 @@ use tauri::{ipc::Channel, State};
 
 use crate::{
     services::agent::{
-        self, AgentConnectionResult, AgentCoordinator, AgentEvent, AgentSettings, AgentTurnResult,
+        self, AgentActionResult, AgentConnectionResult, AgentCoordinator, AgentEvent,
+        AgentSettings, AgentTurnResult,
     },
     storage::config::DeepSeekModel,
 };
@@ -43,7 +44,7 @@ pub async fn test_agent_connection(app: tauri::AppHandle) -> Result<AgentConnect
     agent::test_agent_connection(&app).await
 }
 
-/// 开始一次只读 Agent 对话，并通过有序 Channel 发送文本和工具状态。
+/// 开始一次 Agent 对话；写操作只能生成等待确认的受控计划。
 #[tauri::command]
 pub async fn start_agent_turn(
     app: tauri::AppHandle,
@@ -52,6 +53,25 @@ pub async fn start_agent_turn(
     on_event: Channel<AgentEvent>,
 ) -> Result<AgentTurnResult, String> {
     agent::start_agent_turn(app, coordinator.inner().clone(), message, on_event).await
+}
+
+/// 重新校验当前状态并执行一份尚未过期的 AI 操作计划。
+#[tauri::command]
+pub async fn confirm_agent_action_plan(
+    app: tauri::AppHandle,
+    coordinator: State<'_, AgentCoordinator>,
+    plan_id: String,
+) -> Result<AgentActionResult, String> {
+    agent::confirm_agent_action_plan(app, coordinator.inner().clone(), plan_id).await
+}
+
+/// 取消并销毁一份 AI 操作计划，不修改 MOD 状态。
+#[tauri::command]
+pub fn cancel_agent_action_plan(
+    coordinator: State<'_, AgentCoordinator>,
+    plan_id: String,
+) -> Result<AgentActionResult, String> {
+    agent::cancel_agent_action_plan(coordinator.inner(), plan_id)
 }
 
 /// 清空当前运行期间的 AI 会话，不修改任何 MOD 状态。

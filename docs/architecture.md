@@ -464,7 +464,18 @@ FloatingAgentPanel
 - `services/agent/tools.rs`：声明允许模型调用的工具、严格参数 schema、分页和 Rust handler。
 - `services/agent/cleanup.rs`：管理文件审查快照、本地规则分流、文件组与 AI 结果校验，生成清理审查 DTO 和默认选择；不执行任何文件操作。
 
-后续按实际复杂度在 `services/agent/` 下增加 `plans.rs`、`knowledge.rs` 和 `sources/` 等模块，分别承担短时计划、知识检索和联网来源适配；不要预先拆出没有独立职责的空文件。Agent DTO 继续靠近该模块维护，只有出现跨业务复用时再迁移到公共模型目录。
+Slice 5 起新增独立业务模块，而不是把知识能力塞入 Agent：
+
+```text
+commands/knowledge.rs              知识包状态、导入、更新和删除的 Tauri 边界
+services/knowledge/packs.rs        staging 校验、版本目录和原子启用
+services/knowledge/retrieval.rs    结构化查询、关系遍历和 FTS5 检索
+services/knowledge/evidence.rs     本轮来源证据账本
+services/knowledge/verification.rs 游戏事实与引用核验
+services/mod_analysis/             文件清单、分类、格式解析和资源依赖图
+```
+
+`KnowledgeService` 作为 Tauri state 延迟加载，只保存活动包元数据和路径；SQLite 连接不跨线程长期共享，每次查询在 `spawn_blocking` 中以只读方式打开。知识包管理和 MOD 本地分析不依赖 DeepSeek，`services/agent/tools.rs` 只把受限查询 DTO 转交给这些 service。Agent DTO 继续靠近 Agent 模块维护，跨设置页和 Agent 共用的知识包、来源和分析 DTO 则放在知识 service。
 
 现有 `mod_library`、冲突、模型改绑和任务 service 继续拥有业务规则。Agent handler 只能调用这些 service 的查询、预览和执行入口，不能复制一套部署逻辑。
 
@@ -473,10 +484,44 @@ FloatingAgentPanel
 - **冗余文件清理**：传统部署 service 只拥有通用的“部署排除记录和重新协调”能力；完整文件盘点、本地双信号规则和 AI 分类仅由 Agent 主动调用。Rust 先确定无需 AI 的保留项与排除建议，只把证据冲突或证据不足的文件组交给模型；清理计划确认后由部署 service 删除游戏副本或恢复其他冲突所有者，本地 MOD 库原始副本始终保留。
 - **联网搜索与安装**：新增来源适配层，Nexus 由官方 API adapter 负责；踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge 只返回通过站点规则校验的外部链接。结果携带来源类型和访问方式，DeepSeek Chat Completions 只负责选择固定工具和整理候选，不充当浏览器、下载器或站点抓取器。
 - **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
-- **MOD 知识分析**：知识条目以 MOD ID、来源、版本/哈希、路径特征和文本来源为边界。精确冲突与部署状态继续查询工作区快照，检索文本只用于解释和诊断建议。
-- **游戏知识问答**：复用同一检索接口但使用独立 `game` 命名空间。素材、技能等精确数据来自版本化结构化索引，攻略和配装资料必须保留来源、版本与适用条件。
+- **MOD 知识分析**：`modding` 域保存跨 MOD 复用的制作知识；本地 MOD 是待分析对象。Rust 先枚举全部文件、运行路径规则和格式解析器、复用模型识别并建立资源依赖图，DeepSeek 只根据结构化证据和命中资料解释整体工作链。精确冲突与部署状态继续查询工作区快照。
+- **游戏知识问答**：`game-facts` 保存 MHW Steam/PC 最终版本 `15.23.00` 的精确实体、属性和关系，`game-guides` 保存带来源和条件的攻略经验。AcuAI 通过通用实体查询、关系遍历、全文检索、比较和核验工具回答不同类型问题，不为配装或素材路线分别复制业务流程。当前 `15.10.00` curated 索引只是待迁移的既有输入，不能冒充完整的 `15.23.00` 事实包。
 
-知识检索第一阶段采用结构化筛选加全文检索，不预设向量数据库。只有语义召回质量确实不足且数据来源、包体和更新机制明确后，才评估本地向量索引。MOD README、网页文本和社区攻略均作为不可信引用数据注入上下文，不能成为 system 指令或工具参数来源。
+知识检索采用别名/稳定 ID 解析、类型化事实查询、关系查询和 SQLite FTS5 全文检索。DeepSeek 可以生成少量同义检索词并多轮调用工具，但不能提交任意 SQL。第一版不分发向量数据库、预计算向量或本地嵌入模型；只有实际召回评测证明不足，且查询向量生成方式、包体和更新机制都明确后才重新评估。技术文档和攻略均作为不可信引用资料，不能成为 system 指令、工具参数或可执行规则。
+
+### 知识包和存储
+
+```text
+AcumodData/knowledge/
+  active-packs.json
+  packs/<pack-id>/<version>/
+    manifest.json
+    knowledge.sqlite
+    sources.json
+    licenses/
+  analysis/<mod-id>/<content-hash>.json
+  staging/
+```
+
+`.acukb` 是由现有 7-Zip 解包器处理的版本化归档。安装时必须在 staging 中完成安全路径、manifest、SHA-256、允许文件、大小、SQLite `quick_check`、schema 和最低应用版本校验，再写入不可变版本目录并原子更新活动包指针。更新失败时旧版本继续可用；删除知识包不能删除本地 MOD 或传统管理器配置。
+
+知识库逻辑分为 `game-facts`、`game-guides`、`modding` 和可重建的本地 `analysis` 缓存。事实包使用类型明确的领域表，并通过通用 `entities`、`aliases` 和 `relations` 建立跨类别关系；攻略和技术文档使用 `sources`、`documents`、`chunks` 与 FTS5 索引。知识包只保存数据，不允许携带脚本、动态库、任意 SQL、模板指令或其它可执行内容。
+
+### 通用 RAG 和事实核验
+
+```text
+用户问题
+  -> DeepSeek 解析目标和必要限制
+  -> 术语/实体解析
+  -> 结构化事实、关系和文档多轮检索
+  -> Rust 为结果分配 evidenceId
+  -> DeepSeek 提交答案、引用和待核验事实
+  -> Rust 验证引用、实体、具体数值与条件
+  -> knowledgeAnswerReady
+  -> Vue 展示正文、事实/建议标识、来源和数据版本
+```
+
+每轮只保存当前 turn 的短时证据账本，包含知识域、实体或文档 ID、事实字段/片段、来源、游戏版本和知识包版本。游戏知识回答不能直接把未经核验的自由文本当最终事实；不存在的引用、与数据库不符的实体/数值或已失效包版本必须返回模型修正。普通对话继续流式输出，需要精确核验的知识回答在验证完成后以结构化事件整体展示。
 
 建议的首批 Tauri command：
 
@@ -486,8 +531,9 @@ FloatingAgentPanel
 - `start_agent_turn`：接收 `AgentTurnRequest` 和 Tauri `Channel<AgentEvent>`，立即开始异步对话。
 - `confirm_agent_action_plan` / `cancel_agent_action_plan`：按 `planId` 确认或丢弃 Rust 内存中的计划。
 - `create_agent_cleanup_plan`：把用户在审查卡片中的候选选择提交给 Rust，换取普通短时操作计划；前端不能直接应用排除项。
+- `list_knowledge_packs` / `import_knowledge_pack` / `delete_knowledge_pack`：供设置页管理可选知识包，不经过模型工具循环。
 
-`AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。事件类型固定为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`cleanupReviewReady`、`planReady`、`completed` 和 `failed`，每项携带 `turnId` 与递增序号。`cleanupReviewReady` 只携带经过 Rust 全量校验的候选审查 DTO，前端不能自行构造执行参数。前端只拼接 `textDelta`，不解析 DeepSeek 的原始 SSE 数据。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
+`AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。当前类型为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`cleanupReviewReady`、`planReady`、`completed` 和 `failed`；Slice 6 增加只携带 Rust 已核验 DTO 的 `knowledgeAnswerReady`。每项携带 `turnId` 与递增序号，前端不解析 DeepSeek 原始 SSE、原始工具参数或未核验引用。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
 
 ### 工具分级
 
@@ -500,7 +546,9 @@ FloatingAgentPanel
 - `get_game_directory_status`：只返回是否已配置和是否有效，不向模型发送完整本地路径。
 - `scan_mod_cleanup_candidates`：启动全部可部署文件审查，返回本地规则统计和需要 AcuAI 处理的精简文件组；不修改文件。返回值携带 `auditId`、规则版本和分页信息，后续分页复用同一份内存快照。
 - `read_mod_cleanup_text`：只允许读取当前审查范围内、通过扩展名和内容检测的安全纯文本，单文件最多 32 KB；Rust 隐藏疑似凭据和本地用户路径。
-- `search_mod_knowledge` / `search_game_knowledge`：分别查询带来源的 MOD 与游戏知识片段。
+- `search_modding_knowledge` / `get_mod_resource_graph`：查询 MOD 制作知识和 Rust 已生成的本地资源依赖图。
+- `resolve_game_terms` / `search_game_entities` / `get_game_relations`：解析术语并查询精确游戏实体和关系。
+- `search_game_documents` / `compare_game_entities` / `verify_game_facts`：检索攻略、比较实体并核验答案中的事实；全部使用固定枚举和参数化查询。
 - `search_mod_sources`：通过固定来源 adapter 查询 MOD 候选，不接受任意 URL。
 
 写操作工具只生成 `AgentActionPlan`，不能在工具调用阶段执行：
@@ -530,7 +578,7 @@ AI 文本请求使用独立的异步状态，不占用全局文件任务锁；�
 - 默认只发送稳定 ID、显示名、分类、启用状态、替换摘要和冲突数量，不发送本地绝对路径、文件内容、API Key 或完整日志。
 - MHW 术语通过 `lookup_mhw_terms` 按需查询，不把完整 ID 表塞进 system prompt。
 - 清理分析默认只发送模糊文件组的 MOD ID、相对路径、扩展名、大小、部署状态、本地规则证据和同目录摘要；标准资源组不逐文件发送。只有模型明确需要且文件通过本地纯文本检测时，才追加最多 32 KB 的裁剪文本；不上传图片、二进制文件、完整 MOD 压缩包或本地绝对路径。
-- 知识问答只发送命中的最小片段及来源元数据，`mods` 与 `game` 两个知识域不得混成无来源的长上下文。
+- 知识问答只发送命中的最小事实和片段及其 `evidenceId`；`game-facts`、`game-guides`、`modding` 和本地分析证据不得混成无来源的长上下文。单 turn 设定工具轮数、命中数量和约 24～32 KB 的证据上限。
 - 第一版只保存当前运行期间的会话，不把聊天记录持久化；设置中后续再增加可选历史记录。
 - DeepSeek API Key 应保存到 Windows Credential Manager。开发阶段可使用进程环境变量 `DEEPSEEK_API_KEY`，禁止写入 `AppData/config.json` 或 `AcumodData/`。
 

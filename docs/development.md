@@ -70,6 +70,8 @@ src-tauri/
 - Rust Tauri command 放在 `src-tauri/src/commands/`。
 - Rust 业务逻辑后续放在 `src-tauri/src/services/`。
 - 配置、MOD 元数据、启用状态、排序和部署记录读写后续放在 `src-tauri/src/storage/`。
+- 知识包运行时服务放在 `src-tauri/src/services/knowledge/`，MOD 文件分析放在 `src-tauri/src/services/mod_analysis/`；二者不放进 DeepSeek client 或工具分发文件。
+- 可重复的知识数据清洗、校验和打包脚本放在 `scripts/knowledge/`；开发源数据、来源清单和人工核对记录放在 `references/knowledge/`，生成的 `.acukb` 发布物不作为主程序资源打包。
 
 ## Tauri invoke 检查清单
 
@@ -491,5 +493,6 @@ Windows 上保留 Tauri Webview 的原生文件拖入，以便接收文件系统
 - 改 Vue/TypeScript：运行 `npm.cmd run build`。
 - 改 Tauri/Rust：运行 `cd src-tauri` 后的 `cargo check` 和 `cargo fmt`。
 - 改前后端通信：同时运行前端 build 和 Rust check，并手动启动 `npm.cmd run tauri:dev` 验证窗口行为。
+- 改知识数据或构建脚本：运行对应 ETL、schema/SQLite 完整性、行数、重复 ID、外键、官方简繁覆盖和固定问题集检查；同时记录生成包的版本、SHA-256、压缩大小与安装大小。
 
 验证失败时，必须保留错误信息并先说明失败位置，再决定下一步。

@@ -47,6 +47,10 @@ const COMMON_NATIVE_PC_CHILDREN: &[&str] = &[
     "weapon", "wp", "pl", "armor", "common", "npc", "em", "quest", "stage", "sound", "vfx",
     "effect", "ui", "otomo", "charm", "mus", "plugins",
 ];
+const MOD_CLEANUP_RULES_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/resources/mod-cleanup-rules.json"
+));
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,16 +153,53 @@ pub struct ModCleanupCandidate {
     pub local_kind: String,
     pub local_hint: String,
     pub currently_deployed: bool,
+    pub review_source: String,
+    pub risk_level: String,
+    pub keep_signals: Vec<String>,
+    pub exclude_signals: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModCleanupScan {
     pub installed_mod_count: usize,
+    pub scanned_file_count: usize,
+    pub local_keep_count: usize,
+    pub local_remove_count: usize,
+    pub ai_review_count: usize,
+    pub rule_version: u32,
     pub candidate_count: usize,
     pub candidates: Vec<ModCleanupCandidate>,
     pub warnings: Vec<String>,
     pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModCleanupTextPreview {
+    pub candidate_id: String,
+    pub library_relative_path: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModCleanupRules {
+    schema_version: u32,
+    runtime_extensions: HashSet<String>,
+    plugin_runtime_extensions: HashSet<String>,
+    game_root_runtime_extensions: HashSet<String>,
+    exact_junk_names: HashSet<String>,
+    junk_path_components: HashSet<String>,
+    backup_suffixes: Vec<String>,
+    known_authoring_tool_prefixes: Vec<String>,
+    documentation_extensions: HashSet<String>,
+    documentation_keywords: Vec<String>,
+    preview_extensions: HashSet<String>,
+    preview_keywords: Vec<String>,
+    archive_extensions: HashSet<String>,
+    safe_text_extensions: HashSet<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -2299,6 +2340,68 @@ pub fn scan_mod_cleanup_candidates_with_progress(
     scan_mod_cleanup_candidates_from(&contexts, progress)
 }
 
+/// 只重新盘点指定 MOD，用于清理计划的状态版本校验，避免确认阶段再次扫描整个库。
+pub fn scan_mod_cleanup_candidates_for_mod_ids(
+    app: &tauri::AppHandle,
+    mod_ids: &[String],
+) -> Result<ModCleanupScan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let mut seen = HashSet::new();
+    let contexts = mod_ids
+        .iter()
+        .filter(|mod_id| seen.insert(mod_id.as_str()))
+        .map(|mod_id| load_installed_manifest(&paths.installed_path, mod_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    scan_mod_cleanup_candidates_from(&contexts, &OperationReporter::default())
+}
+
+/// 读取清理审查中的安全纯文本片段；不会返回绝对路径或读取二进制内容。
+pub fn read_mod_cleanup_text_preview(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    candidate_id: String,
+) -> Result<ModCleanupTextPreview, String> {
+    const MAX_TEXT_BYTES: u64 = 32 * 1024;
+
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let context = load_installed_manifest(&paths.installed_path, mod_id.trim())?;
+    let file = context
+        .manifest
+        .files
+        .iter()
+        .find(|file| {
+            cleanup_candidate_id(&context.manifest.id, &file.library_relative_path)
+                == candidate_id.trim()
+        })
+        .ok_or_else(|| "清理候选已经变化，请重新扫描。".to_string())?;
+    let extension = cleanup_file_extension(&file.library_relative_path);
+    if !mod_cleanup_rules()?
+        .safe_text_extensions
+        .contains(&extension)
+    {
+        return Err("该文件不是允许读取的安全文本类型。".to_string());
+    }
+
+    let source_path = source_path_for_installed_file(&context, file)?;
+    let mut bytes = Vec::new();
+    fs::File::open(&source_path)
+        .map_err(|error| format!("无法打开清理候选文本：{error}"))?
+        .take(MAX_TEXT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("无法读取清理候选文本：{error}"))?;
+    let truncated = bytes.len() as u64 > MAX_TEXT_BYTES;
+    bytes.truncate(MAX_TEXT_BYTES as usize);
+    let content = redact_cleanup_text(decode_cleanup_text(&bytes)?);
+    Ok(ModCleanupTextPreview {
+        candidate_id,
+        library_relative_path: file.library_relative_path.clone(),
+        content,
+        truncated,
+    })
+}
+
 /// 返回当前全部部署排除项，用于生成恢复计划。
 pub fn list_mod_cleanup_exclusions(
     app: &tauri::AppHandle,
@@ -3229,10 +3332,7 @@ fn mod_cleanup_candidate_folder_from(
         .manifest
         .files
         .iter()
-        .find(|file| {
-            cleanup_candidate_metadata(file).is_some()
-                && cleanup_candidate_id(mod_id, &file.library_relative_path) == candidate_id
-        })
+        .find(|file| cleanup_candidate_id(mod_id, &file.library_relative_path) == candidate_id)
         .ok_or_else(|| "清理候选已经变化，请重新扫描。".to_string())?;
     let source_path = source_path_for_installed_file(&context, file)?;
     source_path
@@ -5146,9 +5246,14 @@ fn scan_mod_cleanup_candidates_from(
     contexts: &[InstalledManifestContext],
     progress: &OperationReporter,
 ) -> Result<ModCleanupScan, String> {
+    let rules = mod_cleanup_rules()?;
     let mut candidates = Vec::new();
     let mut warnings = Vec::new();
-    progress.report("正在筛选可清理文件", 0, Some(contexts.len()), None);
+    let mut scanned_file_count = 0;
+    let mut local_keep_count = 0;
+    let mut local_remove_count = 0;
+    let mut ai_review_count = 0;
+    progress.report("正在盘点 MOD 文件", 0, Some(contexts.len()), None);
 
     for (index, context) in contexts.iter().enumerate() {
         let excluded_paths = context
@@ -5172,15 +5277,14 @@ fn scan_mod_cleanup_candidates_from(
             .iter()
             .map(|file| conflict_path_key(&file.deploy_relative_path))
             .collect::<HashSet<_>>();
+        let recognized_path_keys = recognized_cleanup_path_keys(&context.manifest);
 
         for file in &context.manifest.files {
             let library_key = conflict_path_key(&file.library_relative_path);
             if excluded_paths.contains(&library_key) {
                 continue;
             }
-            let Some((extension, local_kind, local_hint)) = cleanup_candidate_metadata(file) else {
-                continue;
-            };
+            scanned_file_count += 1;
             let source_path = match source_path_for_installed_file(context, file) {
                 Ok(path) => path,
                 Err(error) => {
@@ -5203,6 +5307,47 @@ fn scan_mod_cleanup_candidates_from(
                 .get(&library_key)
                 .cloned()
                 .unwrap_or_else(|| file.deploy_relative_path.clone());
+            let evidence = cleanup_rule_evidence(
+                context,
+                file,
+                &effective_deploy_path,
+                &recognized_path_keys,
+                rules,
+                &mut warnings,
+            );
+            if !evidence.keep_signals.is_empty() && evidence.exclude_signals.is_empty() {
+                local_keep_count += 1;
+                continue;
+            }
+            let (review_source, risk_level, local_kind, local_hint) =
+                if evidence.keep_signals.is_empty() && !evidence.exclude_signals.is_empty() {
+                    local_remove_count += 1;
+                    (
+                        "localRule",
+                        "low",
+                        evidence.kind.as_str(),
+                        evidence.exclude_signals.join("；"),
+                    )
+                } else {
+                    ai_review_count += 1;
+                    let risk_level = if evidence.keep_signals.is_empty() {
+                        "medium"
+                    } else {
+                        "high"
+                    };
+                    let hint = if evidence.keep_signals.is_empty()
+                        && evidence.exclude_signals.is_empty()
+                    {
+                        "本地规则无法确定该文件用途".to_string()
+                    } else {
+                        format!(
+                            "保留证据：{}；排除证据：{}",
+                            evidence.keep_signals.join("、"),
+                            evidence.exclude_signals.join("、")
+                        )
+                    };
+                    ("acuAi", risk_level, "ambiguous", hint)
+                };
             candidates.push(ModCleanupCandidate {
                 candidate_id: cleanup_candidate_id(
                     &context.manifest.id,
@@ -5212,17 +5357,21 @@ fn scan_mod_cleanup_candidates_from(
                 mod_name: manifest_display_name(&context.manifest),
                 library_relative_path: file.library_relative_path.clone(),
                 deploy_relative_path: effective_deploy_path.clone(),
-                extension,
+                extension: cleanup_file_extension(&file.deploy_relative_path),
                 size_bytes,
-                local_kind,
+                local_kind: local_kind.to_string(),
                 local_hint,
                 currently_deployed: deployed_path_keys
                     .contains(&conflict_path_key(&effective_deploy_path)),
+                review_source: review_source.to_string(),
+                risk_level: risk_level.to_string(),
+                keep_signals: evidence.keep_signals,
+                exclude_signals: evidence.exclude_signals,
             });
         }
 
         progress.report(
-            "正在筛选可清理文件",
+            "正在盘点 MOD 文件",
             index + 1,
             Some(contexts.len()),
             Some(manifest_display_name(&context.manifest)),
@@ -5240,12 +5389,19 @@ fn scan_mod_cleanup_candidates_from(
             })
     });
     let message = if candidates.is_empty() {
-        "没有发现图片、说明文档、网页链接或安装教程候选。".to_string()
+        format!("已盘点 {scanned_file_count} 个文件，本地规则未发现需要清理或审核的项目。")
     } else {
-        format!("共发现 {} 个可能无需部署的文件。", candidates.len())
+        format!(
+            "已盘点 {scanned_file_count} 个文件：本地保留 {local_keep_count} 个，本地建议排除 {local_remove_count} 个，需要 AcuAI 审核 {ai_review_count} 个。"
+        )
     };
     Ok(ModCleanupScan {
         installed_mod_count: contexts.len(),
+        scanned_file_count,
+        local_keep_count,
+        local_remove_count,
+        ai_review_count,
+        rule_version: rules.schema_version,
         candidate_count: candidates.len(),
         candidates,
         warnings,
@@ -5253,40 +5409,264 @@ fn scan_mod_cleanup_candidates_from(
     })
 }
 
-fn cleanup_candidate_metadata(file: &InstalledModFile) -> Option<(String, String, String)> {
-    let path = file.deploy_relative_path.replace('\\', "/");
-    let lower_path = path.to_lowercase();
-    let file_name = lower_path.rsplit('/').next().unwrap_or(&lower_path);
-    let extension = file_name.rsplit_once('.')?.1.to_string();
-    let (local_kind, mut local_hint) = match extension.as_str() {
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" => {
-            ("image", "常见图片格式，可能是预览图或说明配图")
-        }
-        "txt" | "md" | "markdown" | "rtf" | "nfo" | "pdf" | "doc" | "docx" => {
-            ("document", "常见说明文档格式")
-        }
-        "html" | "htm" | "url" | "lnk" => ("link", "网页、链接或离线说明格式"),
-        _ => return None,
-    };
-    if lower_path.contains("/plugins/") || lower_path.starts_with("plugins/") {
-        local_hint = "位于插件目录，可能是运行时资源，不能仅按扩展名清理";
-    } else if [
-        "readme",
-        "install",
-        "tutorial",
-        "preview",
-        "screenshot",
-        "sample",
-    ]
-    .iter()
-    .any(|token| file_name.contains(token))
-        || ["说明", "安装", "教程", "预览", "截图", "示例"]
-            .iter()
-            .any(|token| file_name.contains(token))
-    {
-        local_hint = "文件名具有说明、安装教程或预览图特征";
+struct CleanupRuleEvidence {
+    keep_signals: Vec<String>,
+    exclude_signals: Vec<String>,
+    kind: String,
+}
+
+fn mod_cleanup_rules() -> Result<&'static ModCleanupRules, String> {
+    static RULES: OnceLock<Result<ModCleanupRules, String>> = OnceLock::new();
+    match RULES.get_or_init(|| {
+        serde_json::from_str(MOD_CLEANUP_RULES_JSON)
+            .map_err(|error| format!("无法解析内置 MOD 清理规则：{error}"))
+    }) {
+        Ok(rules) if rules.schema_version > 0 => Ok(rules),
+        Ok(_) => Err("内置 MOD 清理规则版本无效。".to_string()),
+        Err(error) => Err(error.clone()),
     }
-    Some((extension, local_kind.to_string(), local_hint.to_string()))
+}
+
+fn recognized_cleanup_path_keys(manifest: &InstalledModManifest) -> HashSet<String> {
+    manifest
+        .model_replacements
+        .iter()
+        .flat_map(|replacement| {
+            replacement.matched_files.iter().chain(
+                replacement
+                    .associations
+                    .iter()
+                    .flat_map(|association| association.matched_files.iter()),
+            )
+        })
+        .map(|path| conflict_path_key(path))
+        .collect()
+}
+
+fn cleanup_rule_evidence(
+    context: &InstalledManifestContext,
+    file: &InstalledModFile,
+    effective_deploy_path: &str,
+    recognized_path_keys: &HashSet<String>,
+    rules: &ModCleanupRules,
+    warnings: &mut Vec<String>,
+) -> CleanupRuleEvidence {
+    let normalized_path = file.deploy_relative_path.replace('\\', "/");
+    let lower_path = normalized_path.to_lowercase();
+    let file_name = lower_path.rsplit('/').next().unwrap_or(&lower_path);
+    let extension = cleanup_file_extension(&lower_path);
+    let components = lower_path.split('/').collect::<Vec<_>>();
+    let in_native_pc = lower_path.starts_with("nativepc/");
+    let in_plugins =
+        lower_path.starts_with("nativepc/plugins/") || lower_path.starts_with("plugins/");
+    let mut keep_signals = Vec::new();
+    let mut exclude_signals = Vec::new();
+    let mut kind = "ambiguous".to_string();
+
+    if (recognized_path_keys.contains(&conflict_path_key(&file.deploy_relative_path))
+        || recognized_path_keys.contains(&conflict_path_key(effective_deploy_path)))
+        && (rules.runtime_extensions.contains(&extension) || in_plugins)
+    {
+        keep_signals.push("已被游戏内容识别器命中".to_string());
+    }
+    if in_native_pc && rules.runtime_extensions.contains(&extension) {
+        keep_signals.push("位于 nativePC 的已知 MHW 运行资源".to_string());
+    }
+    if in_plugins {
+        keep_signals.push(if rules.plugin_runtime_extensions.contains(&extension) {
+            "位于插件目录的已知运行依赖".to_string()
+        } else {
+            "位于高风险插件运行目录".to_string()
+        });
+    }
+    if !in_native_pc && rules.game_root_runtime_extensions.contains(&extension) {
+        keep_signals.push("游戏根目录加载器资源".to_string());
+    }
+
+    if rules.exact_junk_names.contains(file_name)
+        || components
+            .iter()
+            .any(|component| rules.junk_path_components.contains(*component))
+    {
+        kind = "systemJunk".to_string();
+        exclude_signals.push("操作系统、压缩工具或开发环境生成文件".to_string());
+    }
+    if rules
+        .backup_suffixes
+        .iter()
+        .any(|suffix| file_name.ends_with(suffix))
+    {
+        kind = "backup".to_string();
+        exclude_signals.push("文件名使用明确的备份后缀".to_string());
+    }
+    let normalized_tool_name = file_name.trim_start_matches(['.', '_', '-']);
+    let file_stem = normalized_tool_name
+        .split('.')
+        .next()
+        .unwrap_or(normalized_tool_name);
+    if extension == "exe"
+        && rules
+            .known_authoring_tool_prefixes
+            .iter()
+            .any(|prefix| file_stem.starts_with(prefix))
+    {
+        kind = "authoringTool".to_string();
+        exclude_signals.push("已知 MOD 制作工具，不是游戏运行文件".to_string());
+    }
+    let has_document_keyword = rules
+        .documentation_keywords
+        .iter()
+        .any(|keyword| file_name.contains(keyword));
+    let native_pc_root_file = lower_path
+        .strip_prefix("nativepc/")
+        .is_some_and(|relative| !relative.contains('/'));
+    if rules.documentation_extensions.contains(&extension)
+        && (has_document_keyword
+            || native_pc_root_file
+            || matches!(extension.as_str(), "url" | "lnk"))
+    {
+        kind = "document".to_string();
+        exclude_signals.push("明确的说明、教程或链接文件".to_string());
+    }
+    if rules.preview_extensions.contains(&extension)
+        && rules
+            .preview_keywords
+            .iter()
+            .any(|keyword| file_name.contains(keyword))
+    {
+        kind = "preview".to_string();
+        exclude_signals.push("文件名具有明确的预览或截图特征".to_string());
+    }
+    if in_native_pc && rules.archive_extensions.contains(&extension) {
+        kind = "archive".to_string();
+        exclude_signals.push("nativePC 内的嵌套压缩包不会被游戏直接读取".to_string());
+    }
+    match duplicate_copy_original(context, file) {
+        Ok(Some(original_path)) => {
+            kind = "duplicateCopy".to_string();
+            exclude_signals.push(format!("与规范名称文件内容相同：{original_path}"));
+        }
+        Ok(None) => {}
+        Err(error) => warnings.push(error),
+    }
+
+    CleanupRuleEvidence {
+        keep_signals,
+        exclude_signals,
+        kind,
+    }
+}
+
+fn cleanup_file_extension(path: &str) -> String {
+    let file_name = path
+        .replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    file_name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_string())
+        .unwrap_or_default()
+}
+
+fn decode_cleanup_text(bytes: &[u8]) -> Result<String, String> {
+    if let Some(content) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        return String::from_utf8(content.to_vec())
+            .map_err(|_| "文本不是有效的 UTF-8 内容。".to_string());
+    }
+    if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
+        let little_endian = bytes.starts_with(&[0xff, 0xfe]);
+        let content = &bytes[2..];
+        if content.len() % 2 != 0 {
+            return Err("UTF-16 文本长度无效。".to_string());
+        }
+        let units = content
+            .chunks_exact(2)
+            .map(|chunk| {
+                if little_endian {
+                    u16::from_le_bytes([chunk[0], chunk[1]])
+                } else {
+                    u16::from_be_bytes([chunk[0], chunk[1]])
+                }
+            })
+            .collect::<Vec<_>>();
+        return String::from_utf16(&units).map_err(|_| "文本不是有效的 UTF-16 内容。".to_string());
+    }
+    if bytes.contains(&0) {
+        return Err("文件包含二进制内容，拒绝发送给 AcuAI。".to_string());
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|_| "文本不是有效的 UTF-8 内容。".to_string())
+}
+
+fn redact_cleanup_text(content: String) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let lower = line.to_lowercase();
+            if [
+                "api_key",
+                "apikey",
+                "access_token",
+                "password",
+                "secret",
+                ":\\users\\",
+                ":/users/",
+            ]
+            .iter()
+            .any(|token| lower.contains(token))
+            {
+                "[已隐藏可能的凭据或本地路径]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn duplicate_copy_original(
+    context: &InstalledManifestContext,
+    file: &InstalledModFile,
+) -> Result<Option<String>, String> {
+    let Some(original_deploy_path) = original_path_for_named_copy(&file.deploy_relative_path)
+    else {
+        return Ok(None);
+    };
+    let Some(original_file) = context.manifest.files.iter().find(|candidate| {
+        conflict_path_key(&candidate.deploy_relative_path)
+            == conflict_path_key(&original_deploy_path)
+    }) else {
+        return Ok(None);
+    };
+    let copy_source = source_path_for_installed_file(context, file)?;
+    let original_source = source_path_for_installed_file(context, original_file)?;
+    regular_files_are_equal(&copy_source, &original_source)
+        .map(|same| same.then_some(original_file.deploy_relative_path.clone()))
+}
+
+fn original_path_for_named_copy(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let (parent, file_name) = normalized
+        .rsplit_once('/')
+        .map_or(("", normalized.as_str()), |(parent, file_name)| {
+            (parent, file_name)
+        });
+    let (stem, extension) = file_name.rsplit_once('.')?;
+    let lower_stem = stem.to_lowercase();
+    let suffix = [" - copy", " copy", " - 副本", " 副本"]
+        .into_iter()
+        .find(|suffix| lower_stem.ends_with(suffix))?;
+    let original_stem = stem[..stem.len() - suffix.len()].trim_end();
+    if original_stem.is_empty() {
+        return None;
+    }
+    let original_name = format!("{original_stem}.{extension}");
+    Some(if parent.is_empty() {
+        original_name
+    } else {
+        format!("{parent}/{original_name}")
+    })
 }
 
 fn cleanup_candidate_id(mod_id: &str, library_relative_path: &str) -> String {
@@ -5357,7 +5737,16 @@ fn apply_mod_cleanup_exclusions_from_with_progress(
     }
 
     let contexts = load_all_installed_manifests(&paths.installed_path)?;
-    let scan = scan_mod_cleanup_candidates_from(&contexts, &OperationReporter::default())?;
+    let selected_mod_ids = selections
+        .iter()
+        .map(|selection| selection.mod_id.as_str())
+        .collect::<HashSet<_>>();
+    let selected_contexts = contexts
+        .iter()
+        .filter(|context| selected_mod_ids.contains(context.manifest.id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let scan = scan_mod_cleanup_candidates_from(&selected_contexts, &OperationReporter::default())?;
     let candidates = scan
         .candidates
         .into_iter()
@@ -10086,8 +10475,13 @@ mod tests {
         let scan =
             scan_mod_cleanup_candidates_from(&[context.clone()], &OperationReporter::default())
                 .unwrap();
+        assert_eq!(scan.scanned_file_count, 2);
+        assert_eq!(scan.local_keep_count, 1);
+        assert_eq!(scan.local_remove_count, 1);
+        assert_eq!(scan.ai_review_count, 0);
         assert_eq!(scan.candidate_count, 1);
         let candidate = scan.candidates.into_iter().next().unwrap();
+        assert_eq!(candidate.review_source, "localRule");
         let library_source = context.content_path.join(&candidate.library_relative_path);
         assert!(library_source.is_file());
         assert_eq!(
@@ -10134,6 +10528,42 @@ mod tests {
                 .candidate_count,
             0
         );
+
+        cleanup(source);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn cleanup_rules_only_send_ambiguous_or_conflicting_evidence_to_acuai() {
+        let source = temp_root("cleanup_rule_source");
+        let installed_root = temp_root("cleanup_rule_target");
+        write_file(&source.join("nativePC/wp/model.mod3"));
+        write_file(&source.join("nativePC/wp/source.dds"));
+        write_file(&source.join("nativePC/wp/model.mrl3.bak"));
+        write_file(&source.join("nativePC/plugins/readme.txt"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source), false, &installed_root).unwrap();
+        let context = load_installed_manifest(&installed_root, &installed.mod_id).unwrap();
+        let scan =
+            scan_mod_cleanup_candidates_from(&[context], &OperationReporter::default()).unwrap();
+
+        assert_eq!(scan.scanned_file_count, 4);
+        assert_eq!(scan.local_keep_count, 1);
+        assert_eq!(scan.local_remove_count, 1);
+        assert_eq!(scan.ai_review_count, 2);
+        assert_eq!(scan.candidate_count, 3);
+        assert!(scan.candidates.iter().any(|candidate| {
+            candidate.library_relative_path.ends_with("model.mrl3.bak")
+                && candidate.review_source == "localRule"
+        }));
+        assert!(scan.candidates.iter().any(|candidate| {
+            candidate
+                .library_relative_path
+                .ends_with("plugins/readme.txt")
+                && candidate.review_source == "acuAi"
+                && candidate.risk_level == "high"
+        }));
 
         cleanup(source);
         cleanup(installed_root);

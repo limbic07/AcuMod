@@ -88,10 +88,11 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "scan_mod_cleanup_candidates",
-                "description": "扫描全部已安装 MOD 中可能无需部署的图片、说明、网页链接和教程。支持分页；必须读取全部页面后再分类。扫描不修改任何文件。",
+                "description": "盘点全部已安装 MOD 的可部署文件。本地规则先处理确定保留和确定排除项，只返回需要 AcuAI 判断的模糊文件组。首次调用省略 auditId，后续分页必须复用返回的 auditId。扫描不修改任何文件。",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "auditId": { "type": "string", "description": "后续分页复用首次扫描返回的审查 ID" },
                         "offset": { "type": "integer", "minimum": 0 },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
                     },
@@ -102,29 +103,45 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
-                "name": "submit_mod_cleanup_review",
-                "description": "提交全部清理候选的结构化分类并展示给用户逐项选择。必须覆盖扫描得到的每个 candidateId，不能漏项或重复。不会执行清理。",
+                "name": "read_mod_cleanup_text",
+                "description": "仅在无法根据文件组元数据判断时，读取当前清理审查中一个候选文件最多 32 KB 的安全文本。Rust 会拒绝二进制类型并隐藏疑似凭据和本地路径。",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "auditId": { "type": "string" },
+                        "candidateId": { "type": "string" }
+                    },
+                    "required": ["auditId", "candidateId"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "submit_mod_cleanup_review",
+                "description": "提交全部模糊文件组的结构化分类，并与本地规则建议合并后展示给用户逐项选择。必须覆盖审查中的每个 groupId，不能漏项或重复。不会执行清理。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "auditId": { "type": "string" },
                         "classifications": {
                             "type": "array",
-                            "minItems": 1,
                             "maxItems": 2000,
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "candidateId": { "type": "string" },
+                                    "groupId": { "type": "string" },
                                     "recommendation": { "type": "string", "enum": ["remove", "review", "keep"] },
                                     "reason": { "type": "string" },
                                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
                                 },
-                                "required": ["candidateId", "recommendation", "reason", "confidence"],
+                                "required": ["groupId", "recommendation", "reason", "confidence"],
                                 "additionalProperties": false
                             }
                         }
                     },
-                    "required": ["classifications"],
+                    "required": ["auditId", "classifications"],
                     "additionalProperties": false
                 }
             }
@@ -358,6 +375,7 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "create_conflict_order_plan" => "生成冲突优先级计划",
         "create_model_remap_plan" => "生成模型改绑计划",
         "scan_mod_cleanup_candidates" => "扫描可清理文件",
+        "read_mod_cleanup_text" => "读取候选文本",
         "submit_mod_cleanup_review" => "整理清理建议",
         "get_mod_cleanup_exclusions" => "查询清理记录",
         "create_cleanup_restore_plan" => "生成清理恢复计划",
@@ -484,53 +502,66 @@ pub(crate) async fn execute_tool(
         }
         "scan_mod_cleanup_candidates" => {
             let args = parse_arguments::<CleanupScanArgs>(arguments)?;
-            let worker_app = app.clone();
-            let candidates =
-                tauri::async_runtime::spawn_blocking(move || cleanup::scan_candidates(&worker_app))
-                    .await
-                    .map_err(|error| format!("清理候选扫描任务失败：{error}"))??;
+            let audit = if let Some(audit_id) = args.audit_id.as_deref() {
+                coordinator.get_cleanup_audit(audit_id)?
+            } else {
+                if args.offset.unwrap_or(0) != 0 {
+                    return Err("首次清理扫描必须从 offset 0 开始。".to_string());
+                }
+                let worker_app = app.clone();
+                let audit =
+                    tauri::async_runtime::spawn_blocking(move || cleanup::scan_audit(&worker_app))
+                        .await
+                        .map_err(|error| format!("清理候选扫描任务失败：{error}"))??;
+                coordinator.store_cleanup_audit(audit.clone())?;
+                audit
+            };
+            if audit.ai_groups.is_empty() && audit.scan.local_remove_count > 0 {
+                let review = cleanup::create_review(coordinator, &audit.audit_id, Vec::new())?;
+                return ToolExecution::cleanup_review(review);
+            }
             let limit = args.limit.unwrap_or(100).clamp(1, 100);
             let (start, end, next_offset) =
-                pagination_bounds(candidates.len(), args.offset.unwrap_or(0), limit);
-            let page = candidates[start..end]
-                .iter()
-                .map(|candidate| {
-                    json!({
-                        "candidateId": candidate.candidate_id,
-                        "modId": candidate.mod_id,
-                        "modName": candidate.mod_name,
-                        "libraryRelativePath": candidate.library_relative_path,
-                        "deployRelativePath": candidate.deploy_relative_path,
-                        "extension": candidate.extension,
-                        "sizeBytes": candidate.size_bytes,
-                        "localKind": candidate.local_kind,
-                        "localHint": candidate.local_hint,
-                        "currentlyDeployed": candidate.currently_deployed
-                    })
-                })
-                .collect::<Vec<_>>();
+                pagination_bounds(audit.ai_groups.len(), args.offset.unwrap_or(0), limit);
+            let page = &audit.ai_groups[start..end];
             Ok(ToolExecution::query(
                 json!({
                     "ok": true,
-                    "total": candidates.len(),
+                    "auditId": audit.audit_id,
+                    "ruleVersion": audit.scan.rule_version,
+                    "scannedFileCount": audit.scan.scanned_file_count,
+                    "localKeepCount": audit.scan.local_keep_count,
+                    "localSuggestedCount": audit.scan.local_remove_count,
+                    "aiFileCount": audit.scan.ai_review_count,
+                    "total": audit.ai_groups.len(),
                     "offset": start,
                     "returned": page.len(),
                     "nextOffset": next_offset,
-                    "candidates": page
+                    "groups": page,
+                    "message": audit.scan.message
                 })
                 .to_string(),
             ))
         }
         "submit_mod_cleanup_review" => {
             let args = parse_arguments::<CleanupReviewArgs>(arguments)?;
-            let worker_app = app.clone();
-            let worker_coordinator = coordinator.clone();
-            let review = tauri::async_runtime::spawn_blocking(move || {
-                cleanup::create_review(&worker_app, &worker_coordinator, args.classifications)
-            })
-            .await
-            .map_err(|error| format!("清理建议生成任务失败：{error}"))??;
+            let review = cleanup::create_review(coordinator, &args.audit_id, args.classifications)?;
             ToolExecution::cleanup_review(review)
+        }
+        "read_mod_cleanup_text" => {
+            let args = parse_arguments::<CleanupTextArgs>(arguments)?;
+            let preview =
+                cleanup::read_text_preview(app, coordinator, &args.audit_id, &args.candidate_id)?;
+            Ok(ToolExecution::query(
+                serde_json::to_string(&json!({
+                    "ok": true,
+                    "candidateId": preview.candidate_id,
+                    "libraryRelativePath": preview.library_relative_path,
+                    "content": preview.content,
+                    "truncated": preview.truncated
+                }))
+                .map_err(|error| format!("无法序列化候选文本：{error}"))?,
+            ))
         }
         "get_mod_cleanup_exclusions" => {
             parse_arguments::<EmptyArgs>(arguments)?;
@@ -709,6 +740,7 @@ struct CreateModelRemapPlanArgs {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CleanupScanArgs {
+    audit_id: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
 }
@@ -716,7 +748,15 @@ struct CleanupScanArgs {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CleanupReviewArgs {
+    audit_id: String,
     classifications: Vec<cleanup::CleanupClassification>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupTextArgs {
+    audit_id: String,
+    candidate_id: String,
 }
 
 #[derive(Deserialize)]

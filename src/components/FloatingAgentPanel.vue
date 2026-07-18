@@ -91,7 +91,7 @@ function renderAssistantMarkdown(message: ChatMessage) {
     message.renderedHtml = markdown.render(message.text || "正在整理回答...");
   } catch {
     message.renderedHtml = "";
-    error.value = "AI 回答的 Markdown 渲染失败，已保留原始文本。";
+    error.value = "AcuAI 回答的 Markdown 渲染失败，已保留原始文本。";
   }
 }
 
@@ -174,7 +174,7 @@ function applyAgentEvent(event: AgentEvent, assistant: ChatMessage) {
     }
   }
   if (event.kind === "failed") {
-    error.value = event.message ?? "AI 回答失败。";
+    error.value = event.message ?? "AcuAI 回答失败。";
     statusMessage.value = "";
   }
 }
@@ -270,6 +270,20 @@ function cleanupRecommendationLabel(item: AgentCleanupReviewItem) {
     return "需要确认";
   }
   return "建议保留";
+}
+
+function cleanupDecisionSourceLabel(item: AgentCleanupReviewItem) {
+  return item.decisionSource === "localRule" ? "本地规则" : "AcuAI";
+}
+
+function cleanupRiskLabel(item: AgentCleanupReviewItem) {
+  if (item.riskLevel === "high") {
+    return "高风险";
+  }
+  if (item.riskLevel === "medium") {
+    return "需谨慎";
+  }
+  return "低风险";
 }
 
 function formatFileSize(sizeBytes: number) {
@@ -454,17 +468,18 @@ watch(
     v-if="!open"
     type="button"
     class="agent-launcher"
-    title="打开 AI 助手"
+    title="打开 AcuAI"
+    aria-label="打开 AcuAI"
     @click="$emit('openPanel')"
   >
-    AI
+    AcuAI
   </button>
 
-  <aside v-else class="agent-panel" aria-label="AI 助手">
+  <aside v-else class="agent-panel" aria-label="AcuAI">
     <header>
       <div>
         <p>Acumen MOD Manager</p>
-        <h2>AI 助手</h2>
+        <h2>AcuAI</h2>
       </div>
       <div class="header-actions">
         <button type="button" title="清空当前对话" :disabled="isSending" @click="clearConversation">
@@ -473,8 +488,8 @@ watch(
         <button
           type="button"
           class="close-button"
-          title="关闭 AI 助手"
-          aria-label="关闭 AI 助手"
+          title="关闭 AcuAI"
+          aria-label="关闭 AcuAI"
           @click="$emit('close')"
         >
           ×
@@ -482,7 +497,7 @@ watch(
       </div>
     </header>
 
-    <div v-if="isLoadingSettings && !settings" class="agent-empty">正在读取 AI 设置...</div>
+    <div v-if="isLoadingSettings && !settings" class="agent-empty">正在读取 AcuAI 设置...</div>
     <div v-else-if="!settings?.apiKeyConfigured" class="agent-empty">
       <strong>尚未配置 DeepSeek 访问密钥</strong>
       <span>配置后可查询本地 MOD、冲突和 MHW 游戏术语。</span>
@@ -504,7 +519,7 @@ watch(
         </div>
         <template v-for="message in messages" :key="message.id">
           <div class="chat-message" :class="message.role">
-            <span>{{ message.role === "user" ? "你" : "AI" }}</span>
+            <span>{{ message.role === "user" ? "你" : "AcuAI" }}</span>
             <div
               v-if="message.role === 'assistant' && message.complete !== false"
               class="message-content markdown-body"
@@ -527,6 +542,12 @@ watch(
               <span>{{ cleanupReviewStatusLabel(cleanup) }}</span>
             </div>
             <p>{{ cleanup.review.message }}</p>
+            <div class="cleanup-audit-summary">
+              <span>扫描 {{ cleanup.review.scannedFileCount }}</span>
+              <span>本地保留 {{ cleanup.review.localKeepCount }}</span>
+              <span>本地建议 {{ cleanup.review.localRemoveCount }}</span>
+              <span>AcuAI 审核 {{ cleanup.review.aiReviewCount }}</span>
+            </div>
             <p class="cleanup-safety-note">只排除游戏目录部署，本地 MOD 库原始文件不会删除。</p>
 
             <div class="cleanup-review-groups">
@@ -566,6 +587,9 @@ watch(
                         </span>
                         <span>{{ item.reason }}</span>
                         <small>
+                          {{ cleanupDecisionSourceLabel(item) }}
+                          · {{ cleanupRiskLabel(item) }}
+                          ·
                           可信度 {{ Math.round(item.confidence * 100) }}%
                           · {{ formatFileSize(item.sizeBytes) }}
                           · {{ item.currentlyDeployed ? "当前已部署" : "当前未部署" }}
@@ -714,17 +738,25 @@ watch(
 }
 
 .agent-launcher {
-  display: grid;
+  display: inline-flex;
   width: 48px;
   height: 48px;
-  place-items: center;
+  min-width: 48px;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0;
   border: 1px solid #1d6f55;
   border-radius: 50%;
   color: #ffffff;
   background: #24745b;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.7rem;
   font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
   cursor: pointer;
   box-shadow: 0 12px 26px rgba(23, 97, 63, 0.2);
 }
@@ -866,6 +898,21 @@ watch(
   padding: 7px 8px;
   border-left: 3px solid #4d8b72;
   background: #edf6f2;
+}
+
+.cleanup-audit-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cleanup-audit-summary span {
+  padding: 2px 6px;
+  border: 1px solid #c8d8d1;
+  border-radius: 4px;
+  color: #526b62;
+  background: #ffffff;
+  font-size: 0.72rem;
 }
 
 .cleanup-review-groups {

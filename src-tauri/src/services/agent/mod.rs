@@ -45,6 +45,7 @@ struct AgentCoordinatorInner {
     active: AtomicBool,
     history: Mutex<Vec<deepseek::DeepSeekMessage>>,
     plans: Mutex<HashMap<String, StoredAgentActionPlan>>,
+    cleanup_audits: Mutex<HashMap<String, cleanup::AgentCleanupAudit>>,
     cleanup_reviews: Mutex<HashMap<String, cleanup::AgentCleanupReview>>,
 }
 
@@ -240,7 +241,7 @@ impl AgentCoordinator {
         self.inner
             .active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| "AI 助手正在回答上一条消息，请稍候。".to_string())?;
+            .map_err(|_| "AcuAI 正在回答上一条消息，请稍候。".to_string())?;
         Ok(ActiveTurnGuard {
             inner: Arc::clone(&self.inner),
         })
@@ -265,7 +266,7 @@ impl AgentCoordinator {
 
     pub fn clear(&self) -> Result<(), String> {
         if self.inner.active.load(Ordering::Acquire) {
-            return Err("AI 助手正在回答，完成后才能清空对话。".to_string());
+            return Err("AcuAI 正在回答，完成后才能清空对话。".to_string());
         }
         self.inner
             .history
@@ -276,6 +277,11 @@ impl AgentCoordinator {
             .plans
             .lock()
             .map_err(|_| "AI 操作计划状态不可用，请重启 Acumod 后重试。".to_string())?
+            .clear();
+        self.inner
+            .cleanup_audits
+            .lock()
+            .map_err(|_| "AI 清理审查状态不可用，请重启 Acumod 后重试。".to_string())?
             .clear();
         self.inner
             .cleanup_reviews
@@ -331,6 +337,48 @@ impl AgentCoordinator {
             .map_err(|_| "AI 清理候选状态不可用，请重启 Acumod 后重试。".to_string())?
             .insert(review.review_id.clone(), review);
         Ok(())
+    }
+
+    pub(crate) fn store_cleanup_audit(
+        &self,
+        audit: cleanup::AgentCleanupAudit,
+    ) -> Result<(), String> {
+        let mut audits = self
+            .inner
+            .cleanup_audits
+            .lock()
+            .map_err(|_| "AI 清理审查状态不可用，请重启 Acumod 后重试。".to_string())?;
+        // 一次会话只需要保留当前少量审查快照，避免重复扫描产生的清单长期占用内存。
+        if audits.len() >= 4 {
+            audits.clear();
+        }
+        audits.insert(audit.audit_id.clone(), audit);
+        Ok(())
+    }
+
+    pub(crate) fn get_cleanup_audit(
+        &self,
+        audit_id: &str,
+    ) -> Result<cleanup::AgentCleanupAudit, String> {
+        self.inner
+            .cleanup_audits
+            .lock()
+            .map_err(|_| "AI 清理审查状态不可用，请重启 Acumod 后重试。".to_string())?
+            .get(audit_id)
+            .cloned()
+            .ok_or_else(|| "清理审查不存在或已经失效，请重新扫描。".to_string())
+    }
+
+    pub(crate) fn take_cleanup_audit(
+        &self,
+        audit_id: &str,
+    ) -> Result<cleanup::AgentCleanupAudit, String> {
+        self.inner
+            .cleanup_audits
+            .lock()
+            .map_err(|_| "AI 清理审查状态不可用，请重启 Acumod 后重试。".to_string())?
+            .remove(audit_id)
+            .ok_or_else(|| "清理审查不存在或已经提交，请重新扫描。".to_string())
     }
 
     fn take_cleanup_review(&self, review_id: &str) -> Result<cleanup::AgentCleanupReview, String> {
@@ -1213,7 +1261,12 @@ fn state_version_for_action(app: &AppHandle, action: &AgentPlanAction) -> Result
             )
         }
         AgentPlanAction::CleanupExclude { selections, .. } => {
-            let candidates = cleanup::scan_candidates(app)?
+            let mod_ids = selections
+                .iter()
+                .map(|selection| selection.mod_id.clone())
+                .collect::<Vec<_>>();
+            let candidates = mod_library::scan_mod_cleanup_candidates_for_mod_ids(app, &mod_ids)?
+                .candidates
                 .into_iter()
                 .map(|candidate| (candidate.candidate_id.clone(), candidate))
                 .collect::<HashMap<_, _>>();

@@ -51,15 +51,15 @@ App shell
   │   └─ 设置
   ├─ 顶部状态栏
   ├─ 当前工作区
-  └─ 悬浮 AI 助手
+  └─ AcuAI 悬浮助手
 ```
 
 - `src/App.vue` 暂时继续持有既有的页面状态和操作函数，避免在 UI 重构时改变已经验证的 Tauri 调用链。
-- `src/components/` 放应用壳的可复用组件，例如侧边导航、顶部栏和悬浮 AI 窗口；后续业务区块稳定后再逐步抽成 `src/views/` 下的页面。
+- `src/components/` 放应用壳的可复用组件，例如侧边导航、顶部栏和 AcuAI 悬浮窗口；后续业务区块稳定后再逐步抽成 `src/views/` 下的页面。
 - MOD 库、导入 MOD、冲突管理和设置是侧边导航中同级的 `WorkspaceView` 页面。切换页面时只替换右侧内容区中的当前页面，左侧导航和顶部状态区保持可用，并可直接切换到其它页面。
 - UI 只负责切换当前页面和展示 DTO。切换页面不得重置未完成的导入预览、操作计划或后端状态。
 
-悬浮 AI 助手是独立于当前页面的窗口层。它可以在浏览 MOD 库、导入或设置时打开，但未来只能通过与普通 UI 相同的 `src/api/* -> Tauri command -> Rust service -> OperationPlan` 链路提交动作；不能直接读写文件、绕过预览或跳过用户确认。
+AcuAI 是独立于当前页面的悬浮窗口层。它可以在浏览 MOD 库、导入或设置时打开，但只能通过与普通 UI 相同的 `src/api/* -> Tauri command -> Rust service -> OperationPlan` 链路提交动作；不能直接读写文件、绕过预览或跳过用户确认。
 
 ## 前端职责
 
@@ -462,7 +462,7 @@ FloatingAgentPanel
 - `services/agent/mod.rs`：保存内存会话、协调单次 turn、管理 DeepSeek 设置和 Windows 凭据，不包含 MOD 文件操作实现。
 - `services/agent/deepseek.rs`：封装 DeepSeek V4 请求、流式 SSE 解析、工具调用消息和错误转换；项目不设计多供应商抽象。
 - `services/agent/tools.rs`：声明允许模型调用的工具、严格参数 schema、分页和 Rust handler。
-- `services/agent/cleanup.rs`：校验全量候选分类、生成清理审查 DTO 和默认选择；不执行任何文件操作。
+- `services/agent/cleanup.rs`：管理文件审查快照、本地规则分流、文件组与 AI 结果校验，生成清理审查 DTO 和默认选择；不执行任何文件操作。
 
 后续按实际复杂度在 `services/agent/` 下增加 `plans.rs`、`knowledge.rs` 和 `sources/` 等模块，分别承担短时计划、知识检索和联网来源适配；不要预先拆出没有独立职责的空文件。Agent DTO 继续靠近该模块维护，只有出现跨业务复用时再迁移到公共模型目录。
 
@@ -470,7 +470,7 @@ FloatingAgentPanel
 
 ### 五项能力的服务边界
 
-- **冗余文件清理**：传统部署 service 只增加通用的“部署排除记录和重新协调”能力；扫描和 AI 分类仅由 Agent 主动调用。模型只看到候选相对路径等精简元数据，清理计划确认后由部署 service 删除游戏副本或恢复其他冲突所有者，本地 MOD 库原始副本始终保留。
+- **冗余文件清理**：传统部署 service 只拥有通用的“部署排除记录和重新协调”能力；完整文件盘点、本地双信号规则和 AI 分类仅由 Agent 主动调用。Rust 先确定无需 AI 的保留项与排除建议，只把证据冲突或证据不足的文件组交给模型；清理计划确认后由部署 service 删除游戏副本或恢复其他冲突所有者，本地 MOD 库原始副本始终保留。
 - **联网搜索与安装**：新增来源适配层，Nexus 由官方 API adapter 负责；踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge 只返回通过站点规则校验的外部链接。结果携带来源类型和访问方式，DeepSeek Chat Completions 只负责选择固定工具和整理候选，不充当浏览器、下载器或站点抓取器。
 - **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
 - **MOD 知识分析**：知识条目以 MOD ID、来源、版本/哈希、路径特征和文本来源为边界。精确冲突与部署状态继续查询工作区快照，检索文本只用于解释和诊断建议。
@@ -498,7 +498,8 @@ FloatingAgentPanel
 - `get_enabled_conflicts`：查询当前已启用冲突组及优先级。
 - `lookup_mhw_terms`：从本地简中/繁中游戏文本和 ID 索引查询术语。
 - `get_game_directory_status`：只返回是否已配置和是否有效，不向模型发送完整本地路径。
-- `scan_mod_cleanup_candidates`：从全部已安装 MOD 中返回可能为预览图、说明或教程的候选元数据，不修改文件。
+- `scan_mod_cleanup_candidates`：启动全部可部署文件审查，返回本地规则统计和需要 AcuAI 处理的精简文件组；不修改文件。返回值携带 `auditId`、规则版本和分页信息，后续分页复用同一份内存快照。
+- `read_mod_cleanup_text`：只允许读取当前审查范围内、通过扩展名和内容检测的安全纯文本，单文件最多 32 KB；Rust 隐藏疑似凭据和本地用户路径。
 - `search_mod_knowledge` / `search_game_knowledge`：分别查询带来源的 MOD 与游戏知识片段。
 - `search_mod_sources`：通过固定来源 adapter 查询 MOD 候选，不接受任意 URL。
 
@@ -525,10 +526,10 @@ AI 文本请求使用独立的异步状态，不占用全局文件任务锁；�
 
 ### 上下文和会话
 
-- 不把整个 MOD 库、文件清单或游戏目录一次性发送给模型。先在 Rust 本地筛选并分页；普通查询只返回完成回答所需的精简结果，用户明确要求完整列表时按 `nextOffset` 查询到末页。
+- 不把整个 MOD 库、文件清单或游戏目录一次性发送给模型。清理审查先完整盘点，但只把本地规则无法确定的文件组分批发送；普通查询只返回完成回答所需的精简结果，用户明确要求完整列表时按 `nextOffset` 查询到末页。
 - 默认只发送稳定 ID、显示名、分类、启用状态、替换摘要和冲突数量，不发送本地绝对路径、文件内容、API Key 或完整日志。
 - MHW 术语通过 `lookup_mhw_terms` 按需查询，不把完整 ID 表塞进 system prompt。
-- 清理分析默认只发送候选文件的 MOD ID、相对路径、扩展名、大小和部署状态；不上传图片、二进制文件或整个 MOD 压缩包。
+- 清理分析默认只发送模糊文件组的 MOD ID、相对路径、扩展名、大小、部署状态、本地规则证据和同目录摘要；标准资源组不逐文件发送。只有模型明确需要且文件通过本地纯文本检测时，才追加最多 32 KB 的裁剪文本；不上传图片、二进制文件、完整 MOD 压缩包或本地绝对路径。
 - 知识问答只发送命中的最小片段及来源元数据，`mods` 与 `game` 两个知识域不得混成无来源的长上下文。
 - 第一版只保存当前运行期间的会话，不把聊天记录持久化；设置中后续再增加可选历史记录。
 - DeepSeek API Key 应保存到 Windows Credential Manager。开发阶段可使用进程环境变量 `DEEPSEEK_API_KEY`，禁止写入 `AppData/config.json` 或 `AcumodData/`。

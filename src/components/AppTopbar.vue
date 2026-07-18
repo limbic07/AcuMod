@@ -57,7 +57,7 @@ const pageCopy: Record<WorkspaceView, { title: string; description: string }> = 
         {{ isRefreshing ? "刷新中" : "刷新" }}
       </button>
       <button type="button" class="agent-action" @click="$emit('toggleAgent')">
-        {{ agentOpen ? "收起 AI" : "AI 助手" }}
+        {{ agentOpen ? "收起 AcuAI" : "AcuAI" }}
       </button>
     </div>
   </header>

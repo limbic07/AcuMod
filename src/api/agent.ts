@@ -60,11 +60,19 @@ export interface AgentCleanupReviewItem {
   reason: string;
   confidence: number;
   selectedByDefault: boolean;
+  decisionSource: "localRule" | "acuAi";
+  riskLevel: "low" | "medium" | "high";
 }
 
 export interface AgentCleanupReview {
   reviewId: string;
   candidateCount: number;
+  scannedFileCount: number;
+  localKeepCount: number;
+  localRemoveCount: number;
+  aiReviewCount: number;
+  aiGroupCount: number;
+  ruleVersion: number;
   items: AgentCleanupReviewItem[];
   message: string;
 }

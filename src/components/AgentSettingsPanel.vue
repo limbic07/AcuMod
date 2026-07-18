@@ -151,7 +151,7 @@ onMounted(() => {
   <section class="panel secondary agent-settings-panel">
     <div class="agent-settings-heading">
       <div>
-        <h2>AI 助手</h2>
+        <h2>AcuAI</h2>
         <p>使用 DeepSeek V4 查询本地 MOD、冲突和游戏术语。</p>
       </div>
       <button
@@ -260,7 +260,7 @@ onMounted(() => {
       </p>
     </section>
 
-    <p v-if="isLoading" class="settings-message">正在读取 AI 设置...</p>
+    <p v-if="isLoading" class="settings-message">正在读取 AcuAI 设置...</p>
     <p v-else-if="error" class="settings-message error">{{ error }}</p>
     <p v-else-if="resultMessage" class="settings-message success">{{ resultMessage }}</p>
   </section>

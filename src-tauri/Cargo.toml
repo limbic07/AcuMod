@@ -30,3 +30,7 @@ futures-util = "0.3.31"
 keyring = "4.1.5"
 # 狩技 MOD 盒子的 info.xml 是第三方结构化数据，使用 XML 解析器避免手写字符串匹配。
 quick-xml = { version = "0.37", features = ["serialize"] }
+# 知识包是自包含 SQLite 文件；bundled 让用户无需额外安装 SQLite。
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+# 导入时计算整包 SHA-256，避免损坏包或被替换的暂存文件进入活动索引。
+sha2 = "0.11.0"

@@ -312,6 +312,36 @@ pub fn rewrite_mrl3_texture_paths(
     if rewrites.is_empty() {
         return Ok((source_bytes.to_vec(), 0));
     }
+    let mut output = source_bytes.to_vec();
+    let mut rewritten_count = 0;
+    for (path_start, original_path) in mrl3_texture_entries(source_bytes)? {
+        let path_end = path_start + MRL3_TEXTURE_PATH_CAPACITY;
+        let key = normalize_resource_path(&original_path);
+        let Some(target_path) = rewrites.get(&key) else {
+            continue;
+        };
+        let target_bytes = target_path.as_bytes();
+        if target_bytes.len() >= MRL3_TEXTURE_PATH_CAPACITY {
+            return Err(format!("改绑后的 MRL3 贴图路径过长：{target_path}"));
+        }
+
+        output[path_start..path_end].fill(0);
+        output[path_start..path_start + target_bytes.len()].copy_from_slice(target_bytes);
+        rewritten_count += 1;
+    }
+
+    Ok((output, rewritten_count))
+}
+
+/// 只读提取 MRL3 材质表引用的贴图资源路径，供 MOD 依赖分析使用。
+pub fn read_mrl3_texture_paths(source_bytes: &[u8]) -> Result<Vec<String>, String> {
+    Ok(mrl3_texture_entries(source_bytes)?
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect())
+}
+
+fn mrl3_texture_entries(source_bytes: &[u8]) -> Result<Vec<(usize, String)>, String> {
     if source_bytes.len() < 32 || read_u32(source_bytes, 0)? != 5_001_805 {
         return Err("MRL3 文件头无效或暂不支持。".to_string());
     }
@@ -328,8 +358,7 @@ pub fn rewrite_mrl3_texture_paths(
         return Err("MRL3 贴图表超出文件范围。".to_string());
     }
 
-    let mut output = source_bytes.to_vec();
-    let mut rewritten_count = 0;
+    let mut entries = Vec::with_capacity(texture_count);
     for entry_index in 0..texture_count {
         let path_start =
             texture_table_offset + entry_index * MRL3_TEXTURE_ENTRY_SIZE + MRL3_TEXTURE_PATH_OFFSET;
@@ -339,23 +368,11 @@ pub fn rewrite_mrl3_texture_paths(
             .iter()
             .position(|byte| *byte == 0)
             .unwrap_or(MRL3_TEXTURE_PATH_CAPACITY);
-        let original_path = std::str::from_utf8(&slot[..terminator])
+        let path = std::str::from_utf8(&slot[..terminator])
             .map_err(|_| "MRL3 贴图路径不是有效的 UTF-8/ASCII 文本。".to_string())?;
-        let key = normalize_resource_path(original_path);
-        let Some(target_path) = rewrites.get(&key) else {
-            continue;
-        };
-        let target_bytes = target_path.as_bytes();
-        if target_bytes.len() >= MRL3_TEXTURE_PATH_CAPACITY {
-            return Err(format!("改绑后的 MRL3 贴图路径过长：{target_path}"));
-        }
-
-        output[path_start..path_end].fill(0);
-        output[path_start..path_start + target_bytes.len()].copy_from_slice(target_bytes);
-        rewritten_count += 1;
+        entries.push((path_start, path.to_string()));
     }
-
-    Ok((output, rewritten_count))
+    Ok(entries)
 }
 
 fn build_evam_slinger_rewrites(
@@ -1899,6 +1916,13 @@ mod tests {
 
         let (rewritten, count) = rewrite_mrl3_texture_paths(&bytes, &rewrites).unwrap();
         assert_eq!(count, 1);
+        assert_eq!(
+            read_mrl3_texture_paths(&bytes).unwrap(),
+            [
+                "wp\\tietu\\01\\swo022_BML".to_string(),
+                "wp\\tietu\\01\\unrelated".to_string(),
+            ]
+        );
         let first = &rewritten[first_path..first_path + first_value.len()];
         assert_eq!(first, b"wp\\tietu\\01\\swo001_BML");
         assert_eq!(

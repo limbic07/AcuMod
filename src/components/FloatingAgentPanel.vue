@@ -14,6 +14,7 @@ import {
   type AgentCleanupReview,
   type AgentCleanupReviewItem,
   type AgentEvent,
+  type AgentKnowledgeEvidence,
   type AgentSettings,
 } from "../api/agent";
 import { openModCleanupCandidateFolder } from "../api/modLibrary";
@@ -27,6 +28,7 @@ interface ChatMessage {
   renderedHtml: string;
   actionPlans: VisibleActionPlan[];
   cleanupReviews: VisibleCleanupReview[];
+  knowledgeEvidence: AgentKnowledgeEvidence[];
 }
 
 interface VisibleActionPlan {
@@ -173,6 +175,15 @@ function applyAgentEvent(event: AgentEvent, assistant: ChatMessage) {
       void scrollToLatest();
     }
   }
+  if (event.kind === "knowledgeEvidenceReady") {
+    const known = new Set(assistant.knowledgeEvidence.map((item) => item.evidenceId));
+    for (const item of event.knowledgeEvidence) {
+      if (!known.has(item.evidenceId)) {
+        assistant.knowledgeEvidence.push(item);
+      }
+    }
+    void scrollToLatest();
+  }
   if (event.kind === "failed") {
     error.value = event.message ?? "AcuAI 回答失败。";
     statusMessage.value = "";
@@ -199,6 +210,7 @@ async function sendMessage() {
     renderedHtml: "",
     actionPlans: [],
     cleanupReviews: [],
+    knowledgeEvidence: [],
   };
   const assistantMessage: ChatMessage = {
     id: nextMessageId++,
@@ -208,6 +220,7 @@ async function sendMessage() {
     renderedHtml: "",
     actionPlans: [],
     cleanupReviews: [],
+    knowledgeEvidence: [],
   };
   messages.value.push(userMessage, assistantMessage);
   input.value = "";
@@ -284,6 +297,13 @@ function cleanupRiskLabel(item: AgentCleanupReviewItem) {
     return "需谨慎";
   }
   return "低风险";
+}
+
+function knowledgeEvidenceMeta(item: AgentKnowledgeEvidence) {
+  if (item.packId === "acumod-local-analysis") {
+    return `${item.sourceTitle || "Acumod 本地 MOD 分析器"} · 分析器 ${item.packVersion}`;
+  }
+  return `${item.sourceTitle || "本地已验证知识"} · 游戏 ${item.gameVersion} · 可信度 ${Math.round(item.confidence * 100)}%`;
 }
 
 function formatFileSize(sizeBytes: number) {
@@ -528,6 +548,26 @@ watch(
             />
             <p v-else>{{ message.text || "正在整理回答..." }}</p>
           </div>
+
+          <details
+            v-if="message.role === 'assistant' && message.knowledgeEvidence.length"
+            class="knowledge-evidence-card"
+          >
+            <summary>本次回答的知识来源（{{ message.knowledgeEvidence.length }}）</summary>
+            <ul>
+              <li v-for="item in message.knowledgeEvidence" :key="item.evidenceId">
+                <a
+                  v-if="item.sourceUrl"
+                  :href="item.sourceUrl"
+                  @click="openMarkdownLink"
+                >{{ item.title }}</a>
+                <span v-else>{{ item.title }}</span>
+                <small>
+                  {{ knowledgeEvidenceMeta(item) }}
+                </small>
+              </li>
+            </ul>
+          </details>
 
           <section
             v-for="cleanup in message.cleanupReviews"
@@ -859,6 +899,43 @@ watch(
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 5px;
+}
+
+.knowledge-evidence-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid #d5e2dc;
+  border-radius: 6px;
+  color: #40574e;
+  background: #fbfdfc;
+  font-size: 0.76rem;
+}
+
+.knowledge-evidence-card summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.knowledge-evidence-card ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 17px;
+}
+
+.knowledge-evidence-card li {
+  display: grid;
+  gap: 2px;
+}
+
+.knowledge-evidence-card a {
+  color: #1c6a52;
+  font-weight: 700;
+}
+
+.knowledge-evidence-card small {
+  color: #6b7f77;
 }
 
 .cleanup-review-card {

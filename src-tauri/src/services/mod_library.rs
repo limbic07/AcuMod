@@ -311,6 +311,23 @@ pub struct InstalledModSummary {
     pub model_remap_count: usize,
 }
 
+/// MOD 分析服务的受控输入。绝对路径只在 Rust 内部使用，不会序列化给前端或模型。
+pub(crate) struct ModAnalysisInput {
+    pub mod_id: String,
+    pub name: String,
+    pub files: Vec<ModAnalysisInputFile>,
+    pub model_replacements: Vec<ModelReplacement>,
+}
+
+pub(crate) struct ModAnalysisInputFile {
+    pub source_path: PathBuf,
+    pub library_relative_path: String,
+    pub source_deploy_relative_path: String,
+    pub effective_deploy_relative_path: String,
+    pub size_bytes: u64,
+    pub excluded_from_deployment: bool,
+}
+
 /// MOD 库浏览顺序更新结果；只描述界面顺序，不参与部署或冲突优先级。
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2311,6 +2328,66 @@ pub fn list_installed_mods(app: &tauri::AppHandle) -> Result<InstalledModList, S
     let paths = library_paths(app)?;
     ensure_library_directories(&paths)?;
     list_installed_mods_from(&paths.installed_path)
+}
+
+/// 只读取一个已安装 MOD 的 manifest，并把每个清单文件解析为受控本地路径。
+/// Agent 和前端均只传稳定 MOD ID，不能提交任意文件系统路径。
+pub(crate) fn load_mod_analysis_input(
+    app: &tauri::AppHandle,
+    mod_id: &str,
+) -> Result<ModAnalysisInput, String> {
+    let paths = library_paths(app)?;
+    load_mod_analysis_input_from(&paths.installed_path, mod_id)
+}
+
+/// 测试和离线审计可直接指定受控的 installed 根目录，不需要构造 Tauri 窗口。
+pub(crate) fn load_mod_analysis_input_from(
+    installed_root: &Path,
+    mod_id: &str,
+) -> Result<ModAnalysisInput, String> {
+    let context = load_installed_manifest(installed_root, mod_id.trim())?;
+    let original_replacements =
+        model_replacements_for_manifest(&context.manifest, &context.content_path)?;
+    let model_replacements =
+        effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?;
+    let effective_files =
+        effective_remap_files_for_manifest(&context.manifest, &original_replacements)?;
+    if effective_files.len() != context.manifest.files.len() {
+        return Err("模型改绑后的文件索引与 MOD 清单不一致。".to_string());
+    }
+    let excluded_paths = context
+        .manifest
+        .deployment_exclusions
+        .iter()
+        .map(|item| conflict_path_key(&item.library_relative_path))
+        .collect::<HashSet<_>>();
+    let mut files = Vec::with_capacity(context.manifest.files.len());
+    for (index, installed_file) in context.manifest.files.iter().enumerate() {
+        let source_path = source_path_for_installed_file(&context, installed_file)?;
+        let size_bytes = fs::metadata(&source_path)
+            .map_err(|error| format!("无法读取 MOD 文件大小：{error}"))?
+            .len();
+        files.push(ModAnalysisInputFile {
+            source_path,
+            library_relative_path: installed_file.library_relative_path.clone(),
+            source_deploy_relative_path: installed_file.deploy_relative_path.clone(),
+            effective_deploy_relative_path: effective_files[index].deploy_relative_path.clone(),
+            size_bytes,
+            excluded_from_deployment: excluded_paths
+                .contains(&conflict_path_key(&installed_file.library_relative_path)),
+        });
+    }
+    files.sort_by(|left, right| {
+        left.effective_deploy_relative_path
+            .to_lowercase()
+            .cmp(&right.effective_deploy_relative_path.to_lowercase())
+    });
+    Ok(ModAnalysisInput {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        files,
+        model_replacements,
+    })
 }
 
 pub fn get_mod_workspace_snapshot_with_progress(
@@ -10162,9 +10239,9 @@ mod tests {
         read_mod_library_order_store, remove_category_from_manifests,
         remove_mod_from_conflict_orders, replace_mod_library_order_from, restore_all_mods_from,
         restore_mod_library_import_order_from, save_manifest, save_mod_category_store,
-        scan_mod_cleanup_candidates_from, uninstall_mod_from, validate_archive_path,
-        ModCategoryStore, ModDeploymentExclusion, ModLibraryOrderStore, StoredModCategory,
-        MOD_CATEGORY_STORE_SCHEMA_VERSION,
+        scan_mod_cleanup_candidates_from, source_path_for_installed_file, uninstall_mod_from,
+        validate_archive_path, ModCategoryStore, ModDeploymentExclusion, ModLibraryOrderStore,
+        StoredModCategory, MOD_CATEGORY_STORE_SCHEMA_VERSION,
     };
     use crate::operations::OperationReporter;
 
@@ -10482,7 +10559,13 @@ mod tests {
         assert_eq!(scan.candidate_count, 1);
         let candidate = scan.candidates.into_iter().next().unwrap();
         assert_eq!(candidate.review_source, "localRule");
-        let library_source = context.content_path.join(&candidate.library_relative_path);
+        let installed_file = context
+            .manifest
+            .files
+            .iter()
+            .find(|file| file.library_relative_path == candidate.library_relative_path)
+            .unwrap();
+        let library_source = source_path_for_installed_file(&context, installed_file).unwrap();
         assert!(library_source.is_file());
         assert_eq!(
             mod_cleanup_candidate_folder_from(

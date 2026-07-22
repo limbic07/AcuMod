@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    { "locationId": "1", "englishName": "Ancient Forest", "stageId": "ST101", "nameZhHans": "古代树森林", "nameZhHant": "古代樹森林" },
+    { "locationId": "2", "englishName": "Wildspire Waste", "stageId": "ST102", "nameZhHans": "大蚁冢荒地", "nameZhHant": "大蟻塚荒地" },
+    { "locationId": "3", "englishName": "Coral Highlands", "stageId": "ST103", "nameZhHans": "陆珊瑚台地", "nameZhHant": "陸珊瑚台地" },
+    { "locationId": "4", "englishName": "Rotten Vale", "stageId": "ST104", "nameZhHans": "瘴气之谷", "nameZhHant": "瘴氣之谷" },
+    { "locationId": "5", "englishName": "Elder's Recess", "stageId": "ST105", "nameZhHans": "龙结晶之地", "nameZhHant": "龍結晶之地" },
+    { "locationId": "6", "englishName": "Everstream", "stageId": "ST403", "nameZhHans": "地脉回廊", "nameZhHant": "地脈迴廊" },
+    { "locationId": "7", "englishName": "Great Ravine", "stageId": "ST106", "nameZhHans": "大峡谷", "nameZhHant": "大峽谷" },
+    { "locationId": "8", "englishName": "Arena", "stageId": "ST202", "nameZhHans": "斗技场", "nameZhHant": "鬥技場" },
+    { "locationId": "9", "englishName": "Confluence of Fates", "stageId": "ST405", "nameZhHans": "地脉收束地", "nameZhHant": "地脈收束地" },
+    { "locationId": "10", "englishName": "Caverns of El Dorado", "stageId": "ST409", "nameZhHans": "地脉黄金乡" },
+    { "locationId": "11", "englishName": "Special Arena", "stageId": "ST201", "nameZhHans": "特殊斗技场" },
+    { "locationId": "12", "englishName": "Hoarfrost Reach", "stageId": "ST108", "nameZhHans": "永霜冻土" },
+    { "locationId": "13", "englishName": "Origin Isle", "stageId": "ST412", "nameZhHans": "起源的孤岛" },
+    { "locationId": "14", "englishName": "Guiding Lands", "stageId": "ST109", "nameZhHans": "聚魔之地" },
+    { "locationId": "15", "englishName": "Secluded Valley", "stageId": "ST415", "nameZhHans": "幽境之谷" },
+    { "locationId": "17", "englishName": "Castle Schrade", "stageId": "ST417", "nameZhHans": "虚黑城" }
+  ]
+}

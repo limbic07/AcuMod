@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "sourceId": "mhw-curated-special-quest-name-map",
+  "entries": [
+    { "englishName": "A Visitor From Another World", "questId": "50601", "nameZhHans": "来自异世界的访客" },
+    { "englishName": "The Legendary Beast", "questId": "50905", "nameZhHans": "传说的魔兽贝希摩斯" },
+    { "englishName": "He Taketh It With His Eyes", "questId": "50906", "nameZhHans": "受伤的魔兽贝希摩斯" },
+    { "englishName": "Reveal Thyself, Destroyer", "questId": "51601", "nameZhHans": "出来吧，破坏的化身" },
+    { "englishName": "Sterling Pride", "questId": "51602", "nameZhHans": "银色的矜持" },
+    { "englishName": "Across the Lost Path", "questId": "51603", "nameZhHans": "失去的幽世线" },
+    { "englishName": "Point of No Return", "questId": "51604", "nameZhHans": "不归的地底" },
+    { "englishName": "...And My Rage for All", "questId": "51606", "nameZhHans": "极限爆碎" },
+    { "englishName": "The Fury Remains", "questId": "51607", "nameZhHans": "金色罗剎" },
+    { "englishName": "Blazing Black Twilight", "questId": "51611", "nameZhHans": "黄昏黑星" },
+    { "englishName": "The Black Dragon", "questId": "51612", "nameZhHans": "黑龙" },
+    { "englishName": "Dawn's Triumph", "questId": "51613", "nameZhHans": "破晓的凯旋" },
+    { "englishName": "Urgent: Pukei Pukei Hunt", "questId": "00205", "nameZhHans": "紧急任务·狩猎毒妖鸟" },
+    { "englishName": "The Embodiment of Legiana", "questId": "00408", "nameZhHans": "华丽猎人·风漂龙" },
+    { "englishName": "The Thunderous Troublemaker", "questId": "01405", "nameZhHans": "暴徒大将的狩猎大作战！" },
+    { "englishName": "Man's Best Friend", "questId": "00582", "nameZhHans": "捕获：惨爪龙的生态调查" },
+    { "englishName": "Google-eyed Green Monster", "questId": "00652", "nameZhHans": "狩猎毒妖鸟" },
+    { "englishName": "Today's Special: Hunter Flambe", "questId": "50751", "nameZhHans": "你我都是食物链" },
+    { "englishName": "Lavasioth, Master of Magma", "questId": "00791", "nameZhHans": "熔岩龙" },
+    { "englishName": "A Blaze in the Sand", "questId": "00861", "nameZhHans": "热沙阳炎" },
+    { "englishName": "Nargacoulda, Should, Woulda", "questId": "01352", "nameZhHans": "疾风的迅龙" }
+  ]
+}

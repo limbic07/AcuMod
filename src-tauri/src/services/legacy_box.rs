@@ -93,7 +93,7 @@ pub struct LegacyBoxImportResult {
 }
 
 #[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 struct LegacyBoxInfoXml {
     module_id: String,
     module_name: String,

@@ -6,7 +6,9 @@ import AppTopbar from "./components/AppTopbar.vue";
 import AgentSettingsPanel from "./components/AgentSettingsPanel.vue";
 import BranchGroupSuggestionDialog from "./components/BranchGroupSuggestionDialog.vue";
 import FloatingAgentPanel from "./components/FloatingAgentPanel.vue";
+import KnowledgeSettingsPanel from "./components/KnowledgeSettingsPanel.vue";
 import ModCategoryManager from "./components/ModCategoryManager.vue";
+import ModAnalysisDialog from "./components/ModAnalysisDialog.vue";
 import ModLibraryTable from "./components/ModLibraryTable.vue";
 import ModLibraryToolbar from "./components/ModLibraryToolbar.vue";
 import OperationStatusBar from "./components/OperationStatusBar.vue";
@@ -19,6 +21,7 @@ import { earliestArmorMenuOrder } from "./domain/armorMenuOrder";
 import { armorTargetDisplayLabel } from "./domain/armorLabels";
 import { compareNaturalText } from "./domain/textSort";
 import { getAppInfo, type AppInfo } from "./api/app";
+import { analyzeInstalledMod, type ModAnalysisReport } from "./api/modAnalysis";
 import { listenOperationProgress, type OperationProgress } from "./api/operations";
 import {
   detectGameDirectory,
@@ -118,6 +121,11 @@ const conflictReport = ref<ModConflictReport | null>(null);
 const modCategories = ref<ModCategory[]>([]);
 const modBranchGroups = ref<ModBranchGroup[]>([]);
 const remapDetails = ref<ModRemapDetails | null>(null);
+const analysisDialogMod = ref<InstalledModSummary | null>(null);
+const modAnalysisReport = ref<ModAnalysisReport | null>(null);
+const modAnalysisError = ref("");
+const isAnalyzingMod = ref(false);
+let modAnalysisRequestToken = 0;
 const selectedRemapGroupKey = ref("");
 const selectedRemapTargetId = ref("");
 const manualSlingerTargetId = ref("");
@@ -2056,6 +2064,46 @@ async function openRemapManager(mod: InstalledModSummary) {
   }
 }
 
+async function openModAnalysis(mod: InstalledModSummary) {
+  const requestToken = ++modAnalysisRequestToken;
+  analysisDialogMod.value = mod;
+  modAnalysisReport.value = null;
+  modAnalysisError.value = "";
+  isAnalyzingMod.value = true;
+
+  try {
+    const report = await analyzeInstalledMod(mod.id);
+    // 用户关闭弹窗或切换到另一个 MOD 后，旧任务结果不能覆盖当前界面。
+    if (requestToken === modAnalysisRequestToken && analysisDialogMod.value?.id === mod.id) {
+      modAnalysisReport.value = report;
+    }
+  } catch (error) {
+    if (requestToken === modAnalysisRequestToken && analysisDialogMod.value?.id === mod.id) {
+      modAnalysisError.value = userFacingError(error);
+    }
+  } finally {
+    if (requestToken === modAnalysisRequestToken) {
+      isAnalyzingMod.value = false;
+    }
+  }
+}
+
+function closeModAnalysis() {
+  // 后台任务不能取消，但递增令牌可阻止已关闭弹窗接收迟到结果。
+  modAnalysisRequestToken += 1;
+  analysisDialogMod.value = null;
+  modAnalysisReport.value = null;
+  modAnalysisError.value = "";
+  isAnalyzingMod.value = false;
+}
+
+function retryModAnalysis() {
+  const mod = analysisDialogMod.value;
+  if (mod) {
+    void openModAnalysis(mod);
+  }
+}
+
 function closeRemapManager(force = false) {
   if (isApplyingRemap.value && !force) {
     return;
@@ -2412,6 +2460,8 @@ onBeforeUnmount(() => {
           </section>
 
           <AgentSettingsPanel />
+
+          <KnowledgeSettingsPanel />
 
           <section class="panel secondary">
             <div class="panel-heading compact">
@@ -2993,9 +3043,10 @@ onBeforeUnmount(() => {
           @batch-uninstall="uninstallInstalledModsInBatch"
           @create-branch-group="createBranchGroupFromMods"
           @rename-branch-group="renameBranchGroup"
-          @ungroup-mods="ungroupInstalledMods"
-          @manage-remap="openRemapManager"
-          @reorder="reorderModLibraryItem"
+           @ungroup-mods="ungroupInstalledMods"
+           @manage-remap="openRemapManager"
+           @analyze="openModAnalysis"
+           @reorder="reorderModLibraryItem"
           @uninstall="uninstallInstalledMod"
         />
       </div>
@@ -3139,6 +3190,16 @@ onBeforeUnmount(() => {
     :error="branchSuggestionError"
     @close="closeBranchSuggestionDialog"
     @confirm="createSuggestedBranchGroups"
+  />
+
+  <ModAnalysisDialog
+    v-if="analysisDialogMod"
+    :mod-name="analysisDialogMod.name"
+    :report="modAnalysisReport"
+    :loading="isAnalyzingMod"
+    :error="modAnalysisError"
+    @close="closeModAnalysis"
+    @retry="retryModAnalysis"
   />
 
   <div v-if="remapDetails" class="dialog-backdrop" role="presentation">

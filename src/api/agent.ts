@@ -101,8 +101,20 @@ export type AgentEventKind =
   | "toolFinished"
   | "planReady"
   | "cleanupReviewReady"
+  | "knowledgeEvidenceReady"
   | "completed"
   | "failed";
+
+export interface AgentKnowledgeEvidence {
+  evidenceId: string;
+  title: string;
+  gameVersion: string;
+  confidence: number;
+  sourceTitle: string | null;
+  sourceUrl: string | null;
+  packId: string;
+  packVersion: string;
+}
 
 export interface AgentEvent {
   turnId: string;
@@ -113,6 +125,7 @@ export interface AgentEvent {
   message: string | null;
   plan: AgentActionPlan | null;
   cleanupReview: AgentCleanupReview | null;
+  knowledgeEvidence: AgentKnowledgeEvidence[];
 }
 
 export interface AgentTurnResult {

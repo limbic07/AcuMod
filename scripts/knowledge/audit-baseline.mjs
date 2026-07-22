@@ -1,0 +1,661 @@
+import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import process from "node:process";
+
+const projectRoot = path.resolve(import.meta.dirname, "../..");
+const rawPackageRoot = path.join(
+  projectRoot,
+  "references/mhwi-data/raw/15.10.00-agent-package",
+);
+const rawManifestPath = path.join(rawPackageRoot, "manifest.json");
+const curatedRoot = path.join(projectRoot, "references/mhwi-data/curated");
+const defaultOutputRoot = path.join(projectRoot, "references/knowledge/audits");
+const questUnlockSnapshotPath = path.join(projectRoot, "references/knowledge/raw/game8-quest-unlocks/current.json");
+const curatedQuestNameMapPath = path.join(projectRoot, "references/knowledge/sources/quest-name-map.json");
+const developmentGameFactsPath = path.join(projectRoot, "references/knowledge/build/acumod-dev-game-facts.acukb");
+
+const coverageDefinitions = [
+  {
+    topic: "weapons",
+    label: "武器",
+    status: "partial",
+    tables: ["weapons"],
+    available: "名称、类型、稀有度、模型路径",
+    missing: "攻击属性、斩味、孔位、升级树与素材配方",
+  },
+  {
+    topic: "armor",
+    label: "防具与外观装备",
+    status: "partial",
+    tables: ["armor", "armor_series"],
+    available: "名称、部位、稀有度、防御、幻化 ID 与模型路径",
+    missing: "技能、孔位、抗性与制作素材",
+  },
+  {
+    topic: "skills",
+    label: "技能",
+    status: "partial",
+    tables: ["skills"],
+    available: "技能名称与基础说明",
+    missing: "各等级数值、装备来源与配装关系",
+  },
+  {
+    topic: "decorations",
+    label: "装饰珠",
+    status: "partial",
+    tables: ["decorations"],
+    available: "名称、物品 ID 与孔位",
+    missing: "技能组成、掉落来源与概率",
+  },
+  {
+    topic: "charms",
+    label: "护石",
+    status: "missing",
+    tables: [],
+    available: "无；现有 pendants 表是武器挂件，不是护石",
+    missing: "护石名称、等级、技能、升级路线与素材",
+  },
+  {
+    topic: "items",
+    label: "物品",
+    status: "partial",
+    tables: ["items"],
+    available: "名称、类型、稀有度与说明",
+    missing: "获取来源、用途关系与合成配方",
+  },
+  {
+    topic: "crafting",
+    label: "制作与强化素材",
+    status: "missing",
+    tables: [],
+    available: "无结构化关系",
+    missing: "装备制作、升级与素材获取关系",
+  },
+  {
+    topic: "monsters",
+    label: "怪物",
+    status: "partial",
+    tables: ["monsters"],
+    available: "名称、游戏 ID 与代码",
+    missing: "弱点、肉质、异常耐性、招式与生态信息",
+  },
+  {
+    topic: "monsterDrops",
+    label: "怪物素材与掉落",
+    status: "missing",
+    tables: [],
+    available: "无结构化关系",
+    missing: "部位破坏、剥取、任务奖励与概率",
+  },
+  {
+    topic: "quests",
+    label: "任务",
+    status: "partial",
+    tables: ["quests", "deliveries", "login_bonus"],
+    available: "任务名称、目标、失败条件及部分交货任务",
+    missing: "前置条件、解锁链、地点、怪物、奖励与素材",
+  },
+  {
+    topic: "stages",
+    label: "地图与场景",
+    status: "partial",
+    tables: ["stages"],
+    available: "场景 ID 与名称",
+    missing: "区域、采集点、营地和环境关系",
+  },
+  {
+    topic: "specialEquipment",
+    label: "特殊装备",
+    status: "partial",
+    tables: ["special_equipment"],
+    available: "名称、代码与说明",
+    missing: "解锁条件、持续时间和冷却数据",
+  },
+  {
+    topic: "palicoEquipment",
+    label: "随从装备",
+    status: "partial",
+    tables: ["palico_weapons", "palico_armor"],
+    available: "名称与模型路径",
+    missing: "属性、技能与制作素材",
+  },
+  {
+    topic: "kinsects",
+    label: "猎虫",
+    status: "partial",
+    tables: ["kinsects"],
+    available: "名称、ID 与模型路径",
+    missing: "属性、粉尘和强化路线",
+  },
+  {
+    topic: "canteen",
+    label: "猫饭与食材",
+    status: "partial",
+    tables: ["canteen_skills", "ingredients"],
+    available: "猫饭技能、食材名称与说明",
+    missing: "食材解锁条件、组合规则与触发概率",
+  },
+  {
+    topic: "otherTerminology",
+    label: "其他游戏术语",
+    status: "partial",
+    tables: ["npc", "poogie", "achievements", "melodies", "endemic_life", "gallery"],
+    available: "若干名称、说明、代码或模型路径",
+    missing: "跨表关系与完整攻略语义",
+  },
+];
+
+function parseArguments(argv) {
+  const values = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (!argument.startsWith("--")) continue;
+    const [rawKey, inlineValue] = argument.slice(2).split("=", 2);
+    if (inlineValue !== undefined) {
+      values[rawKey] = inlineValue;
+      continue;
+    }
+    const next = argv[index + 1];
+    if (next && !next.startsWith("--")) {
+      values[rawKey] = next;
+      index += 1;
+    } else {
+      values[rawKey] = true;
+    }
+  }
+  return values;
+}
+
+async function pathExists(targetPath) {
+  try {
+    await stat(targetPath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function readJson(filePath) {
+  return JSON.parse(await readFile(filePath, "utf8"));
+}
+
+function incrementCount(map, key, amount = 1) {
+  map.set(key, (map.get(key) ?? 0) + amount);
+}
+
+function normalizeRelativePath(relativePath) {
+  return relativePath.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+function stripDeploymentRoot(relativePath) {
+  const normalized = normalizeRelativePath(relativePath);
+  return normalized.replace(/^nativepc\//i, "");
+}
+
+function extensionOf(relativePath) {
+  const basename = path.posix.basename(normalizeRelativePath(relativePath));
+  const extension = path.posix.extname(basename).toLowerCase();
+  return extension || "[无扩展名]";
+}
+
+function sortedCounts(map, keyName = "value") {
+  return [...map.entries()]
+    .map(([key, count]) => ({ [keyName]: key, count }))
+    .sort((left, right) => right.count - left.count || String(left[keyName]).localeCompare(String(right[keyName]), "zh-CN"));
+}
+
+function addAggregateEntry(map, key, modIndex, size) {
+  const current = map.get(key) ?? { fileCount: 0, totalBytes: 0, modIndexes: new Set() };
+  current.fileCount += 1;
+  current.totalBytes += size;
+  current.modIndexes.add(modIndex);
+  map.set(key, current);
+}
+
+function serializeAggregate(map, keyName) {
+  return [...map.entries()]
+    .map(([key, value]) => ({
+      [keyName]: key,
+      fileCount: value.fileCount,
+      modCount: value.modIndexes.size,
+      totalBytes: value.totalBytes,
+    }))
+    .sort((left, right) => right.fileCount - left.fileCount || String(left[keyName]).localeCompare(String(right[keyName]), "zh-CN"));
+}
+
+async function collectFiles(rootPath, relativeRoot = "") {
+  const files = [];
+  let unreadableEntryCount = 0;
+  const directories = [{ absolutePath: rootPath, relativePath: relativeRoot }];
+
+  while (directories.length > 0) {
+    const current = directories.pop();
+    let entries;
+    try {
+      entries = await readdir(current.absolutePath, { withFileTypes: true });
+    } catch {
+      unreadableEntryCount += 1;
+      continue;
+    }
+
+    for (const entry of entries) {
+      const absolutePath = path.join(current.absolutePath, entry.name);
+      const relativePath = normalizeRelativePath(path.join(current.relativePath, entry.name));
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        directories.push({ absolutePath, relativePath });
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const metadata = await lstat(absolutePath);
+        files.push({ absolutePath, relativePath, size: metadata.size });
+      } catch {
+        unreadableEntryCount += 1;
+      }
+    }
+  }
+
+  return { files, unreadableEntryCount };
+}
+
+async function findModLibrary(explicitRoot) {
+  if (explicitRoot) {
+    const resolved = path.resolve(explicitRoot);
+    if (!(await pathExists(resolved))) {
+      throw new Error(`指定的 MOD 库目录不存在: ${resolved}`);
+    }
+    return resolved;
+  }
+
+  const candidates = [
+    path.join(projectRoot, "src-tauri/target/debug/AcumodData/mods/installed"),
+    path.join(projectRoot, "src-tauri/target/release/AcumodData/mods/installed"),
+  ];
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function auditRawPackage() {
+  const manifest = await readJson(rawManifestPath);
+  const formatTotals = {};
+  for (const format of ["csv", "jsonl"]) {
+    let fileCount = 0;
+    let totalBytes = 0;
+    for (const sheet of manifest.sheets) {
+      const relativePath = sheet[format];
+      if (!relativePath) continue;
+      const metadata = await stat(path.join(rawPackageRoot, relativePath));
+      fileCount += 1;
+      totalBytes += metadata.size;
+    }
+    formatTotals[format] = { fileCount, totalBytes };
+  }
+
+  const sqlitePath = path.join(rawPackageRoot, "mhwi_data.sqlite");
+  const sqliteMetadata = await stat(sqlitePath);
+  formatTotals.sqlite = { fileCount: 1, totalBytes: sqliteMetadata.size };
+
+  return {
+    packageName: manifest.name,
+    sourceFileName: manifest.source_file_name,
+    sourceSha256: manifest.source_sha256,
+    gameVersion: "15.10.00",
+    sheetCount: manifest.sheet_count,
+    totalDataRows: manifest.total_data_rows,
+    formats: formatTotals,
+    tables: manifest.sheets.map((sheet) => ({
+      index: sheet.index,
+      sheetTitle: sheet.sheet_title,
+      tableName: sheet.table_name,
+      rowCount: sheet.row_count,
+      columnCount: sheet.column_count,
+      columns: sheet.columns,
+    })),
+    sourcePage: "http://www.mhwmod.com/archives/660",
+    redistribution: "requiresPermission",
+  };
+}
+
+async function auditCuratedData() {
+  const entries = await readdir(curatedRoot, { withFileTypes: true });
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== ".json") continue;
+    const filePath = path.join(curatedRoot, entry.name);
+    const metadata = await stat(filePath);
+    let jsonMetadata = {};
+    try {
+      const json = await readJson(filePath);
+      jsonMetadata = {
+        schemaVersion: json.schemaVersion ?? null,
+        gameVersion: json.gameVersion ?? null,
+        locale: json.locale ?? null,
+      };
+    } catch {
+      jsonMetadata = { parseError: true };
+    }
+    results.push({ fileName: entry.name, totalBytes: metadata.size, ...jsonMetadata });
+  }
+  return results.sort((left, right) => left.fileName.localeCompare(right.fileName, "zh-CN"));
+}
+
+async function auditQuestUnlockCoverage() {
+  if (!(await pathExists(questUnlockSnapshotPath))) {
+    return {
+      available: false,
+      message: "尚未抓取任务解锁快照；运行 knowledge:fetch-quest-unlocks 后可生成来源覆盖统计。",
+    };
+  }
+
+  const [snapshot, curatedNameMap] = await Promise.all([
+    readJson(questUnlockSnapshotPath),
+    readJson(curatedQuestNameMapPath),
+  ]);
+  if (!Array.isArray(snapshot.entries) || !Array.isArray(snapshot.pages) || !Array.isArray(curatedNameMap.entries)) {
+    throw new Error("任务解锁快照或人工名称桥接表结构无效。");
+  }
+
+  const sourcePages = snapshot.pages.map((page) => ({
+    sourceId: String(page.id ?? "unknown"),
+    rank: String(page.rank ?? "unknown"),
+    entryCount: snapshot.entries.filter((entry) => entry.sourceId === page.id).length,
+    parsedCount: snapshot.entries.filter((entry) => entry.sourceId === page.id && entry.parseStatus === "parsed").length,
+  }));
+  const sourceEntryCount = snapshot.entries.length;
+  const parsedSourceEntryCount = snapshot.entries.filter((entry) => entry.parseStatus === "parsed").length;
+
+  let developmentPack = null;
+  if (await pathExists(developmentGameFactsPath)) {
+    const database = new DatabaseSync(developmentGameFactsPath, { readOnly: true });
+    try {
+      const scalar = (sql) => Object.values(database.prepare(sql).get() ?? {})[0] ?? 0;
+      developmentPack = {
+        taskCountWithUnlockData: Number(scalar(
+          "SELECT COUNT(DISTINCT subject_id) FROM relations WHERE predicate = 'requiresCondition'",
+        )),
+        prerequisiteRelationCount: Number(scalar(
+          "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest'",
+        )),
+        unlockConditionCount: Number(scalar(
+          "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresCondition'",
+        )),
+      };
+    } finally {
+      database.close();
+    }
+  }
+
+  return {
+    available: true,
+    sourceEntryCount,
+    parsedSourceEntryCount,
+    unparsedSourceEntryCount: sourceEntryCount - parsedSourceEntryCount,
+    curatedNameBridgeCount: curatedNameMap.entries.length,
+    sourcePages,
+    developmentPack,
+    message: developmentPack
+      ? "开发知识包统计只计入通过稳定任务 ID 或人工逐项核对名称桥接的关系。"
+      : "尚未生成开发知识包；运行 knowledge:build-dev 后可统计最终导入的任务关系。",
+  };
+}
+
+async function auditModLibrary(modLibraryRoot) {
+  if (!modLibraryRoot) {
+    return {
+      available: false,
+      privacy: "未找到本地 MOD 库，仅生成游戏数据覆盖审计。",
+    };
+  }
+
+  const directoryEntries = (await readdir(modLibraryRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  const extensionAggregates = new Map();
+  const levelOneAggregates = new Map();
+  const levelTwoAggregates = new Map();
+  const schemaVersionCounts = new Map();
+  const deployRootCounts = new Map();
+  const detectionMethodCounts = new Map();
+  const enabledCounts = new Map();
+  let validManifestCount = 0;
+  let invalidManifestCount = 0;
+  let manifestFileCount = 0;
+  let actualFileCount = 0;
+  let actualTotalBytes = 0;
+  let missingContentFileCount = 0;
+  let orphanContentFileCount = 0;
+  let unreadableEntryCount = 0;
+
+  for (let modIndex = 0; modIndex < directoryEntries.length; modIndex += 1) {
+    const modRoot = path.join(modLibraryRoot, directoryEntries[modIndex].name);
+    let manifest = null;
+    try {
+      manifest = await readJson(path.join(modRoot, "manifest.json"));
+      validManifestCount += 1;
+      incrementCount(schemaVersionCounts, String(manifest.schemaVersion ?? "unknown"));
+      incrementCount(deployRootCounts, String(manifest.deployRoot ?? "unknown"));
+      incrementCount(detectionMethodCounts, String(manifest.detectionMethod ?? "unknown"));
+      incrementCount(enabledCounts, manifest.enabled === true ? "enabled" : "disabled");
+    } catch {
+      invalidManifestCount += 1;
+    }
+
+    const contentRoot = path.join(modRoot, "content");
+    const contentAudit = (await pathExists(contentRoot))
+      ? await collectFiles(contentRoot)
+      : { files: [], unreadableEntryCount: 0 };
+    unreadableEntryCount += contentAudit.unreadableEntryCount;
+    const actualRelativePaths = new Set(contentAudit.files.map((file) => file.relativePath.toLowerCase()));
+    const manifestRelativePaths = new Set(
+      Array.isArray(manifest?.files)
+        ? manifest.files
+          .map((file) => file?.libraryRelativePath)
+          .filter((value) => typeof value === "string")
+          .map((value) => normalizeRelativePath(value).replace(/^content\//i, "").toLowerCase())
+        : [],
+    );
+    manifestFileCount += manifestRelativePaths.size;
+    for (const manifestPath of manifestRelativePaths) {
+      if (!actualRelativePaths.has(manifestPath)) missingContentFileCount += 1;
+    }
+    for (const actualPath of actualRelativePaths) {
+      if (!manifestRelativePaths.has(actualPath)) orphanContentFileCount += 1;
+    }
+
+    for (const file of contentAudit.files) {
+      actualFileCount += 1;
+      actualTotalBytes += file.size;
+      const deploymentPath = stripDeploymentRoot(file.relativePath);
+      const segments = deploymentPath.split("/").filter(Boolean);
+      addAggregateEntry(extensionAggregates, extensionOf(deploymentPath), modIndex, file.size);
+      addAggregateEntry(levelOneAggregates, segments[0]?.toLowerCase() ?? "[根目录]", modIndex, file.size);
+      addAggregateEntry(
+        levelTwoAggregates,
+        segments.length >= 2 ? `${segments[0].toLowerCase()}/${segments[1].toLowerCase()}` : segments[0]?.toLowerCase() ?? "[根目录]",
+        modIndex,
+        file.size,
+      );
+    }
+  }
+
+  return {
+    available: true,
+    privacy: "仅输出匿名聚合统计，不包含 MOD 名称、ID、文件名或任何路径。",
+    modDirectoryCount: directoryEntries.length,
+    validManifestCount,
+    invalidManifestCount,
+    manifestSchemaVersions: sortedCounts(schemaVersionCounts, "schemaVersion"),
+    enabledStates: sortedCounts(enabledCounts, "state"),
+    deployRoots: sortedCounts(deployRootCounts, "deployRoot"),
+    detectionMethods: sortedCounts(detectionMethodCounts, "detectionMethod"),
+    manifestFileCount,
+    actualFileCount,
+    actualTotalBytes,
+    missingContentFileCount,
+    orphanContentFileCount,
+    unreadableEntryCount,
+    fileExtensions: serializeAggregate(extensionAggregates, "extension"),
+    pathPrefixesLevelOne: serializeAggregate(levelOneAggregates, "prefix"),
+    pathPrefixesLevelTwo: serializeAggregate(levelTwoAggregates, "prefix"),
+  };
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "-";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function escapeCell(value) {
+  return String(value).replaceAll("|", "\\|").replaceAll("\n", " ");
+}
+
+function renderReport(baseline, modProfile) {
+  const lines = [
+    "# AcuAI 知识数据基线审计",
+    "",
+    "> 此报告由 `npm.cmd run knowledge:audit` 生成。MOD 统计已经匿名化，不包含 MOD 名称、ID、文件名或绝对路径。",
+    "",
+    "## 版本结论",
+    "",
+    `- 知识库目标版本：\`${baseline.targetGameVersion}\`。`,
+    `- 当前结构化游戏数据基线：\`${baseline.baseGameVersion}\`。`,
+    "- 项目确认 15.10 是最后一次明显新增游戏内容和机制的更新；15.10.00 可作为 15.23 的内容事实基线。外部字段和原始数据再分发许可仍须单独核验。",
+    "",
+    "## 现有数据包",
+    "",
+    `- 数据表：${baseline.rawPackage.sheetCount} 张，共 ${baseline.rawPackage.totalDataRows} 行。`,
+    `- CSV：${baseline.rawPackage.formats.csv.fileCount} 个，${formatBytes(baseline.rawPackage.formats.csv.totalBytes)}。`,
+    `- JSONL：${baseline.rawPackage.formats.jsonl.fileCount} 个，${formatBytes(baseline.rawPackage.formats.jsonl.totalBytes)}。`,
+    `- SQLite：${formatBytes(baseline.rawPackage.formats.sqlite.totalBytes)}。`,
+    "- 原始数据只用于本地研究，重新分发前需要来源方许可。",
+    "",
+    "## 游戏知识覆盖",
+    "",
+    "| 主题 | 状态 | 现有内容 | 主要缺口 |",
+    "| --- | --- | --- | --- |",
+    ...baseline.coverage.map((item) => `| ${escapeCell(item.label)} | ${item.status} | ${escapeCell(item.available)} | ${escapeCell(item.missing)} |`),
+    "",
+    "## 任务链覆盖",
+    "",
+  ];
+
+  if (!baseline.questUnlocks.available) {
+    lines.push(baseline.questUnlocks.message, "");
+  } else {
+    lines.push(
+      `- 解锁来源快照：${baseline.questUnlocks.sourceEntryCount} 条任务，其中 ${baseline.questUnlocks.parsedSourceEntryCount} 条已结构化解析，${baseline.questUnlocks.unparsedSourceEntryCount} 条待补充规则。`,
+      `- 人工名称桥接：${baseline.questUnlocks.curatedNameBridgeCount} 条，仅用于外部英文标题与本地稳定任务无法直接一致时的逐项核对。`,
+      `- ${baseline.questUnlocks.message}`,
+      "",
+      "| 来源页 | 等级 | 条目 | 已结构化 |",
+      "| --- | --- | ---: | ---: |",
+      ...baseline.questUnlocks.sourcePages.map((page) => `| ${escapeCell(page.sourceId)} | ${escapeCell(page.rank)} | ${page.entryCount} | ${page.parsedCount} |`),
+      "",
+    );
+    if (baseline.questUnlocks.developmentPack) {
+      lines.push(
+        `- 当前开发包最终写入：${baseline.questUnlocks.developmentPack.taskCountWithUnlockData} 个任务具有解锁资料，${baseline.questUnlocks.developmentPack.prerequisiteRelationCount} 条前置关系，${baseline.questUnlocks.developmentPack.unlockConditionCount} 条解锁条件。`,
+        "",
+      );
+    }
+  }
+
+  lines.push(
+    "## 本地 MOD 库概况",
+    "",
+  );
+
+  if (!modProfile.available) {
+    lines.push("未找到本地 MOD 库。本次未生成 MOD 文件分布。", "");
+    return `${lines.join("\n")}\n`;
+  }
+
+  lines.push(
+    `- MOD 目录：${modProfile.modDirectoryCount}。`,
+    `- 有效 manifest：${modProfile.validManifestCount}；无效 manifest：${modProfile.invalidManifestCount}。`,
+    `- 实际内容文件：${modProfile.actualFileCount}，共 ${formatBytes(modProfile.actualTotalBytes)}。`,
+    `- manifest 记录文件：${modProfile.manifestFileCount}。`,
+    `- manifest 有记录但本地缺失：${modProfile.missingContentFileCount}；本地存在但 manifest 未记录：${modProfile.orphanContentFileCount}。`,
+    "",
+    "### 主要文件类型",
+    "",
+    "| 扩展名 | 文件数 | 涉及 MOD 数 | 总体积 |",
+    "| --- | ---: | ---: | ---: |",
+    ...modProfile.fileExtensions.slice(0, 25).map((item) => `| ${escapeCell(item.extension)} | ${item.fileCount} | ${item.modCount} | ${formatBytes(item.totalBytes)} |`),
+    "",
+    "### 主要二级目录",
+    "",
+    "| 相对前缀 | 文件数 | 涉及 MOD 数 | 总体积 |",
+    "| --- | ---: | ---: | ---: |",
+    ...modProfile.pathPrefixesLevelTwo.slice(0, 25).map((item) => `| ${escapeCell(item.prefix)} | ${item.fileCount} | ${item.modCount} | ${formatBytes(item.totalBytes)} |`),
+    "",
+    "## 下一步",
+    "",
+    "1. 按覆盖矩阵补齐 15.23 运行版本所需的游戏事实字段，并记录 15.10.00 内容基线、授权和字段核验状态。",
+    "2. 按真实 MOD 文件分布确定首批格式解析器与路径知识优先级。",
+    "3. 建立可安装、可卸载、可校验版本的 `.acukb` 薄端到端链路。",
+    "",
+  );
+  return lines.join("\n");
+}
+
+async function main() {
+  const argumentsMap = parseArguments(process.argv.slice(2));
+  const outputRoot = argumentsMap["output-dir"]
+    ? path.resolve(String(argumentsMap["output-dir"]))
+    : defaultOutputRoot;
+  const modLibraryRoot = await findModLibrary(argumentsMap["mod-root"]);
+  const [rawPackage, curatedData, questUnlocks, modProfile] = await Promise.all([
+    auditRawPackage(),
+    auditCuratedData(),
+    auditQuestUnlockCoverage(),
+    auditModLibrary(modLibraryRoot),
+  ]);
+  const availableTables = new Set(rawPackage.tables.map((table) => table.tableName));
+  const coverage = coverageDefinitions.map((definition) => ({
+    ...definition,
+    tablesPresent: definition.tables.filter((table) => availableTables.has(table)),
+  }));
+  const baseline = {
+    schemaVersion: 1,
+    baseGameVersion: "15.10.00",
+    targetGameVersion: "15.23",
+    versionAudit: {
+      status: "contentBaselineConfirmed",
+      requirement: "项目确认 15.10 是最后一次明显新增游戏内容和机制的更新；发布前仍须完成字段、许可和抽样事实核验。",
+    },
+    rawPackage,
+    curatedData,
+    questUnlocks,
+    coverage,
+  };
+
+  await mkdir(outputRoot, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(outputRoot, "mhwi-data-baseline.json"), `${JSON.stringify(baseline, null, 2)}\n`, "utf8"),
+    writeFile(path.join(outputRoot, "mod-library-profile.json"), `${JSON.stringify(modProfile, null, 2)}\n`, "utf8"),
+    writeFile(path.join(outputRoot, "baseline-report.md"), renderReport(baseline, modProfile), "utf8"),
+  ]);
+
+  console.log(`知识数据基线已生成: ${path.relative(projectRoot, outputRoot)}`);
+  console.log(`目标版本 ${baseline.targetGameVersion}；当前数据基线 ${baseline.baseGameVersion}`);
+  if (modProfile.available) {
+    console.log(`已匿名审计 ${modProfile.modDirectoryCount} 个 MOD 目录、${modProfile.actualFileCount} 个内容文件。`);
+  } else {
+    console.log("未找到本地 MOD 库，已跳过 MOD 文件分布审计。");
+  }
+}
+
+await main();

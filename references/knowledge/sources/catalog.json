@@ -1,0 +1,526 @@
+{
+  "schemaVersion": 1,
+  "targetGameVersion": "15.23",
+  "sources": [
+    {
+      "id": "mhwmod-jodo-ice-15.10",
+      "title": "怪物猎人世界数据表 15.10.00",
+      "kind": "communityDataTable",
+      "gameVersion": "15.10.00",
+      "url": "http://www.mhwmod.com/archives/660",
+      "usage": "localReferenceOnly",
+      "redistribution": "requiresPermission",
+      "verificationStatus": "sourcePackageAvailableLocally",
+      "notes": [
+        "项目确认 15.10 是最后一次新增明显游戏内容和机制的更新；15.11 至 15.23 只包含修复、Steam Deck/语言适配、系统文件和宣传数据更新。",
+        "该来源用于 15.23 运行版本的内容事实基线；每条派生事实仍保留 15.10.00 内容基线字段。",
+        "原始数据声明未经授权不得转发或上传，知识包发布前必须重新确认授权边界。"
+      ]
+    },
+    {
+      "id": "mhworlddata-armor-name-map",
+      "title": "MHWorldData 游戏事实字段与官方繁中名称映射",
+      "kind": "communityDataBuilder",
+      "gameVersion": "15.10.00",
+      "url": "https://github.com/gatheringhallstudios/MHWorldData",
+      "usage": "developmentCrossCheckOnly",
+      "redistribution": "snapshotIgnored-derivedFieldsRequireReleaseAudit",
+      "verificationStatus": "nameBridgeValidated",
+      "notes": [
+        "仅显式抓取固定 commit 的武器、防具、装饰珠、护石、怪物、任务、地图、制作/报酬/采集字段及其英文和可用的官方繁中名称列，写入被忽略的本地开发快照。",
+        "通过 MHW-Editor 同一文本键的简繁对照反向映射到本地简中实体；映射不依赖字形转换、模型路径猜测或跨来源 ID 假设。",
+        "项目确认该内容基线可覆盖 15.23 的游戏内容事实；原始游戏数据再分发边界仍需发布审计。"
+      ]
+    },
+    {
+      "id": "mhw-local-stage-map",
+      "title": "本地 15.10.00 场景 ID 与 MHWData 地点稳定映射",
+      "kind": "curatedCrossReference",
+      "gameVersion": "15.10.00",
+      "url": "local:references/knowledge/sources/location-name-map.json",
+      "usage": "developmentCrossCheckOnly",
+      "redistribution": "derivedMappingOnly-releaseAuditRequired",
+      "verificationStatus": "manuallyReviewedStableIds",
+      "notes": [
+        "仅收录 MHWData 英文地点名、外部地点 ID 与本地官方简中 STxxx 场景 ID 三者可明确对应的 16 项。",
+        "不依赖字形转换；本地表没有明确对应项时不导入，例如 Seliana Supply Cache。"
+      ]
+    },
+    {
+      "id": "mhw-editor-game-text",
+      "title": "Synthlight/MHW-Editor 成对简繁游戏文本",
+      "kind": "gameTextExtraction",
+      "gameVersion": "15.10.00",
+      "url": "https://github.com/Synthlight/MHW-Editor",
+      "usage": "localNameBridgeOnly",
+      "redistribution": "derivedSnapshotIgnored-releaseAuditRequired",
+      "verificationStatus": "sameKeyPaired",
+      "notes": [
+        "从同一文本键的 chS/chT JSON 成对读取，绝不按单字转换。",
+        "构建时只使用去除一对多歧义后的简繁名称桥，将外部资料关联到本地 15.10.00 中文实体。"
+      ]
+    },
+    {
+      "id": "mhw-db-live-snapshot",
+      "title": "MHW DB 结构化 API 快照",
+      "kind": "communityStructuredApi",
+      "gameVersion": "unverified",
+      "url": "https://mhw-db.com/",
+      "usage": "developmentCrossCheckOnly",
+      "redistribution": "snapshotIgnored-derivedFieldsRequireReleaseAudit",
+      "verificationStatus": "mappingLimited",
+      "notes": [
+        "仅在开发机显式运行脚本后保存为被忽略的本地快照。",
+        "当前只对稳定 ID 已核对的物品和技能字段作开发期补充；API 未提供可机器核验的 15.23 版本标签。",
+        "正式知识包发布前必须完成中文名称、字段值和再分发许可的人工审计；项目确认的 15.10 内容基线不替代这些核验。"
+      ]
+    },
+    {
+      "id": "capcom-mhw-update-15.23",
+      "title": "Monster Hunter: World Update 15.23",
+      "kind": "officialPatchNote",
+      "gameVersion": "15.23",
+      "url": "https://www.monsterhunter.com/update/mhw/us/ver15_23.html",
+      "usage": "versionMarkerOnly",
+      "redistribution": "linkOnly",
+      "verificationStatus": "registered",
+      "notes": [
+        "用于确认目标运行版本边界。项目已确认 15.10 为内容与机制的最后一次明显变化，15.11 至 15.23 不引入怪物、武器或大型任务。"
+      ]
+    },
+    {
+      "id": "game8-iceborne-build-guides",
+      "title": "Game8 Monster Hunter World Iceborne Build Guides",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314144",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": [
+        "当前整理全武器冰原中后期进阶的条件化建议，不复制配装页面、表格、图片或长文。",
+        "攻略中的装备名称、技能和数值必须再由本地 game-facts 实体和关系查询核对；攻略不能覆盖事实包。"
+      ]
+    },
+    {
+      "id": "game8-story-progression",
+      "title": "Game8 Story Walkthrough and How to Unlock Iceborne",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/296184",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["只保留主线推进原则；具体任务解锁条件必须由事实关系单独核验。"]
+    },
+    {
+      "id": "game8-beginner-guide",
+      "title": "Game8 Beginner's Guide | How to Play MHW",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292411",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["只保留新手准备和学习路线的原创摘要，不把单一武器或防卫队路线宣称为唯一答案。"]
+    },
+    {
+      "id": "game8-guiding-lands",
+      "title": "Game8 How To Level Up The Guiding Lands",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/296209",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["只保留聚魔之地规划方法；具体区域等级、怪物和素材条件仍需由事实关系核验。"]
+    },
+    {
+      "id": "game8-fatalis-strategy",
+      "title": "Game8 Fatalis Weakness and Strategy Guide",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/295960",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["只保留黑龙战斗准备与场地处理的原创摘要；肉质、任务条件和数值不由攻略覆盖。"]
+    },
+    {
+      "id": "game8-iceborne-build-great-sword",
+      "title": "Game8 Great Sword Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314144",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-longsword",
+      "title": "Game8 Long Sword Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314083",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-sword-and-shield",
+      "title": "Game8 Sword and Shield Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314170",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-dual-blades",
+      "title": "Game8 Dual Blades Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314162",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-hammer",
+      "title": "Game8 Hammer Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314192",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-lance",
+      "title": "Game8 Lance Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314772",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-gunlance",
+      "title": "Game8 Gunlance Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314799",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-switch-axe",
+      "title": "Game8 Switch Axe Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314805",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-charge-blade",
+      "title": "Game8 Charge Blade Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314812",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-hunting-horn",
+      "title": "Game8 Hunting Horn Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314231",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-insect-glaive",
+      "title": "Game8 Insect Glaive Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314855",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-bow",
+      "title": "Game8 Bow Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314871",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-light-bowgun",
+      "title": "Game8 Light Bowgun Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314934",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "game8-iceborne-build-heavy-bowgun",
+      "title": "Game8 Heavy Bowgun Progression Build",
+      "kind": "communityGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/314965",
+      "usage": "derivedGuideSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "sourceReviewed",
+      "notes": ["作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"]
+    },
+    {
+      "id": "mhw-modding-atlas",
+      "title": "MonsterHunterWorldModding 技术资料库",
+      "kind": "authoringDocumentation",
+      "gameVersion": "15.23",
+      "url": "https://github.com/Ezekial711/MonsterHunterWorldModding",
+      "usage": "derivedTechnicalSummary",
+      "redistribution": "linkOnly",
+      "verificationStatus": "reviewed",
+      "notes": [
+        "用于核对 MOD3、MRL3、纹理、CTC/CCL、EFX/EPV、TIML 和 nativePC 路径语义。",
+        "知识包只保存 Acumod 自行整理的短摘要与来源链接，不复制整篇 Wiki。"
+      ]
+    },
+    {
+      "id": "mhw-modding-wiki-evwp",
+      "title": "MonsterHunterWorldModding EVWP 文件编辑说明",
+      "kind": "authoringDocumentation",
+      "gameVersion": "15.23",
+      "url": "https://github.com/Ezekial711/MonsterHunterWorldModding/wiki/Editing-EVWP-Files",
+      "usage": "derivedTechnicalSummary",
+      "redistribution": "link-and-original-summary-only",
+      "verificationStatus": "reviewed",
+      "notes": [
+        "用于核对 EVWP 的武器位置、挂件位置、副骨骼功能和全局 EPV 映射职责。",
+        "只保留 Acumod 的短摘要，不复制模板、图像或字段表。"
+      ]
+    },
+    {
+      "id": "ctc-mhw-editor",
+      "title": "CTC-MHW-Editor",
+      "kind": "openSourceParser",
+      "gameVersion": "15.23",
+      "url": "https://github.com/AsteriskAmpersand/CTC-MHW-Editor",
+      "usage": "formatVerification",
+      "redistribution": "linkOnly",
+      "verificationStatus": "reviewed",
+      "notes": [
+        "用于核对 CTC 物理链与 CCL 碰撞体的职责边界。"
+      ]
+    },
+    {
+      "id": "wwiseutil",
+      "title": "wwiseutil",
+      "kind": "openSourceParser",
+      "gameVersion": "15.23",
+      "url": "https://github.com/hpxro7/wwiseutil",
+      "usage": "formatVerification",
+      "redistribution": "GPL-3.0-link-and-summary",
+      "verificationStatus": "reviewed",
+      "notes": [
+        "用于核对 NBNK SoundBank、NPCK File Package 与内部 WEM 的关系。"
+      ]
+    },
+    {
+      "id": "mhw-extension-registry",
+      "title": "MHW class file extension registry",
+      "kind": "reverseEngineeredRegistry",
+      "gameVersion": "15.23",
+      "url": "https://gist.github.com/Andoryuuta/7520bcded08f8d5830baaee4b3b99671",
+      "usage": "extensionClassification",
+      "redistribution": "linkOnly",
+      "verificationStatus": "reviewed",
+      "notes": [
+        "只用于确认资源类别名称，不能据此推断未解析字段。"
+      ]
+    },
+    {
+      "id": "strackers-loader",
+      "title": "Stracker's Loader",
+      "kind": "toolAuthorPage",
+      "gameVersion": "15.23",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/1982",
+      "usage": "pluginPathVerification",
+      "redistribution": "linkOnly",
+      "verificationStatus": "reviewed",
+      "notes": [
+        "用于核对 nativePC 加载与 plugins DLL 的运行边界。"
+      ]
+    },
+    {
+      "id": "mhw-curated-special-quest-name-map",
+      "title": "Acumod 特别任务及英文标题差异与本地稳定 ID 人工核对表",
+      "kind": "curatedCrossReference",
+      "gameVersion": "15.10.00",
+      "url": "local:references/knowledge/sources/quest-name-map.json",
+      "usage": "stableQuestNameBridgeOnly",
+      "redistribution": "projectOwnedMappingOnly",
+      "verificationStatus": "manuallyReviewed",
+      "notes": [
+        "仅收录已由本地官方简中任务名、任务目标与 Game8 英文任务页面逐项核对的特别任务或标题差异任务。",
+        "外部任务 ID 与本地任务 ID 不一致，或英文标题存在拼写、标点、重音、用词差异时，只有该表允许建立名称桥接；不得以数字相同、译名猜测或模型记忆扩展条目。"
+      ]
+    },
+    {
+      "id": "game8-assigned-base",
+      "title": "Game8 Monster Hunter World Assigned Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292425",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndStableNameMapped",
+      "notes": [
+        "仅使用公开页面中的已分配任务名称和可结构化解锁条件；原始网页快照仅在本地开发目录保存，不打包或提交。",
+        "主线顺序不是前置关系证据；只有页面明确的 Unlock Requirements 且任务名能唯一映射时才建立 requiresQuest。"
+      ]
+    },
+    {
+      "id": "game8-assigned-iceborne",
+      "title": "Game8 Monster Hunter World Iceborne Assigned Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292419",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndStableNameMapped",
+      "notes": [
+        "覆盖冰原已分配任务页面，使用边界与本体已分配任务来源相同。",
+        "页面中无法唯一对应的故事进度或怪物名称保留为来源条件原文，不推断为稳定任务关系。"
+      ]
+    },
+    {
+      "id": "game8-optional-base",
+      "title": "Game8 Monster Hunter World Optional Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292426",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndStableNameMapped",
+      "notes": [
+        "仅使用公开页面中的可选任务名称和可结构化解锁条件；原始网页快照仅在本地开发目录保存，不打包或提交。",
+        "任务英文名只在与本地稳定任务 ID 唯一精确对应时建立 requiresQuest 关系；捕获、发现、等级和 NPC 等条件始终保留来源页链接。"
+      ]
+    },
+    {
+      "id": "game8-optional-iceborne",
+      "title": "Game8 Monster Hunter World Iceborne Optional Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/296709",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndStableNameMapped",
+      "notes": [
+        "覆盖冰原可选任务页面，使用边界与本体可选任务来源相同。",
+        "该来源不代表完整任务链；已分配、特别任务、活动任务和交货链仍需要独立的可核验来源。"
+      ]
+    },
+    {
+      "id": "game8-event-base",
+      "title": "Game8 Monster Hunter World Low/High Rank Event Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/296738",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndCategoryValidated",
+      "notes": [
+        "用于确认本体活动任务属于活动开放制；只在英文名、任务类别和本地已核验任务资料同时一致时写入任务开放条件。",
+        "页面列出的星级仅作为任务资料，不擅自转换为 HR 前置关系。"
+      ]
+    },
+    {
+      "id": "game8-event-iceborne",
+      "title": "Game8 Monster Hunter World Iceborne Event Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292420",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndCategoryValidated",
+      "notes": [
+        "用于确认冰原活动任务属于活动开放制；不将活动页的目标怪物或星级猜测为剧情前置。"
+      ]
+    },
+    {
+      "id": "game8-arena",
+      "title": "Game8 Monster Hunter World Arena Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292416",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndTargetValidated",
+      "notes": [
+        "斗技场页面明确列出每项任务的解锁条件和目标怪物；构建时以类别、目标怪物和已交叉验证的本地任务资料共同定位。"
+      ]
+    },
+    {
+      "id": "game8-challenge",
+      "title": "Game8 Monster Hunter World Challenge Quests",
+      "kind": "communityQuestUnlockGuide",
+      "gameVersion": "15.23",
+      "url": "https://game8.co/games/Monster-Hunter-World/archives/292417",
+      "usage": "derivedQuestUnlockConditions",
+      "redistribution": "link-and-original-structured-summary-only",
+      "verificationStatus": "parsedAndCategoryValidated",
+      "notes": [
+        "挑战任务页面明确列出 HR/MR 门槛；仅在任务类别和英文名或目标怪物能安全对应时写入等级条件。"
+      ]
+    },
+    {
+      "id": "acumod-validated-modding",
+      "title": "Acumod 已验证实现与回归样本",
+      "kind": "projectValidation",
+      "gameVersion": "15.23",
+      "url": null,
+      "usage": "reproducibleLocalValidation",
+      "redistribution": "projectOwnedSummary",
+      "verificationStatus": "tested",
+      "notes": [
+        "用于 EVAM、MRL3 只读解析和分析证据等级等项目内可重复验证结论。"
+      ]
+    }
+  ],
+  "openGaps": [
+    "取得或自行构建可分发的 15.23 游戏事实数据，并完成原始游戏数据再分发许可审计。",
+    "补齐特别任务与交货委托的完整解锁链、剧情进度条件、更多官方简中怪物部位/效果标签，以及素材路线的条件解释；当前活动、斗技场和挑战任务已接入保守的可核验条件，交货委托仍缺逐项稳定名称桥接。",
+    "扩充不同游戏阶段、任务目标和玩家限制下的攻略来源，并逐项完成事实字段与再分发许可审计。",
+    "继续扩展低频 MOD 文件格式的只读解析器和可引用技术知识；未解析格式仍必须保守标记为未知。"
+  ]
+}

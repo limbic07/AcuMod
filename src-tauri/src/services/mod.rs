@@ -1,6 +1,8 @@
 pub mod agent;
 pub mod game;
+pub mod knowledge;
 pub mod legacy_box;
+pub mod mod_analysis;
 pub mod mod_library;
 pub mod mod_state_sync;
 pub mod model_recognition;

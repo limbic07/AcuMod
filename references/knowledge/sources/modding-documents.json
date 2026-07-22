@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    {
+      "id": "modding-nativepc-root",
+      "domain": "mod-path",
+      "title": "nativePC 资源覆盖根目录",
+      "body": "MHW 的松散资源替换通常保持游戏资源路径并放入游戏根目录下的 nativePC。压缩包直接从 pl、wp、vfx、sound、quest 或 ui 等游戏资源一级目录开始时，可以在部署层补上 nativePC；根目录加载器文件不能套用这条规则。",
+      "gameVersion": "15.23",
+      "confidence": 0.95,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-nativepc-plugins",
+      "domain": "mod-plugin",
+      "title": "nativePC/plugins 原生插件",
+      "body": "Stracker 插件加载器使用 nativePC/plugins 下的 DLL。该目录中的 DLL 是运行时代码，不是普通模型资源；同目录的 INI、JSON 等文件通常是插件配置或数据，但具体作用仍须结合插件说明。加载器自身还可能包含直接位于游戏根目录的文件。",
+      "gameVersion": "15.23",
+      "confidence": 0.95,
+      "sourceId": "strackers-loader"
+    },
+    {
+      "id": "modding-mod3",
+      "domain": "mod-format",
+      "title": "MOD3 模型资源",
+      "body": "MOD3 是 MHW 的模型资源格式，包含网格、骨骼关联与材质名称等模型数据。文件扩展名只能确认它是模型，具体替换对象必须结合 pl、wp、npc、otomo 等路径和资源 ID 判断。MOD3 使用的材质需要在配套 MRL3 中按材质名称或其哈希找到。",
+      "gameVersion": "15.23",
+      "confidence": 0.98,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-mrl3",
+      "domain": "mod-format",
+      "title": "MRL3 材质与贴图引用",
+      "body": "MRL3 保存模型使用的材质定义、参数和纹理资源路径。模型、MRL3 与 TEX 必须保持资源名称和路径引用一致；只移动 MOD3 或只改目录名可能导致材质缺失。AcuMOD 可只读提取 MRL3 纹理表中的资源路径，并将其与同一 MOD 内的 TEX 文件建立确定引用关系。",
+      "gameVersion": "15.23",
+      "confidence": 1.0,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-texture-maps",
+      "domain": "mod-format",
+      "title": "TEX 与常见纹理用途",
+      "body": "TEX 是游戏运行时纹理资源，DDS 常是制作或转换流程中的纹理输入。常见资源名后缀可提供用途线索：BM 常表示基础颜色位图，NM 表示法线，RMT 组合粗糙度、金属度和透明相关通道，CMM 用于颜色遮罩，EM 用于自发光，FM 用于毛发；文件名只是线索，最终用途仍由 MRL3 材质引用和参数决定。",
+      "gameVersion": "15.23",
+      "confidence": 0.92,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-ctc-ccl",
+      "domain": "mod-physics",
+      "title": "CTC 物理链与 CCL 碰撞体",
+      "body": "CTC 描述 MOD3 骨骼如何参与动态物理链，常用于头发、布料和挂件。CCL 描述供这些物理链使用的碰撞体。两者通常与模型共同构成动态外观组件；缺失或骨骼编号不匹配时，静态模型可能仍能出现，但动态表现和碰撞会异常。COL 也是碰撞类资源，但不能在没有专用解析器时与 CCL 字段等同。",
+      "gameVersion": "15.23",
+      "confidence": 0.96,
+      "sourceId": "ctc-mhw-editor"
+    },
+    {
+      "id": "modding-efx",
+      "domain": "mod-vfx",
+      "title": "EFX 特效定义",
+      "body": "EFX 是 MHW 视觉特效资源链中的效果定义。一个特效 MOD 可能同时包含 vfx/efx 下的 EFX、vfx/mod 下的模型材质贴图以及触发参数；仅存在 EFX 不能证明它会在何时触发，必须继续查找 EPV、TIML 或其它调用关系。",
+      "gameVersion": "15.23",
+      "confidence": 0.95,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-epv",
+      "domain": "mod-vfx",
+      "title": "EPV 与装备特效触发",
+      "body": "EPV 系列资源控制游戏对象在特定动作或状态下触发 EFX。装备目录中的 EPV3 是效果提供或触发参数，不是特效模型本身；它与 vfx 下的 EFX 及配套资源共同工作。EVWP 可决定武器使用的全局 EPV。改绑装备时移动了 EPV3，只能确认触发文件随目标部署，实际特效仍需验证其引用链。",
+      "gameVersion": "15.23",
+      "confidence": 0.95,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-evwp",
+      "domain": "mod-weapon-parameter",
+      "title": "EVWP 武器位置与全局 EPV 参数",
+      "body": "EVWP 是武器参数资源，可配置个人房间武器架、铁匠铺传送带、收刀状态和挂件的位置、旋转或缩放，并可设置部分副骨骼功能。它还决定武器使用的全局 EPV，因此改动 EVWP 可能影响一个武器类别的全局特效映射。EVWP 不是模型或 EFX 本体；当前 Acumod 仅从扩展名和路径识别它，不读取或改写其内部字段。EVHL、EVBD 不能据此推断为相同用途。",
+      "gameVersion": "15.23",
+      "confidence": 0.96,
+      "sourceId": "mhw-modding-wiki-evwp"
+    },
+    {
+      "id": "modding-evam-slinger",
+      "domain": "mod-slinger",
+      "title": "EVAM 防具与飞翔爪绑定",
+      "body": "AcuMOD 对原版文件和已知 MOD 样本的只读解析确认：有效 EVAM 记录包含防具关联的飞翔爪数字 ID。分析器只在文件头、版本和固定长度都满足已验证结构时报告该绑定；没有 EVAM 时不能据此推断 MOD 一定自带飞翔爪。",
+      "gameVersion": "15.23",
+      "confidence": 1.0,
+      "sourceId": "acumod-validated-modding"
+    },
+    {
+      "id": "modding-slinger-chain",
+      "domain": "mod-slinger",
+      "title": "防具配套飞翔爪资源链",
+      "body": "玩家腕部投射器和展开飞翔爪外观通常位于 wp/slg/slgNNN_NNNN。防具 MOD 同时包含防具模型、有效 EVAM 和对应 slg 模型时，可以确认它提供了配套飞翔爪并通过 EVAM 指向该 ID；只有 slg 目录时只能确认替换了飞翔爪资源，不能断言与哪套防具绑定。",
+      "gameVersion": "15.23",
+      "confidence": 0.98,
+      "sourceId": "acumod-validated-modding"
+    },
+    {
+      "id": "modding-audio-containers",
+      "domain": "mod-audio",
+      "title": "NBNK 与 NPCK 音频容器",
+      "body": "MHW 使用 Wwise SoundBank 和 File Package 保存音频。NBNK 是 SoundBank，常承载语音、武器、怪物或环境声音及其事件元数据；NPCK 是 File Package，常承载更大的媒体数据。两者内部可包含 WEM 音频，单凭容器文件名不能可靠列出每一段声音，完整分析需要专用 Wwise 容器解析器和声音 ID 对照。",
+      "gameVersion": "15.23",
+      "confidence": 0.98,
+      "sourceId": "wwiseutil"
+    },
+    {
+      "id": "modding-timl",
+      "domain": "mod-vfx",
+      "title": "TIML 时间轴参数",
+      "body": "TIML 是可转换为结构化数据进行编辑的时间轴或事件参数格式，在特效和动画相关 MOD 中用于描述随时间变化的参数。仅按扩展名可以确认格式类别，具体控制对象和调用方仍需要解析字段或结合引用它的资源。",
+      "gameVersion": "15.23",
+      "confidence": 0.88,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-ev-parameters",
+      "domain": "mod-format",
+      "title": "EVHL 与 EVBD 外观参数",
+      "body": "EVHL 与 EVBD 属于外观或装备参数资源，但没有专用解析器时只能确认扩展名和路径类别，不能因共同使用 EV 前缀而套用 EVWP、EVAM 或 EPV 的字段语义，也不得推断内部引用或触发关系。",
+      "gameVersion": "15.23",
+      "confidence": 0.78,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-low-confidence-formats",
+      "domain": "mod-format",
+      "title": "SOBJ、UVS 与未解析资源",
+      "body": "MHW 资源扩展名表可以确认 SOBJ、UVS 等文件属于游戏资源类别，但扩展名注册名不足以证明具体字段用途。AcuAI 应把它们标记为尚未专门解析的对象或辅助数据，结合路径说明可能所属组件，不得编造参数、引用或触发关系。",
+      "gameVersion": "15.23",
+      "confidence": 0.65,
+      "sourceId": "mhw-extension-registry"
+    },
+    {
+      "id": "modding-sobj-list",
+      "domain": "mod-format",
+      "title": "SOBJ 与 SOBJL 游戏对象资源",
+      "body": "SOBJ（rSetObject）用于配置场景中的机关、怪物、环境生物、NPC 等生成对象；一个 SOBJ 可以含多个对象。SOBJL（rSetObjectList）保存 SOBJ 列表，并以相对于 nativePC 的路径引用已有 SOBJ。AcuMOD 对含 rSetObject 标记的 SOBJL 只读提取完整 ASCII 路径字符串并建立 SOBJ 引用边，不解析对象字段、生成坐标或参数。",
+      "gameVersion": "15.23",
+      "confidence": 0.95,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-animation-and-gmd",
+      "domain": "mod-format",
+      "title": "LMT 动画与 GMD 本地化文本",
+      "body": "LMT 是 MHW 的动画资源格式，现有工具可导入动画但并不表示每个 LMT 都能安全重定向到任意模型。GMD 是本地化文本资源，可由专用编辑器读取。AcuMOD 只据扩展名归类，未解析动作、骨骼、文本条目或运行时引用。",
+      "gameVersion": "15.23",
+      "confidence": 0.9,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-component-evidence",
+      "domain": "mod-analysis",
+      "title": "MOD 组件与依赖证据等级",
+      "body": "AcuMOD 分析报告区分三类依据：二进制解析得到的明确引用或 ID 为确定证据；游戏资源路径和已识别模型 ID 为高可信归类；仅因位于同一组件目录而把模型与材质配对属于启发式关系。AcuAI 解释 MOD 工作方式时必须保留该差异，不能把同目录推断描述成文件内部引用。",
+      "gameVersion": "15.23",
+      "confidence": 1.0,
+      "sourceId": "acumod-validated-modding"
+    }
+  ]
+}

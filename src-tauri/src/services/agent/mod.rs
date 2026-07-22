@@ -16,6 +16,7 @@ use std::{
 
 use keyring::Entry;
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{ipc::Channel, AppHandle};
 
 use crate::{
@@ -169,6 +170,28 @@ pub struct AgentEvent {
     pub message: Option<String>,
     pub plan: Option<AgentActionPlan>,
     pub cleanup_review: Option<cleanup::AgentCleanupReview>,
+    pub knowledge_evidence: Vec<AgentKnowledgeEvidence>,
+}
+
+/// AcuAI 回答实际使用的本地知识证据。前端只展示来源元数据，不回传包内全文。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentKnowledgeEvidence {
+    pub evidence_id: String,
+    pub title: String,
+    pub game_version: String,
+    pub confidence: f64,
+    pub source_title: Option<String>,
+    pub source_url: Option<String>,
+    pub pack_id: String,
+    pub pack_version: String,
+}
+
+/// 本轮可被 Rust 逐字段核验的结构化事实，不会发送给前端或写入会话历史。
+#[derive(Clone)]
+pub(crate) struct AgentKnowledgeClaim {
+    pub evidence_id: String,
+    pub data: Value,
 }
 
 pub(crate) struct AgentEventSender {
@@ -204,6 +227,7 @@ impl AgentEventSender {
             message,
             plan: None,
             cleanup_review: None,
+            knowledge_evidence: Vec::new(),
         });
     }
 
@@ -218,6 +242,7 @@ impl AgentEventSender {
             message: Some("操作计划已生成，请确认后执行。".to_string()),
             plan: Some(plan),
             cleanup_review: None,
+            knowledge_evidence: Vec::new(),
         });
     }
 
@@ -232,6 +257,26 @@ impl AgentEventSender {
             message: Some(review.message.clone()),
             plan: None,
             cleanup_review: Some(review),
+            knowledge_evidence: Vec::new(),
+        });
+    }
+
+    /// 只发送本轮工具实际返回过的证据，避免模型回答脱离可追溯来源。
+    pub(crate) fn emit_knowledge_evidence(&mut self, evidence: Vec<AgentKnowledgeEvidence>) {
+        if evidence.is_empty() {
+            return;
+        }
+        self.sequence += 1;
+        let _ = self.channel.send(AgentEvent {
+            turn_id: self.turn_id.clone(),
+            sequence: self.sequence,
+            kind: "knowledgeEvidenceReady".to_string(),
+            text: None,
+            tool_name: None,
+            message: Some("已附上本次回答使用的知识来源。".to_string()),
+            plan: None,
+            cleanup_review: None,
+            knowledge_evidence: evidence,
         });
     }
 }

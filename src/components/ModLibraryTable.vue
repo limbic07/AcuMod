@@ -57,6 +57,7 @@ const emit = defineEmits<{
   disable: [mod: InstalledModSummary];
   uninstall: [mod: InstalledModSummary];
   manageRemap: [mod: InstalledModSummary];
+  analyze: [mod: InstalledModSummary];
   reorder: [modIds: string[], targetModIds: string[], placeAfter: boolean];
   batchEnable: [mods: InstalledModSummary[]];
   batchDisable: [mods: InstalledModSummary[]];
@@ -1348,6 +1349,9 @@ watch(
                   <h4>本地文件</h4>
                   <p>{{ mod.fileCount }} 个文件</p>
                   <p class="detail-path">{{ mod.contentPath }}</p>
+                  <button type="button" class="detail-command" @click="$emit('analyze', mod)">
+                    分析文件作用
+                  </button>
                 </section>
                 <section>
                   <h4>部署根目录</h4>
@@ -2402,6 +2406,20 @@ watch(
   font-size: 0.8rem;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.mod-details-grid .detail-command {
+  min-height: 34px;
+  margin-top: 8px;
+  padding: 0 10px;
+  border: 1px solid #b8cec5;
+  border-radius: 4px;
+  color: #286b55;
+  background: #fff;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .detail-path {

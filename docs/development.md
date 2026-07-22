@@ -13,6 +13,11 @@ npm.cmd install
 npm.cmd run dev
 npm.cmd run typecheck
 npm.cmd run build
+npm.cmd run knowledge:audit
+npm.cmd run knowledge:fetch-quest-unlocks
+npm.cmd run knowledge:build-dev
+npm.cmd run knowledge:verify-dev
+npm.cmd run knowledge:verify-e2e
 npm.cmd run tauri:dev
 npm.cmd run tauri:build
 ```
@@ -34,6 +39,11 @@ cargo fmt
 - `dev`：启动 Vite 开发服务器。
 - `typecheck`：运行 `vue-tsc --noEmit`。
 - `build`：先运行 typecheck，再运行 Vite build。
+- `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告。
+- `knowledge:fetch-quest-unlocks`：显式联网抓取公开可选任务解锁页面，只保存任务名、来源链接和可结构化解析的条件到本地忽略快照。
+- `knowledge:build-dev`：使用本地研究数据生成不提交、不分发的开发知识包，用于验证查询链路。
+- `knowledge:verify-dev`：校验开发包的版本、实体、关系、文档与固定问题集证据。
+- `knowledge:verify-e2e`：临时安装三个真实开发包，验证 24 类问题的实体、关系和全文检索链路；Windows 下自动为测试二进制加入 Tauri 所需 manifest。
 - `preview`：预览前端构建结果。
 - `tauri`：调用 Tauri CLI。
 - `tauri:dev`：启动 Tauri 桌面开发模式。
@@ -72,6 +82,7 @@ src-tauri/
 - 配置、MOD 元数据、启用状态、排序和部署记录读写后续放在 `src-tauri/src/storage/`。
 - 知识包运行时服务放在 `src-tauri/src/services/knowledge/`，MOD 文件分析放在 `src-tauri/src/services/mod_analysis/`；二者不放进 DeepSeek client 或工具分发文件。
 - 可重复的知识数据清洗、校验和打包脚本放在 `scripts/knowledge/`；开发源数据、来源清单和人工核对记录放在 `references/knowledge/`，生成的 `.acukb` 发布物不作为主程序资源打包。
+- 知识审计默认读取开发环境的 `src-tauri/target/debug/AcumodData/mods/installed`，也可使用 `npm.cmd run knowledge:audit -- --mod-root <目录>` 指定本地 MOD 库。报告不得记录 MOD 名称、MOD ID、绝对路径或文件名。
 
 ## Tauri invoke 检查清单
 

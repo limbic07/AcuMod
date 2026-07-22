@@ -27,6 +27,10 @@ target
 # Local reference data copied from external sources.
 references/mhwi-data/raw/*
 !references/mhwi-data/raw/README.md
+# 知识包原始快照和构建报告仅保留在本地。
+references/knowledge/raw/
+references/knowledge/build/
+references/knowledge/audits/
 
 # Local runtime data when running portable/dev builds from the repo root.
 AcumodData/

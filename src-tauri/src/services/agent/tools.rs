@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use futures_util::future::join_all;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -5,19 +7,28 @@ use tauri::AppHandle;
 
 use crate::{
     operations::OperationReporter,
-    services::{game, mod_library, model_recognition, nexus},
+    services::{game, knowledge, mod_analysis, mod_library, model_recognition, nexus},
     storage::config,
 };
 
-use super::{cleanup, source_search, AgentActionPlan, AgentCoordinator};
+use super::{
+    cleanup, source_search, AgentActionPlan, AgentCoordinator, AgentKnowledgeClaim,
+    AgentKnowledgeEvidence,
+};
 
 const DEFAULT_RESULT_LIMIT: usize = 100;
 const MAX_RESULT_LIMIT: usize = 100;
+const MAX_CLAIM_HINTS_PER_EVIDENCE: usize = 16;
+const MAX_CLAIM_HINTS_PER_TOOL_RESULT: usize = 60;
 
 pub(crate) struct ToolExecution {
     pub content: String,
     pub plan: Option<AgentActionPlan>,
     pub cleanup_review: Option<cleanup::AgentCleanupReview>,
+    /// 标记本轮已实际查询知识包或执行本地 MOD 分析，即使查询结果为空。
+    pub knowledge_query_performed: bool,
+    pub knowledge_evidence: Vec<AgentKnowledgeEvidence>,
+    pub knowledge_claims: Vec<AgentKnowledgeClaim>,
 }
 
 impl ToolExecution {
@@ -26,6 +37,24 @@ impl ToolExecution {
             content,
             plan: None,
             cleanup_review: None,
+            knowledge_query_performed: false,
+            knowledge_evidence: Vec::new(),
+            knowledge_claims: Vec::new(),
+        }
+    }
+
+    fn knowledge_query(
+        content: String,
+        knowledge_evidence: Vec<AgentKnowledgeEvidence>,
+        knowledge_claims: Vec<AgentKnowledgeClaim>,
+    ) -> Self {
+        Self {
+            content: with_claim_hints(content, &knowledge_claims),
+            plan: None,
+            cleanup_review: None,
+            knowledge_query_performed: true,
+            knowledge_evidence,
+            knowledge_claims,
         }
     }
 
@@ -44,6 +73,9 @@ impl ToolExecution {
             content,
             plan: Some(plan),
             cleanup_review: None,
+            knowledge_query_performed: false,
+            knowledge_evidence: Vec::new(),
+            knowledge_claims: Vec::new(),
         })
     }
 
@@ -59,7 +91,96 @@ impl ToolExecution {
             content,
             plan: None,
             cleanup_review: Some(review),
+            knowledge_query_performed: false,
+            knowledge_evidence: Vec::new(),
+            knowledge_claims: Vec::new(),
         })
+    }
+}
+
+/// 将可核验的标量字段显式交给模型，避免它猜测相对于证据快照的 JSON 指针。
+fn with_claim_hints(content: String, claims: &[AgentKnowledgeClaim]) -> String {
+    if claims.is_empty() {
+        return content;
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(&content) else {
+        return content;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return content;
+    };
+    let mut total = 0;
+    let hints = claims
+        .iter()
+        .map(|claim| {
+            let mut fields = Vec::new();
+            collect_claim_hint_fields(
+                &claim.data,
+                "",
+                &mut fields,
+                &mut total,
+                MAX_CLAIM_HINTS_PER_EVIDENCE,
+            );
+            json!({ "evidenceId": claim.evidence_id, "fields": fields })
+        })
+        .collect::<Vec<_>>();
+    object.insert("claimHints".to_string(), Value::Array(hints));
+    serde_json::to_string(&value).unwrap_or(content)
+}
+
+fn collect_claim_hint_fields(
+    value: &Value,
+    pointer: &str,
+    fields: &mut Vec<Value>,
+    total: &mut usize,
+    per_evidence_limit: usize,
+) {
+    if *total >= MAX_CLAIM_HINTS_PER_TOOL_RESULT || fields.len() >= per_evidence_limit {
+        return;
+    }
+    match value {
+        Value::String(value) if !value.is_empty() => {
+            fields.push(json!({ "pointer": pointer, "value": value }));
+            *total += 1;
+        }
+        Value::Number(value) => {
+            fields.push(json!({ "pointer": pointer, "value": value }));
+            *total += 1;
+        }
+        Value::Bool(value) => {
+            fields.push(json!({ "pointer": pointer, "value": value }));
+            *total += 1;
+        }
+        Value::Array(values) => {
+            for (index, item) in values.iter().enumerate() {
+                collect_claim_hint_fields(
+                    item,
+                    &format!("{pointer}/{index}"),
+                    fields,
+                    total,
+                    per_evidence_limit,
+                );
+                if *total >= MAX_CLAIM_HINTS_PER_TOOL_RESULT || fields.len() >= per_evidence_limit {
+                    break;
+                }
+            }
+        }
+        Value::Object(values) => {
+            for (key, item) in values {
+                let key = key.replace('~', "~0").replace('/', "~1");
+                collect_claim_hint_fields(
+                    item,
+                    &format!("{pointer}/{key}"),
+                    fields,
+                    total,
+                    per_evidence_limit,
+                );
+                if *total >= MAX_CLAIM_HINTS_PER_TOOL_RESULT || fields.len() >= per_evidence_limit {
+                    break;
+                }
+            }
+        }
+        Value::Null | Value::String(_) => {}
     }
 }
 
@@ -317,6 +438,114 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "analyze_installed_mod",
+                "description": "分析一个已安装 MOD 的全部文件作用、资源组件和依赖关系。必须先用 search_local_mods 取得稳定 MOD ID；支持按路径、作用、组件或替换目标过滤并分页。报告由本地路径规则、二进制解析器和已安装 MOD 技术知识共同生成。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "modId": { "type": "string", "description": "search_local_mods 返回的稳定 MOD ID" },
+                        "query": { "type": "string", "description": "可选：文件路径、扩展名、作用、组件或替换目标" },
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                    },
+                    "required": ["modId"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "search_knowledge",
+                "description": "查询已安装的 MHW 游戏事实、攻略和 MOD 制作技术知识包。适用于游戏机制、任务、素材、配装建议、术语和 MOD 文件作用等问题；优先传入 2 至 12 个字的关键术语，长问句未命中时服务端会安全退化为术语查询；返回带来源和适用版本的证据。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "使用精确 MHW 术语描述要查的事实、关系或技术问题" },
+                        "domains": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": ["mhw-modding", "mhw-game-facts", "mhw-game-guides"] },
+                            "description": "可选知识领域；不传时查询全部活动知识包"
+                        },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 30 }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "lookup_game_entities",
+                "description": "按官方简体、官方繁体、英文名、常用别名或稳定 ID 查询 MHW 游戏实体，并返回精确类型化字段。精确数值、装备、素材、怪物、任务和技能问题应先用此工具消歧。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "实体名称、资源 ID 或常用别名" },
+                        "kinds": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "maxItems": 16,
+                            "description": "可选实体类型，例如 weapon、armor、item、monster、quest、skill"
+                        },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 30 }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "compare_game_entities",
+                "description": "按已查询到的稳定游戏实体 ID 批量读取 2 至 4 个实体，用于比较武器、防具、护石、怪物或素材的结构化字段。必须先调用 lookup_game_entities 消歧；不会自行推断哪个更适合玩家。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entityIds": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 2,
+                            "maxItems": 4
+                        }
+                    },
+                    "required": ["entityIds"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "get_game_entity_relations",
+                "description": "查询精确游戏实体与素材、制作、升级、技能、掉落、怪物、任务或解锁条件之间的受控关系。任务地点和报酬分别使用 occursAt、rewardsItem，任务资料使用 hasQuestFacts；怪物生态资料使用 hasMonsterFacts；素材来源用入向 dropsItem、rewardsItem、gathersItem；装备属性资料使用 hasWeaponFacts、hasArmorFacts、hasDecorationFacts。没有返回解锁关系时不能自行推断前置。必须使用 lookup_game_entities 返回的稳定 entityId。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entityId": { "type": "string", "description": "lookup_game_entities 返回的稳定实体 ID" },
+                        "predicates": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "maxItems": 24,
+                            "description": "可选关系类型过滤；不确定时省略"
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": ["outgoing", "incoming", "both"],
+                            "description": "实体指向其它实体、其它实体指向当前实体，或双向"
+                        },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+                    },
+                    "required": ["entityId"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "search_mod_sources",
                 "description": "联网搜索 MHW MOD 候选页面。返回经过 Rust 页面规则校验的 Nexus Mods、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 或 CurseForge 链接，并标注来源类型和访问方式；不会下载文件。",
                 "parameters": {
@@ -379,6 +608,10 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "submit_mod_cleanup_review" => "整理清理建议",
         "get_mod_cleanup_exclusions" => "查询清理记录",
         "create_cleanup_restore_plan" => "生成清理恢复计划",
+        "analyze_installed_mod" => "分析 MOD 文件",
+        "search_knowledge" => "查询 MHW 知识库",
+        "lookup_game_entities" => "查询游戏实体",
+        "get_game_entity_relations" => "查询游戏实体关系",
         "search_mod_sources" => "联网搜索 MOD",
         "get_nexus_mod_files" => "读取 Nexus 文件列表",
         "create_nexus_download_plan" => "生成 Nexus 下载计划",
@@ -592,6 +825,113 @@ pub(crate) async fn execute_tool(
             .map_err(|error| format!("清理恢复计划生成任务失败：{error}"))??;
             ToolExecution::plan(plan)
         }
+        "analyze_installed_mod" => {
+            let args = parse_arguments::<AnalyzeInstalledModArgs>(arguments)?;
+            let worker_app = app.clone();
+            let report = tauri::async_runtime::spawn_blocking(move || {
+                mod_analysis::analyze_mod(&worker_app, &args.mod_id, &OperationReporter::default())
+                    .map(|report| (report, args))
+            })
+            .await
+            .map_err(|error| format!("MOD 文件分析任务失败：{error}"))??;
+            let evidence = mod_analysis_evidence(&report.0);
+            let claims = mod_analysis_claims(&report.0, &evidence);
+            mod_analysis_tool_result(report.0, report.1, &evidence)
+                .map(|content| ToolExecution::knowledge_query(content, evidence, claims))
+        }
+        "search_knowledge" => {
+            let args = parse_arguments::<SearchKnowledgeArgs>(arguments)?;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                knowledge::search(
+                    &args.query,
+                    args.domains.as_deref(),
+                    args.limit.unwrap_or(20),
+                )
+            })
+            .await
+            .map_err(|error| format!("知识库查询任务失败：{error}"))??;
+            let evidence = search_evidence(&result);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({ "ok": true, "knowledge": result }))
+                    .map_err(|error| format!("无法序列化知识库结果：{error}"))?,
+                evidence,
+                Vec::new(),
+            ))
+        }
+        "lookup_game_entities" => {
+            let args = parse_arguments::<LookupGameEntitiesArgs>(arguments)?;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                knowledge::lookup_game_entities(
+                    &args.query,
+                    args.kinds.as_deref(),
+                    args.limit.unwrap_or(20),
+                )
+            })
+            .await
+            .map_err(|error| format!("游戏实体查询任务失败：{error}"))??;
+            let evidence = entity_evidence(&result);
+            let claims = entity_claims(&result);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({ "ok": true, "entities": result }))
+                    .map_err(|error| format!("无法序列化游戏实体结果：{error}"))?,
+                evidence,
+                claims,
+            ))
+        }
+        "compare_game_entities" => {
+            let args = parse_arguments::<CompareGameEntitiesArgs>(arguments)?;
+            let entity_ids = normalized_comparison_entity_ids(args.entity_ids)?;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                let mut entities = Vec::with_capacity(entity_ids.len());
+                let mut warnings = Vec::new();
+                for entity_id in entity_ids {
+                    let response = knowledge::lookup_game_entities(&entity_id, None, 4)?;
+                    warnings.extend(response.warnings);
+                    let entity = response
+                        .matches
+                        .into_iter()
+                        .find(|item| item.entity_id == entity_id)
+                        .ok_or_else(|| format!("未找到用于比较的精确游戏实体：{entity_id}"))?;
+                    entities.push(entity);
+                }
+                Ok::<_, String>((entities, warnings))
+            })
+            .await
+            .map_err(|error| format!("游戏实体比较任务失败：{error}"))??;
+            let evidence = entity_evidence_matches(&result.0);
+            let claims = entity_claims_matches(&result.0);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({
+                    "ok": true,
+                    "entities": result.0,
+                    "warnings": result.1,
+                }))
+                .map_err(|error| format!("无法序列化游戏实体比较结果：{error}"))?,
+                evidence,
+                claims,
+            ))
+        }
+        "get_game_entity_relations" => {
+            let args = parse_arguments::<GetGameEntityRelationsArgs>(arguments)?;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                knowledge::get_game_entity_relations(
+                    &args.entity_id,
+                    args.predicates.as_deref(),
+                    args.direction.as_deref().unwrap_or("both"),
+                    args.limit.unwrap_or(30),
+                )
+            })
+            .await
+            .map_err(|error| format!("游戏实体关系查询任务失败：{error}"))??;
+            let evidence = relation_evidence(&result);
+            let claims = relation_claims(&result);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({ "ok": true, "relations": result }))
+                    .map_err(|error| format!("无法序列化游戏关系结果：{error}"))?,
+                evidence,
+                claims,
+            ))
+        }
         "search_mod_sources" => {
             let args = parse_arguments::<SearchModSourcesArgs>(arguments)?;
             let key = super::require_deepseek_api_key()?;
@@ -774,6 +1114,46 @@ struct SearchModSourcesArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SearchKnowledgeArgs {
+    query: String,
+    domains: Option<Vec<String>>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LookupGameEntitiesArgs {
+    query: String,
+    kinds: Option<Vec<String>>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompareGameEntitiesArgs {
+    entity_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GetGameEntityRelationsArgs {
+    entity_id: String,
+    predicates: Option<Vec<String>>,
+    direction: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AnalyzeInstalledModArgs {
+    mod_id: String,
+    query: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NexusModArgs {
     mod_id: u64,
 }
@@ -787,6 +1167,312 @@ struct NexusDownloadPlanArgs {
 
 fn parse_arguments<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, String> {
     serde_json::from_str(arguments).map_err(|error| format!("AI 工具参数格式无效：{error}"))
+}
+
+fn normalized_comparison_entity_ids(entity_ids: Vec<String>) -> Result<Vec<String>, String> {
+    if !(2..=4).contains(&entity_ids.len()) {
+        return Err("游戏实体比较需要 2 到 4 个稳定实体 ID。".to_string());
+    }
+    let mut result = Vec::with_capacity(entity_ids.len());
+    let mut seen = HashSet::new();
+    for entity_id in entity_ids {
+        let entity_id = entity_id.trim();
+        if entity_id.is_empty() || entity_id.chars().count() > 240 {
+            return Err("游戏实体比较包含无效的实体 ID。".to_string());
+        }
+        if !seen.insert(entity_id.to_string()) {
+            return Err("游戏实体比较不能包含重复实体 ID。".to_string());
+        }
+        result.push(entity_id.to_string());
+    }
+    Ok(result)
+}
+
+fn search_evidence(result: &knowledge::KnowledgeSearchResponse) -> Vec<AgentKnowledgeEvidence> {
+    result
+        .matches
+        .iter()
+        .map(|item| AgentKnowledgeEvidence {
+            evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.result_id),
+            title: item.title.clone(),
+            game_version: item.game_version.clone(),
+            confidence: item.confidence,
+            source_title: item.source_title.clone(),
+            source_url: item.source_url.clone(),
+            pack_id: item.pack_id.clone(),
+            pack_version: item.pack_version.clone(),
+        })
+        .collect()
+}
+
+fn entity_evidence(
+    result: &knowledge::KnowledgeEntityLookupResponse,
+) -> Vec<AgentKnowledgeEvidence> {
+    entity_evidence_matches(&result.matches)
+}
+
+fn entity_evidence_matches(
+    matches: &[knowledge::KnowledgeEntityMatch],
+) -> Vec<AgentKnowledgeEvidence> {
+    matches
+        .iter()
+        .map(|item| AgentKnowledgeEvidence {
+            evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.entity_id),
+            title: item
+                .name_zh_hans
+                .clone()
+                .unwrap_or_else(|| item.canonical_name.clone()),
+            game_version: item.game_version.clone(),
+            confidence: item.confidence,
+            source_title: item.source_title.clone(),
+            source_url: item.source_url.clone(),
+            pack_id: item.pack_id.clone(),
+            pack_version: item.pack_version.clone(),
+        })
+        .collect()
+}
+
+fn entity_claims(result: &knowledge::KnowledgeEntityLookupResponse) -> Vec<AgentKnowledgeClaim> {
+    entity_claims_matches(&result.matches)
+}
+
+fn entity_claims_matches(matches: &[knowledge::KnowledgeEntityMatch]) -> Vec<AgentKnowledgeClaim> {
+    matches
+        .iter()
+        .map(|item| AgentKnowledgeClaim {
+            evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.entity_id),
+            data: json!({
+                "entityId": item.entity_id,
+                "canonicalName": item.canonical_name,
+                "nameZhHans": item.name_zh_hans,
+                "nameZhHant": item.name_zh_hant,
+                "data": item.data,
+            }),
+        })
+        .collect()
+}
+
+fn relation_evidence(result: &knowledge::KnowledgeRelationResponse) -> Vec<AgentKnowledgeEvidence> {
+    result
+        .relations
+        .iter()
+        .map(|item| AgentKnowledgeEvidence {
+            evidence_id: format!(
+                "{}:{}:{}",
+                item.pack_id, item.pack_version, item.relation_id
+            ),
+            title: format!(
+                "{} - {} - {}",
+                item.subject_name, item.predicate, item.object_name
+            ),
+            game_version: item.game_version.clone(),
+            confidence: item.confidence,
+            source_title: item.source_title.clone(),
+            source_url: item.source_url.clone(),
+            pack_id: item.pack_id.clone(),
+            pack_version: item.pack_version.clone(),
+        })
+        .collect()
+}
+
+fn relation_claims(result: &knowledge::KnowledgeRelationResponse) -> Vec<AgentKnowledgeClaim> {
+    result
+        .relations
+        .iter()
+        .map(|item| AgentKnowledgeClaim {
+            evidence_id: format!(
+                "{}:{}:{}",
+                item.pack_id, item.pack_version, item.relation_id
+            ),
+            data: json!({
+                "subjectId": item.subject_id,
+                "subjectName": item.subject_name,
+                "predicate": item.predicate,
+                "objectId": item.object_id,
+                "objectName": item.object_name,
+                "data": item.data,
+            }),
+        })
+        .collect()
+}
+
+fn local_mod_analysis_evidence_id(report: &mod_analysis::ModAnalysisReport) -> String {
+    format!(
+        "acumod-local-analysis:{}:{}:{}",
+        report.analyzer_version, report.mod_id, report.content_sha256
+    )
+}
+
+fn mod_analysis_evidence(report: &mod_analysis::ModAnalysisReport) -> Vec<AgentKnowledgeEvidence> {
+    let mut evidence = vec![AgentKnowledgeEvidence {
+        // 本地分析报告是文件、组件和依赖结论的第一手证据；它不依赖知识包是否存在。
+        evidence_id: local_mod_analysis_evidence_id(report),
+        title: format!("{} 的本地文件分析", report.mod_name),
+        game_version: "本地只读分析".to_string(),
+        confidence: 1.0,
+        source_title: Some("Acumod 本地 MOD 分析器".to_string()),
+        source_url: None,
+        pack_id: "acumod-local-analysis".to_string(),
+        pack_version: report.analyzer_version.to_string(),
+    }];
+    evidence.extend(
+        report
+            .knowledge_evidence
+            .iter()
+            .map(|item| AgentKnowledgeEvidence {
+                evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.result_id),
+                title: item.title.clone(),
+                game_version: item.game_version.clone(),
+                confidence: item.confidence,
+                source_title: item.source_title.clone(),
+                source_url: item.source_url.clone(),
+                pack_id: item.pack_id.clone(),
+                pack_version: item.pack_version.clone(),
+            }),
+    );
+    evidence
+}
+
+fn mod_analysis_claims(
+    report: &mod_analysis::ModAnalysisReport,
+    evidence: &[AgentKnowledgeEvidence],
+) -> Vec<AgentKnowledgeClaim> {
+    let Some(local_evidence) = evidence
+        .iter()
+        .find(|item| item.pack_id == "acumod-local-analysis")
+    else {
+        return Vec::new();
+    };
+    vec![AgentKnowledgeClaim {
+        evidence_id: local_evidence.evidence_id.clone(),
+        data: json!({
+            "modId": report.mod_id,
+            "modName": report.mod_name,
+            "fileCount": report.file_count,
+            "recognizedFileCount": report.recognized_file_count,
+            "unknownFileCount": report.unknown_file_count,
+            "componentCount": report.component_count,
+            "components": report.components,
+            "dependencies": report.edges,
+            "warnings": report.warnings,
+        }),
+    }]
+}
+
+fn mod_analysis_tool_result(
+    report: mod_analysis::ModAnalysisReport,
+    args: AnalyzeInstalledModArgs,
+    evidence: &[AgentKnowledgeEvidence],
+) -> Result<String, String> {
+    let query = args.query.unwrap_or_default().trim().to_lowercase();
+    let matching_files = report
+        .files
+        .iter()
+        .filter(|file| {
+            query.is_empty()
+                || file
+                    .effective_deploy_relative_path
+                    .to_lowercase()
+                    .contains(&query)
+                || file.role.to_lowercase().contains(&query)
+                || file.role_label.to_lowercase().contains(&query)
+                || file.component_label.to_lowercase().contains(&query)
+                || file
+                    .replacement_targets
+                    .iter()
+                    .any(|target| target.to_lowercase().contains(&query))
+        })
+        .collect::<Vec<_>>();
+    let total = matching_files.len();
+    let limit = args.limit.unwrap_or(50).clamp(1, 100);
+    let (start, end, next_offset) = pagination_bounds(total, args.offset.unwrap_or(0), limit);
+    let page = &matching_files[start..end];
+    let page_file_ids = page
+        .iter()
+        .map(|file| file.file_id.as_str())
+        .collect::<HashSet<_>>();
+    let files = page
+        .iter()
+        .map(|file| {
+            json!({
+                "fileId": file.file_id,
+                "deployPath": file.effective_deploy_relative_path,
+                "originalDeployPath": (file.source_deploy_relative_path != file.effective_deploy_relative_path).then_some(&file.source_deploy_relative_path),
+                "role": file.role_label,
+                "component": file.component_label,
+                "replacementTargets": file.replacement_targets,
+                "references": file.references,
+                "confidence": file.confidence,
+                "excludedFromDeployment": file.excluded_from_deployment,
+                "evidence": file.evidence
+            })
+        })
+        .collect::<Vec<_>>();
+    let edges = report
+        .edges
+        .iter()
+        .filter(|edge| {
+            page_file_ids.contains(edge.from_file_id.as_str())
+                || edge
+                    .to_file_id
+                    .as_deref()
+                    .is_some_and(|target| page_file_ids.contains(target))
+        })
+        .take(300)
+        .map(|edge| {
+            json!({
+                "fromFileId": edge.from_file_id,
+                "toFileId": edge.to_file_id,
+                "targetReference": edge.target_reference,
+                "relation": edge.relation_label,
+                "evidence": edge.evidence,
+                "confidence": edge.confidence
+            })
+        })
+        .collect::<Vec<_>>();
+    let components = report
+        .components
+        .iter()
+        .take(100)
+        .map(|component| {
+            json!({
+                "componentId": component.component_id,
+                "kind": component.kind,
+                "label": component.label,
+                "fileCount": component.file_count,
+                "roles": component.roles,
+                "replacementTargets": component.replacement_targets,
+                "confidence": component.confidence
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&json!({
+        "ok": true,
+        "modId": report.mod_id,
+        "modName": report.mod_name,
+        "analyzerVersion": report.analyzer_version,
+        "cacheHit": report.cache_hit,
+        "summary": {
+            "fileCount": report.file_count,
+            "recognizedFileCount": report.recognized_file_count,
+            "unknownFileCount": report.unknown_file_count,
+            "componentCount": report.component_count,
+            "dependencyCount": report.edges.len(),
+            "message": report.message
+        },
+        "filter": query,
+        "total": total,
+        "offset": start,
+        "returned": files.len(),
+        "nextOffset": next_offset,
+        "components": components,
+        "files": files,
+        "dependencies": edges,
+        // 与 ToolExecution 的证据集合一致，使模型能够引用本地文件分析和技术知识来源。
+        "knowledgeEvidence": evidence,
+        "warnings": report.warnings
+    }))
+    .map_err(|error| format!("无法序列化 MOD 文件分析结果：{error}"))
 }
 
 async fn load_snapshot(app: &AppHandle) -> Result<mod_library::ModWorkspaceSnapshot, String> {
@@ -1065,7 +1751,36 @@ fn pagination_bounds(total: usize, offset: usize, limit: usize) -> (usize, usize
 
 #[cfg(test)]
 mod tests {
-    use super::{normalized_limit, pagination_bounds, DEFAULT_RESULT_LIMIT, MAX_RESULT_LIMIT};
+    use super::{
+        mod_analysis_evidence, mod_analysis_tool_result, normalized_comparison_entity_ids,
+        normalized_limit, pagination_bounds, tool_definitions, with_claim_hints,
+        AgentKnowledgeClaim, AnalyzeInstalledModArgs, DEFAULT_RESULT_LIMIT, MAX_RESULT_LIMIT,
+    };
+    use crate::services::mod_analysis::{ModAnalysisReport, ModKnowledgeEvidence};
+
+    fn empty_mod_report() -> ModAnalysisReport {
+        ModAnalysisReport {
+            schema_version: 1,
+            analyzer_version: 2,
+            mod_id: "mod-1".to_string(),
+            mod_name: "测试 MOD".to_string(),
+            inventory_sha256: "inventory".to_string(),
+            content_sha256: "content".to_string(),
+            knowledge_signature: "knowledge".to_string(),
+            file_count: 0,
+            total_size_bytes: 0,
+            recognized_file_count: 0,
+            unknown_file_count: 0,
+            component_count: 0,
+            files: Vec::new(),
+            components: Vec::new(),
+            edges: Vec::new(),
+            knowledge_evidence: Vec::new(),
+            warnings: Vec::new(),
+            cache_hit: false,
+            message: "测试".to_string(),
+        }
+    }
 
     #[test]
     fn local_mod_results_can_continue_after_the_first_hundred_items() {
@@ -1078,5 +1793,90 @@ mod tests {
         assert_eq!(pagination_bounds(10, 99, 100), (10, 10, None));
         assert_eq!(normalized_limit(None), DEFAULT_RESULT_LIMIT);
         assert_eq!(normalized_limit(Some(999)), MAX_RESULT_LIMIT);
+    }
+
+    #[test]
+    fn local_mod_analysis_is_always_an_agent_evidence_source() {
+        let mut report = empty_mod_report();
+        report.knowledge_evidence.push(ModKnowledgeEvidence {
+            result_id: "modding-mod3".to_string(),
+            title: "MOD3 模型资源".to_string(),
+            snippet: "测试".to_string(),
+            game_version: "15.23".to_string(),
+            confidence: 0.98,
+            source_title: Some("测试资料".to_string()),
+            source_url: None,
+            pack_id: "mhw-modding".to_string(),
+            pack_version: "dev".to_string(),
+        });
+        let evidence = mod_analysis_evidence(&report);
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(
+            evidence[0].evidence_id,
+            "acumod-local-analysis:2:mod-1:content"
+        );
+        assert_eq!(
+            evidence[0].source_title.as_deref(),
+            Some("Acumod 本地 MOD 分析器")
+        );
+        assert_eq!(evidence[1].evidence_id, "mhw-modding:dev:modding-mod3");
+
+        let content = mod_analysis_tool_result(
+            report,
+            AnalyzeInstalledModArgs {
+                mod_id: "mod-1".to_string(),
+                query: None,
+                offset: None,
+                limit: None,
+            },
+            &evidence,
+        )
+        .unwrap();
+        let tool_result = serde_json::from_str::<serde_json::Value>(&content).unwrap();
+        assert_eq!(
+            tool_result["knowledgeEvidence"][0]["evidenceId"],
+            "acumod-local-analysis:2:mod-1:content"
+        );
+    }
+
+    #[test]
+    fn structured_claim_hints_expose_bounded_json_pointers() {
+        let content = with_claim_hints(
+            r#"{"ok":true}"#.to_string(),
+            &[AgentKnowledgeClaim {
+                evidence_id: "test:entity".to_string(),
+                data: serde_json::json!({
+                    "nameZhHans": "测试大剑",
+                    "data": { "attack": 624, "isCraftable": true }
+                }),
+            }],
+        );
+        let value = serde_json::from_str::<serde_json::Value>(&content).unwrap();
+        let fields = value["claimHints"][0]["fields"].as_array().unwrap();
+        assert!(fields
+            .iter()
+            .any(|field| { field["pointer"] == "/data/attack" && field["value"] == 624 }));
+        assert!(fields
+            .iter()
+            .any(|field| { field["pointer"] == "/data/isCraftable" && field["value"] == true }));
+    }
+
+    #[test]
+    fn comparison_requires_unique_stable_entity_ids() {
+        assert_eq!(
+            normalized_comparison_entity_ids(vec![
+                "game-weapon:0:136".to_string(),
+                "game-weapon:0:137".to_string(),
+            ])
+            .unwrap(),
+            ["game-weapon:0:136", "game-weapon:0:137"]
+        );
+        assert!(normalized_comparison_entity_ids(vec!["one".to_string()]).is_err());
+        assert!(
+            normalized_comparison_entity_ids(vec!["one".to_string(), "one".to_string()]).is_err()
+        );
+        assert!(tool_definitions()
+            .iter()
+            .any(|item| item["function"]["name"] == "compare_game_entities"));
     }
 }

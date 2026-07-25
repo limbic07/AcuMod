@@ -13,6 +13,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::operations::OperationReporter;
+use crate::services::mod_library::extract_archive_with_bundled_7zip;
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
 const PACK_SCHEMA_VERSION: u32 = 1;
@@ -61,10 +62,18 @@ pub struct KnowledgePackSummary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct KnowledgeInstallResult {
+pub struct KnowledgeBundleInstallResult {
     pub message: String,
-    pub installed_pack: KnowledgePackSummary,
     pub status: KnowledgeStatus,
+    pub installed_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgeInstallResult {
+    message: String,
+    installed_pack: KnowledgePackSummary,
+    status: KnowledgeStatus,
 }
 
 #[derive(Clone, Serialize)]
@@ -220,13 +229,147 @@ fn get_status_from(root: &Path) -> Result<KnowledgeStatus, String> {
     status_from_index(&root, &index)
 }
 
-/// 导入过程先复制到 staging，再校验副本，最后才切换活动索引。
-pub fn install_pack(
+/// 从一个 ZIP 中发现、校验并安装完整知识包集合。
+pub fn install_bundle(
+    app: tauri::AppHandle,
     source_path: String,
     progress: &OperationReporter,
-) -> Result<KnowledgeInstallResult, String> {
+) -> Result<KnowledgeBundleInstallResult, String> {
     let root = knowledge_root()?;
-    install_pack_into(&root, source_path, progress)
+    let archive_path = normalized_bundle_path(&source_path)?;
+    let archive_metadata =
+        fs::metadata(&archive_path).map_err(|error| format!("无法读取知识包 ZIP：{error}"))?;
+    if archive_metadata.len() == 0 {
+        return Err("知识包 ZIP 为空。".to_string());
+    }
+
+    let staging_root = root.join("staging");
+    fs::create_dir_all(&staging_root)
+        .map_err(|error| format!("无法创建知识包暂存目录：{error}"))?;
+    let extraction_root = staging_root.join(format!("bundle-{}", unix_nanos_now()?));
+    fs::create_dir_all(&extraction_root)
+        .map_err(|error| format!("无法创建知识包解包目录：{error}"))?;
+
+    progress.report("正在解包知识包 ZIP", 0, Some(100), None);
+    if let Err(error) =
+        extract_archive_with_bundled_7zip(&app, &archive_path, &extraction_root, progress)
+    {
+        let _ = fs::remove_dir_all(&extraction_root);
+        return Err(error);
+    }
+
+    let result = install_extracted_bundle(&root, &extraction_root, progress);
+    if let Err(error) = fs::remove_dir_all(&extraction_root) {
+        if result.is_ok() {
+            return Err(format!("知识包已安装，但无法清理解包暂存目录：{error}"));
+        }
+    }
+    result
+}
+
+fn install_extracted_bundle(
+    root: &Path,
+    extraction_root: &Path,
+    progress: &OperationReporter,
+) -> Result<KnowledgeBundleInstallResult, String> {
+    let mut package_paths = Vec::new();
+    collect_knowledge_packages(extraction_root, &mut package_paths)?;
+    package_paths.sort();
+
+    if package_paths.len() != 4 {
+        return Err(format!(
+            "知识包 ZIP 必须包含四个 `.acukb` 文件，当前找到 {} 个。",
+            package_paths.len()
+        ));
+    }
+
+    let mut validated_packs = Vec::new();
+    let mut kinds = HashSet::new();
+    for path in &package_paths {
+        let metadata = fs::metadata(path).map_err(|error| format!("无法读取知识包：{error}"))?;
+        if metadata.len() == 0 || metadata.len() > MAX_PACK_SIZE_BYTES {
+            return Err(format!(
+                "知识包 {} 为空或超过 4 GB 安全上限。",
+                display_path(path)
+            ));
+        }
+        let validated = validate_pack(path)
+            .map_err(|error| format!("知识包 {} 校验失败：{error}", display_path(path)))?;
+        if !matches!(
+            validated.kind.as_str(),
+            "mhw-game-facts" | "mhw-modding" | "mhw-game-guides" | "acumod-help"
+        ) {
+            return Err(format!(
+                "知识包 {} 的类型 `{}` 不是完整知识包支持的四类之一。",
+                display_path(path),
+                validated.kind
+            ));
+        }
+        if !kinds.insert(validated.kind.clone()) {
+            return Err(format!("知识包 ZIP 中存在重复类型 `{}`。", validated.kind));
+        }
+        validated_packs.push((path.clone(), validated));
+    }
+
+    let required_kinds = [
+        "mhw-game-facts",
+        "mhw-modding",
+        "mhw-game-guides",
+        "acumod-help",
+    ];
+    if required_kinds.iter().any(|kind| !kinds.contains(*kind)) {
+        return Err(
+            "知识包 ZIP 缺少完整知识库所需的游戏事实、MOD 技术、攻略或 Acumod 说明包。".to_string(),
+        );
+    }
+
+    let total = validated_packs.len();
+    let mut status = None;
+    for (index, (path, _)) in validated_packs.into_iter().enumerate() {
+        progress.report(
+            "正在安装整套知识包",
+            index,
+            Some(total),
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string),
+        );
+        let result = install_pack_into(root, path.to_string_lossy().into_owned(), progress)?;
+        status = Some(result.status);
+    }
+
+    Ok(KnowledgeBundleInstallResult {
+        message: format!("已安装整套知识包，共 {} 个。", total),
+        status: status.ok_or_else(|| "没有可安装的知识包。".to_string())?,
+        installed_count: total,
+    })
+}
+
+fn collect_knowledge_packages(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in fs::read_dir(root).map_err(|error| format!("无法读取知识包解包目录：{error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("无法读取知识包解包条目：{error}"))?
+            .path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("无法检查知识包解包条目：{error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "知识包 ZIP 含有不允许的符号链接：{}",
+                display_path(&path)
+            ));
+        }
+        if metadata.is_dir() {
+            collect_knowledge_packages(&path, output)?;
+        } else if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("acukb"))
+        {
+            output.push(path);
+        }
+    }
+    Ok(())
 }
 
 fn install_pack_into(
@@ -1020,47 +1163,38 @@ fn search_pack(
         (LIKE_SEARCH_SQL, format!("%{}%", escape_like(query)))
     };
     let direct_matches = search_rows(&connection, pack, sql, &parameter, limit)?;
-    if !embedded_alias_matches.is_empty() || !use_fts || !direct_matches.is_empty() {
-        let mut matches = Vec::new();
-        let mut seen_result_ids = HashSet::new();
-        append_unique_matches(
-            &mut matches,
-            &mut seen_result_ids,
-            embedded_alias_matches,
-            limit,
-        );
-        append_unique_matches(&mut matches, &mut seen_result_ids, direct_matches, limit);
+    let mut matches = Vec::new();
+    let mut seen_result_ids = HashSet::new();
+    append_unique_matches(
+        &mut matches,
+        &mut seen_result_ids,
+        embedded_alias_matches,
+        limit,
+    );
+    append_unique_matches(&mut matches, &mut seen_result_ids, direct_matches, limit);
+    if !use_fts || matches.len() >= limit {
         return Ok(matches);
     }
 
     // 长问句通常不会原样出现在资料中。先用二字中文窗口做受控 LIKE 回退，
     // 覆盖“黑龙如何解锁”中的“黑龙”这类短术语；再补三字 FTS 片段和英文术语。
     // 两条路径都使用固定 SQL 与绑定参数，用户文本不会成为 FTS 或 SQL 语法。
-    let mut fallback_matches = Vec::new();
-    let mut seen_result_ids = HashSet::new();
+    // 直接命中只代表至少有一份资料包含完整问句，不代表问句中的每个术语
+    // 都在同一份资料里。继续补充分词结果，才能覆盖 MOD3、MRL3、TEX
+    // 这类需要合并多份技术说明才能回答的问题。
     for term in fallback_like_terms(query) {
         let parameter = format!("%{}%", escape_like(&term));
         let term_matches = search_rows(&connection, pack, LIKE_SEARCH_SQL, &parameter, limit)?;
-        append_unique_matches(
-            &mut fallback_matches,
-            &mut seen_result_ids,
-            term_matches,
-            limit,
-        );
-        if fallback_matches.len() >= limit {
-            return Ok(fallback_matches);
+        append_unique_matches(&mut matches, &mut seen_result_ids, term_matches, limit);
+        if matches.len() >= limit {
+            return Ok(matches);
         }
     }
     if let Some(fallback_query) = fallback_fts_query(query) {
         let fts_matches = search_rows(&connection, pack, FTS_SEARCH_SQL, &fallback_query, limit)?;
-        append_unique_matches(
-            &mut fallback_matches,
-            &mut seen_result_ids,
-            fts_matches,
-            limit,
-        );
+        append_unique_matches(&mut matches, &mut seen_result_ids, fts_matches, limit);
     }
-    Ok(fallback_matches)
+    Ok(matches)
 }
 
 fn search_embedded_alias_rows(
@@ -1381,6 +1515,32 @@ fn normalized_source_path(value: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn normalized_bundle_path(value: &str) -> Result<PathBuf, String> {
+    let value = value.trim().trim_matches('"');
+    if value.is_empty() {
+        return Err("请选择知识包 ZIP 文件。".to_string());
+    }
+    let path = PathBuf::from(value);
+    if !path.is_file() {
+        return Err("知识包导入必须选择一个 ZIP 文件。".to_string());
+    }
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("zip"))
+    {
+        return Err("知识包文件扩展名必须是 `.zip`。ZIP 内应包含四个 `.acukb` 文件。".to_string());
+    }
+    Ok(path)
+}
+
+fn display_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未知文件")
+        .to_string()
+}
+
 fn relative_pack_path(pack_id: &str, file_name: &str) -> String {
     format!("packs/{pack_id}/{file_name}")
 }
@@ -1544,7 +1704,10 @@ fn normalize_relation_direction(value: &str) -> Result<&'static str, String> {
 }
 
 fn validate_pack_kind(value: &str) -> Result<(), String> {
-    if matches!(value, "mhw-modding" | "mhw-game-facts" | "mhw-game-guides") {
+    if matches!(
+        value,
+        "mhw-modding" | "mhw-game-facts" | "mhw-game-guides" | "acumod-help"
+    ) {
         Ok(())
     } else {
         Err(format!("不支持的知识包类型：{value}"))
@@ -1733,10 +1896,10 @@ fn unix_nanos_now() -> Result<u128, String> {
 mod tests {
     use super::{
         delete_pack_from, get_game_entity_relations_from, get_status_from, install_pack_into,
-        installed_pack_path, lookup_game_entities_from, normalize_domains,
-        normalize_relation_predicates, parse_numeric_version, quoted_fts_query, search_from,
-        search_pack, validate_identifier, validate_pack, validate_version, InstalledPackRecord,
-        PACK_APPLICATION_ID,
+        installed_pack_path, load_index, lookup_game_entities_from, normalize_domains,
+        normalize_relation_predicates, normalized_bundle_path, parse_numeric_version,
+        quoted_fts_query, search_from, search_pack, validate_identifier, validate_pack,
+        validate_version, InstalledPackRecord, PACK_APPLICATION_ID,
     };
     use crate::operations::OperationReporter;
     use rusqlite::{params, Connection};
@@ -1756,6 +1919,27 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn knowledge_bundle_import_accepts_only_zip_files() {
+        let root = unique_test_path("bundle-extension");
+        fs::create_dir_all(&root).unwrap();
+        let directory = root.join("packs");
+        fs::create_dir_all(&directory).unwrap();
+        let acukb = root.join("single.acukb");
+        let zip = root.join("complete.zip");
+        fs::write(&acukb, b"test").unwrap();
+        fs::write(&zip, b"test").unwrap();
+
+        assert!(normalized_bundle_path(directory.to_string_lossy().as_ref()).is_err());
+        assert!(normalized_bundle_path(acukb.to_string_lossy().as_ref()).is_err());
+        assert_eq!(
+            normalized_bundle_path(zip.to_string_lossy().as_ref()).unwrap(),
+            zip
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn create_test_pack(path: &Path, version: &str, body: &str) {
@@ -1913,6 +2097,7 @@ mod tests {
         let domains = vec!["mhw-modding".to_string(), "mhw-game-facts".to_string()];
         assert_eq!(normalize_domains(Some(&domains)).unwrap().len(), 2);
         assert!(normalize_domains(Some(&["other".to_string()])).is_err());
+        assert!(normalize_domains(Some(&["acumod-help".to_string()])).is_ok());
     }
 
     #[test]
@@ -2067,6 +2252,79 @@ mod tests {
     }
 
     #[test]
+    fn search_skips_missing_or_corrupt_pack_without_blocking_valid_pack() {
+        let test_root = unique_test_path("damaged-pack");
+        let knowledge_root = test_root.join("knowledge");
+        fs::create_dir_all(&test_root).unwrap();
+        let game_source = test_root.join("game.acukb");
+        let modding_source = test_root.join("modding.acukb");
+        create_test_game_pack(&game_source);
+        create_test_pack(&modding_source, "0.1.0", "椋炵繑鐖祫婧愭ā鍨嬫祦绋?");
+        let reporter = OperationReporter::default();
+        install_pack_into(
+            &knowledge_root,
+            game_source.to_string_lossy().into_owned(),
+            &reporter,
+        )
+        .unwrap();
+        install_pack_into(
+            &knowledge_root,
+            modding_source.to_string_lossy().into_owned(),
+            &reporter,
+        )
+        .unwrap();
+
+        let modding_record = load_index(&knowledge_root)
+            .unwrap()
+            .packs
+            .into_iter()
+            .find(|pack| pack.pack_id == "test-modding" && pack.active)
+            .expect("测试 MOD 知识包应在索引中激活");
+        let modding_path =
+            installed_pack_path(&knowledge_root, &modding_record.relative_path).unwrap();
+        fs::remove_file(&modding_path).unwrap();
+
+        let missing_response = search_from(&knowledge_root, "Rocket GS", None, 10).unwrap();
+        assert_eq!(missing_response.searched_pack_count, 2);
+        assert!(missing_response
+            .matches
+            .iter()
+            .any(|item| item.result_id == "weapon:greatsword:wyvern-ignition"));
+        assert!(missing_response
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("文件缺失")));
+
+        install_pack_into(
+            &knowledge_root,
+            modding_source.to_string_lossy().into_owned(),
+            &reporter,
+        )
+        .unwrap();
+        let restored_record = load_index(&knowledge_root)
+            .unwrap()
+            .packs
+            .into_iter()
+            .find(|pack| pack.pack_id == "test-modding" && pack.active)
+            .expect("重新导入后测试 MOD 知识包应在索引中激活");
+        let restored_path =
+            installed_pack_path(&knowledge_root, &restored_record.relative_path).unwrap();
+        fs::write(&restored_path, b"not a sqlite knowledge pack").unwrap();
+
+        let corrupt_response = search_from(&knowledge_root, "Rocket GS", None, 10).unwrap();
+        assert!(corrupt_response
+            .matches
+            .iter()
+            .any(|item| item.result_id == "weapon:greatsword:wyvern-ignition"));
+        assert!(corrupt_response
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("查询失败")));
+
+        fs::remove_dir_all(test_root).unwrap();
+    }
+
+    #[test]
     #[ignore = "需要先运行 npm.cmd run knowledge:build-dev，使用真实开发知识包验证安装与检索链路"]
     fn generated_development_packs_install_and_answer_core_queries() {
         let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2079,15 +2337,20 @@ mod tests {
         let game_facts = build_root.join("acumod-dev-game-facts.acukb");
         let modding = build_root.join("acumod-dev-modding.acukb");
         let guides = build_root.join("acumod-dev-game-guides.acukb");
+        let acumod_help = build_root.join("acumod-dev-acumod-help.acukb");
         assert!(game_facts.is_file(), "缺少游戏事实开发包：{game_facts:?}");
         assert!(modding.is_file(), "缺少 MOD 技术开发包：{modding:?}");
         assert!(guides.is_file(), "缺少攻略开发包：{guides:?}");
+        assert!(
+            acumod_help.is_file(),
+            "缺少 Acumod 使用说明开发包：{acumod_help:?}"
+        );
 
         let test_root = unique_test_path("generated-pack-e2e");
         let knowledge_root = test_root.join("knowledge");
         fs::create_dir_all(&test_root).unwrap();
         let reporter = OperationReporter::default();
-        for pack in [&game_facts, &modding, &guides] {
+        for pack in [&game_facts, &modding, &guides, &acumod_help] {
             install_pack_into(
                 &knowledge_root,
                 pack.to_string_lossy().into_owned(),
@@ -2095,54 +2358,14 @@ mod tests {
             )
             .unwrap();
         }
+
         assert_eq!(
             get_status_from(&knowledge_root).unwrap().active_pack_count,
-            3
+            4
         );
 
-        let question_set_path = project_root
-            .join("references")
-            .join("knowledge")
-            .join("sources")
-            .join("question-set.json");
-        let question_set = serde_json::from_str::<serde_json::Value>(
-            &fs::read_to_string(&question_set_path).unwrap_or_else(|error| {
-                panic!("无法读取固定问题集 {question_set_path:?}: {error}")
-            }),
-        )
-        .expect("固定问题集必须是有效 JSON");
-        let questions = question_set["questions"]
-            .as_array()
-            .expect("固定问题集必须包含 questions 数组");
-        for question in questions {
-            let id = question["id"].as_str().expect("固定问题必须包含字符串 ID");
-            let query = question["question"]
-                .as_str()
-                .expect("固定问题必须包含自然问句");
-            let expected_ids = question["searchResultIds"]
-                .as_array()
-                .expect("固定问题必须包含自然检索预期结果");
-            let response = search_from(&knowledge_root, query, None, 30)
-                .unwrap_or_else(|error| panic!("固定问句 {id} 检索失败：{error}"));
-            for expected_id in expected_ids {
-                let expected_id = expected_id.as_str().expect("自然检索预期结果必须是字符串");
-                assert!(
-                    response
-                        .matches
-                        .iter()
-                        .any(|item| item.result_id == expected_id),
-                    "固定问句 {id} 未召回 {expected_id}：{query}；候选：{:?}",
-                    response
-                        .matches
-                        .iter()
-                        .map(|item| item.result_id.as_str())
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
-
-        // 真实包验收覆盖固定问题集的十类问法，确保安装索引、别名检索、关系遍历和
-        // FTS/LIKE 回退均能为 AcuAI 返回证据，而不是只检查 SQLite 中存在原始记录。
+        // 真实包验收覆盖核心实体、关系、攻略和 MOD 技术问法，确保安装索引、别名检索、
+        // 关系遍历和 FTS/LIKE 回退均能为 AcuAI 返回证据，而不是只检查 SQLite 中存在原始记录。
         let quest =
             lookup_game_entities_from(&knowledge_root, "贼龙与古代树森林", None, 20).unwrap();
         assert!(quest

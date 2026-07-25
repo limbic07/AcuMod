@@ -5,9 +5,13 @@ mod storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(operations::OperationCoordinator::default())
-        .manage(services::agent::AgentCoordinator::default())
+        .manage(services::agent::AgentCoordinator::default());
+
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::agent::cancel_agent_action_plan,
@@ -32,7 +36,7 @@ pub fn run() {
             commands::knowledge::delete_knowledge_pack,
             commands::knowledge::get_game_entity_relations,
             commands::knowledge::get_knowledge_status,
-            commands::knowledge::install_knowledge_pack,
+            commands::knowledge::install_knowledge_bundle,
             commands::knowledge::lookup_game_entities,
             commands::knowledge::search_knowledge,
             commands::mod_analysis::analyze_installed_mod,

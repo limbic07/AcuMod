@@ -9250,7 +9250,7 @@ fn validate_archive_path(path: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("Could not resolve archive path {}: {error}", path.display()))
 }
 
-fn extract_archive_with_bundled_7zip(
+pub(crate) fn extract_archive_with_bundled_7zip(
     app: &tauri::AppHandle,
     archive_path: &Path,
     destination: &Path,

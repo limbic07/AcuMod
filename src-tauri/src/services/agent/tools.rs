@@ -457,14 +457,14 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "search_knowledge",
-                "description": "查询已安装的 MHW 游戏事实、攻略和 MOD 制作技术知识包。适用于游戏机制、任务、素材、配装建议、术语和 MOD 文件作用等问题；优先传入 2 至 12 个字的关键术语，长问句未命中时服务端会安全退化为术语查询；返回带来源和适用版本的证据。",
+                "description": "查询已安装的 MHW 游戏事实、攻略、MOD 制作技术和 Acumod 使用说明知识包。适用于游戏机制、任务、素材、配装建议、术语、MOD 文件作用以及软件操作问题；优先传入 2 至 12 个字的关键术语，长问句未命中时服务端会安全退化为术语查询；返回带来源和适用版本的证据。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "使用精确 MHW 术语描述要查的事实、关系或技术问题" },
                         "domains": {
                             "type": "array",
-                            "items": { "type": "string", "enum": ["mhw-modding", "mhw-game-facts", "mhw-game-guides"] },
+                            "items": { "type": "string", "enum": ["mhw-modding", "mhw-game-facts", "mhw-game-guides", "acumod-help"] },
                             "description": "可选知识领域；不传时查询全部活动知识包"
                         },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 30 }

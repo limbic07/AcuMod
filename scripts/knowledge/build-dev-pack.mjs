@@ -20,6 +20,10 @@ const gameGuideDocumentsPath = path.join(
   projectRoot,
   "references/knowledge/sources/game-guide-documents.json",
 );
+const acumodHelpDocumentsPath = path.join(
+  projectRoot,
+  "references/knowledge/sources/acumod-help-documents.json",
+);
 const locationNameMapPath = path.join(
   projectRoot,
   "references/knowledge/sources/location-name-map.json",
@@ -27,6 +31,10 @@ const locationNameMapPath = path.join(
 const curatedQuestNameMapPath = path.join(
   projectRoot,
   "references/knowledge/sources/quest-name-map.json",
+);
+const deliveryUnlockSourcePath = path.join(
+  projectRoot,
+  "references/knowledge/sources/delivery-unlock-documents.json",
 );
 const rawGameDataRoot = path.join(
   projectRoot,
@@ -623,6 +631,52 @@ async function loadGame8QuestUnlockSnapshot() {
     // 任务链是可选补充来源；没有抓取快照时，基础游戏事实包仍应能构建。
     if (error?.code === "ENOENT") return null;
     throw new Error(`无法读取 Game8 任务解锁快照：${error.message}`);
+  }
+}
+
+async function loadDeliveryUnlockSource() {
+  try {
+    const source = JSON.parse(await readFile(deliveryUnlockSourcePath, "utf8"));
+    if (
+      source.schemaVersion !== 1
+      || source.sourceKind !== "communityDeliveryUnlockGuide"
+      || source.sourceId !== "kuroyonhon-delivery-unlocks"
+      || !meaningfulText(source.sourceUrl)
+      || !meaningfulText(source.retrievedAt)
+      || !Array.isArray(source.entries)
+      || !source.entries.every((entry) => (
+        meaningfulText(entry.deliveryId)
+        && meaningfulText(entry.sourceTitleJa)
+        && Array.isArray(entry.conditions)
+        && entry.conditions.length > 0
+        && entry.conditions.every((condition) => (
+          meaningfulText(condition.sourceText)
+          && meaningfulText(condition.displayZhHans)
+        ))
+      ))
+    ) {
+      throw new Error("交货委托解锁资料结构无效");
+    }
+    const deliveryIds = new Set();
+    for (const entry of source.entries) {
+      if (deliveryIds.has(entry.deliveryId)) {
+        throw new Error(`交货委托解锁资料存在重复 ID：${entry.deliveryId}`);
+      }
+      deliveryIds.add(entry.deliveryId);
+      for (const condition of entry.conditions) {
+        const questIds = condition.questIds ?? (condition.questId ? [condition.questId] : []);
+        if (!Array.isArray(questIds) || questIds.some((id) => !/^\d+$/u.test(String(id)))) {
+          throw new Error(`交货委托 ${entry.deliveryId} 的任务 ID 无效`);
+        }
+        if (condition.questNameZhHans && !condition.questId) {
+          throw new Error(`交货委托 ${entry.deliveryId} 的任务名称缺少 questId`);
+        }
+      }
+    }
+    return source;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new Error(`无法读取交货委托解锁资料：${error.message}`);
   }
 }
 
@@ -1545,6 +1599,124 @@ function unlockConditionId(quest, entry, requirementIndex) {
   return `game-unlock-condition:${questId}:${entry.sourceId}:${sourceTitleKey}:${requirementIndex}`;
 }
 
+function addDeliveryUnlockFacts(entities, relations, deliveryUnlockSource) {
+  const empty = {
+    deliveryUnlockEntryCount: 0,
+    deliveryUnlockConditionCount: 0,
+    deliveryPrerequisiteRelationCount: 0,
+    unresolvedDeliveryCount: 0,
+  };
+  if (!deliveryUnlockSource) return empty;
+
+  const deliveriesById = new Map(
+    entities
+      .filter((entity) => entity.kind === "delivery" && entity.id.startsWith("game-delivery:"))
+      .map((entity) => [entity.data.deliveryId, entity]),
+  );
+  const questsById = new Map(
+    entities
+      .filter((entity) => entity.kind === "quest" && entity.id.startsWith("game-quest:"))
+      .map((entity) => [entity.data.questId, entity]),
+  );
+  let deliveryUnlockEntryCount = 0;
+  let deliveryUnlockConditionCount = 0;
+  let deliveryPrerequisiteRelationCount = 0;
+  let unresolvedDeliveryCount = 0;
+
+  for (const entry of deliveryUnlockSource.entries) {
+    const delivery = deliveriesById.get(String(entry.deliveryId));
+    if (!delivery) {
+      unresolvedDeliveryCount += 1;
+      continue;
+    }
+    deliveryUnlockEntryCount += 1;
+    for (const [conditionIndex, condition] of entry.conditions.entries()) {
+      const conditionId = `game-delivery-condition:${entry.deliveryId}:${conditionIndex}`;
+      const questIds = condition.questIds ?? (condition.questId ? [condition.questId] : []);
+      const questEntities = questIds
+        .map((questId) => questsById.get(String(questId)))
+        .filter(Boolean);
+      const questNames = condition.questNamesZhHans ?? (condition.questNameZhHans ? [condition.questNameZhHans] : []);
+      if (
+        questNames.length > 0
+        && (questNames.length !== questEntities.length
+          || questEntities.some((quest, index) => quest.title !== questNames[index]))
+      ) {
+        throw new Error(`交货委托 ${entry.deliveryId} 的任务 ID 与官方简中名称不一致`);
+      }
+      const missingQuestIds = questIds
+        .filter((questId) => !questsById.has(String(questId)))
+        .map(String);
+      entities.push({
+        id: conditionId,
+        kind: "deliveryUnlockCondition",
+        domain: "game-quest",
+        title: `交货委托解锁条件：${delivery.title}`,
+        nameZhHans: `交货委托解锁条件：${delivery.title}`,
+        aliases: [],
+        summary: condition.displayZhHans,
+        data: {
+          deliveryId: String(entry.deliveryId),
+          displayZhHans: condition.displayZhHans,
+          sourceText: condition.sourceText,
+          sourceTitleJa: entry.sourceTitleJa,
+          requiredQuestIds: questEntities.map((quest) => quest.id),
+          missingQuestIds,
+          sourceUrl: deliveryUnlockSource.sourceUrl,
+          retrievedAt: deliveryUnlockSource.retrievedAt,
+          contentBaselineVersion: deliveryUnlockSource.contentBaselineVersion,
+          sourceVersion: deliveryUnlockSource.verificationStatus,
+        },
+        gameVersion: targetGameVersion,
+        confidence: 0.62,
+        sourceId: deliveryUnlockSource.sourceId,
+      });
+      relations.push({
+        id: `relation:requiresCondition:${delivery.id}:${conditionId}`,
+        subjectId: delivery.id,
+        predicate: "requiresCondition",
+        objectId: conditionId,
+        gameVersion: targetGameVersion,
+        confidence: 0.62,
+        sourceId: deliveryUnlockSource.sourceId,
+        data: {
+          sourceUrl: deliveryUnlockSource.sourceUrl,
+          retrievedAt: deliveryUnlockSource.retrievedAt,
+          contentBaselineVersion: deliveryUnlockSource.contentBaselineVersion,
+          sourceVersion: deliveryUnlockSource.verificationStatus,
+        },
+      });
+      deliveryUnlockConditionCount += 1;
+      for (const quest of questEntities) {
+        const relationId = `relation:requiresQuest:${delivery.id}:${quest.id}`;
+        if (relations.some((relation) => relation.id === relationId)) continue;
+        relations.push({
+          id: relationId,
+          subjectId: delivery.id,
+          predicate: "requiresQuest",
+          objectId: quest.id,
+          gameVersion: targetGameVersion,
+          confidence: 0.62,
+          sourceId: deliveryUnlockSource.sourceId,
+          data: {
+            sourceUrl: deliveryUnlockSource.sourceUrl,
+            retrievedAt: deliveryUnlockSource.retrievedAt,
+            contentBaselineVersion: deliveryUnlockSource.contentBaselineVersion,
+            sourceVersion: deliveryUnlockSource.verificationStatus,
+          },
+        });
+        deliveryPrerequisiteRelationCount += 1;
+      }
+    }
+  }
+  return {
+    deliveryUnlockEntryCount,
+    deliveryUnlockConditionCount,
+    deliveryPrerequisiteRelationCount,
+    unresolvedDeliveryCount,
+  };
+}
+
 function addGame8QuestUnlockFacts(
   entities,
   relations,
@@ -2034,13 +2206,14 @@ async function rawGameFacts(modelIndex) {
   const duplicate = allEntities.find((entity, index) => allEntities.findIndex((other) => other.id === entity.id) !== index);
   if (duplicate) throw new Error(`游戏事实实体 ID 重复：${duplicate.id}`);
   const relations = rawGameRelations(allEntities, modelIndex);
-  const [snapshot, mhworldDataArmorMap, traditionalToSimplifiedNames, curatedLocations, questUnlockSnapshot, curatedQuestNameMap] = await Promise.all([
+  const [snapshot, mhworldDataArmorMap, traditionalToSimplifiedNames, curatedLocations, questUnlockSnapshot, curatedQuestNameMap, deliveryUnlockSource] = await Promise.all([
     loadMhwDbSnapshot(),
     loadMhworldDataArmorNameMap(),
     loadTraditionalToSimplifiedNames(),
     loadCuratedLocationNameMap(),
     loadGame8QuestUnlockSnapshot(),
     loadCuratedQuestNameMap(),
+    loadDeliveryUnlockSource(),
   ]);
   const supplementalSkillFactCount = addMhwDbSkillFacts(
     allEntities,
@@ -2094,6 +2267,11 @@ async function rawGameFacts(modelIndex) {
     curatedQuestNameMap,
     curatedLocations,
   );
+  const deliveryUnlockFacts = addDeliveryUnlockFacts(
+    allEntities,
+    relations,
+    deliveryUnlockSource,
+  );
   return {
     entities: allEntities,
     relations,
@@ -2108,6 +2286,7 @@ async function rawGameFacts(modelIndex) {
     supplementalQuestRewardCount: questAndLocationFacts.questRewardCount,
     supplementalGatheringCount: questAndLocationFacts.gatheringCount,
     ...questUnlockFacts,
+    ...deliveryUnlockFacts,
   };
 }
 
@@ -2140,6 +2319,7 @@ async function main() {
   const outputPath = outputPathFromArguments(process.argv.slice(2));
   const moddingOutputPath = path.join(path.dirname(outputPath), "acumod-dev-modding.acukb");
   const guideOutputPath = path.join(path.dirname(outputPath), "acumod-dev-game-guides.acukb");
+  const acumodHelpOutputPath = path.join(path.dirname(outputPath), "acumod-dev-acumod-help.acukb");
   const modelIndex = JSON.parse(await readFile(modelIndexPath, "utf8"));
   const sourceCatalog = JSON.parse(await readFile(sourceCatalogPath, "utf8"));
   const sourceIds = new Set(sourceCatalog.sources.map((source) => source.id));
@@ -2153,12 +2333,18 @@ async function main() {
     sourceIds,
     "游戏攻略知识文件",
   );
+  const acumodHelpDocuments = validateKnowledgeDocuments(
+    JSON.parse(await readFile(acumodHelpDocumentsPath, "utf8")),
+    sourceIds,
+    "Acumod 使用说明文件",
+  );
   const gameFacts = await rawGameFacts(modelIndex);
   const entities = gameFacts.entities;
   await mkdir(path.dirname(outputPath), { recursive: true });
   await rm(outputPath, { force: true });
   await rm(moddingOutputPath, { force: true });
   await rm(guideOutputPath, { force: true });
+  await rm(acumodHelpOutputPath, { force: true });
 
   const database = new DatabaseSync(outputPath);
   database.exec(`
@@ -2258,6 +2444,7 @@ async function main() {
       const licenseNote = [
         `用途：${source.usage}`,
         `分发：${source.redistribution}`,
+        `许可状态：${source.licenseStatus}`,
         ...(source.notes ?? []),
       ].join("；");
       insertSource.run(
@@ -2315,7 +2502,7 @@ async function main() {
     }
 
     const insertDocument = database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?)");
-    for (const document of [...technicalDocuments, ...guideDocuments]) {
+    for (const document of [...technicalDocuments, ...guideDocuments, ...acumodHelpDocuments]) {
       insertDocument.run(
         document.id,
         document.domain,
@@ -2340,11 +2527,20 @@ async function main() {
   }
   await copyFile(outputPath, moddingOutputPath);
   await copyFile(outputPath, guideOutputPath);
+  await copyFile(outputPath, acumodHelpOutputPath);
   pruneDevelopmentPack(outputPath, "mhw-game-facts");
   pruneDevelopmentPack(moddingOutputPath, "mhw-modding");
   pruneDevelopmentPack(guideOutputPath, "mhw-game-guides");
+  pruneDevelopmentPack(acumodHelpOutputPath, "acumod-help");
   process.stdout.write(
     `开发知识包已生成:\n- ${path.relative(projectRoot, outputPath)}\n- ${path.relative(projectRoot, moddingOutputPath)}\n- ${path.relative(projectRoot, guideOutputPath)}\n游戏实体 ${entities.length}，可验证关系 ${gameFacts.relations.length}，技能等级补充 ${gameFacts.supplementalSkillFactCount}，武器属性补充 ${gameFacts.supplementalWeaponFactCount}，防具属性补充 ${gameFacts.supplementalArmorFactCount}，装饰珠属性补充 ${gameFacts.supplementalDecorationFactCount}，护石补充 ${gameFacts.supplementalCharmCount}，怪物生态补充 ${gameFacts.supplementalMonsterFactCount}，任务资料 ${gameFacts.supplementalQuestFactCount}，地图 ${gameFacts.supplementalLocationCount}，任务报酬 ${gameFacts.supplementalQuestRewardCount}，采集关系 ${gameFacts.supplementalGatheringCount}，任务链条目 ${gameFacts.questUnlockEntryCount}，前置任务关系 ${gameFacts.prerequisiteRelationCount}，解锁条件 ${gameFacts.unlockConditionCount}，未唯一对应任务名 ${gameFacts.unresolvedQuestNameCount}，未唯一对应怪物名 ${gameFacts.unresolvedMonsterNameCount}，技术文档 ${technicalDocuments.length}，攻略文档 ${guideDocuments.length}\n`,
+  );
+  process.stdout.write(
+    `交货委托解锁条目 ${gameFacts.deliveryUnlockEntryCount}，解锁条件 ${gameFacts.deliveryUnlockConditionCount}，前置任务关系 ${gameFacts.deliveryPrerequisiteRelationCount}，未唯一对应交货委托 ${gameFacts.unresolvedDeliveryCount}\n`,
+  );
+  process.stdout.write(
+    "Acumod 使用说明开发包：" + path.relative(projectRoot, acumodHelpOutputPath) +
+      "，文档 " + acumodHelpDocuments.length + " 篇\n",
   );
 }
 
@@ -2398,6 +2594,23 @@ function pruneDevelopmentPack(databasePath, kind) {
         DELETE FROM entities;
         DELETE FROM knowledge_fts WHERE domain NOT LIKE 'guide-%';
         DELETE FROM documents WHERE namespace NOT LIKE 'guide-%';
+      `);
+    } else if (kind === "acumod-help") {
+      database
+        .prepare("UPDATE pack_manifest SET pack_id = ?, display_name = ?, kind = ?, game_version = ?, description = ?")
+        .run(
+          "acumod-dev-acumod-help",
+          "AcuAI Acumod 使用说明开发包",
+          kind,
+          "15.23",
+          "Acumod 传统管理器和 AcuAI 的项目维护使用说明，不是 MHW 游戏事实来源。",
+        );
+      database.exec(`
+        DELETE FROM aliases;
+        DELETE FROM relations;
+        DELETE FROM entities;
+        DELETE FROM knowledge_fts WHERE domain NOT LIKE 'help-%';
+        DELETE FROM documents WHERE namespace NOT LIKE 'help-%';
       `);
     } else {
       throw new Error(`不支持的开发知识包类型：${kind}`);

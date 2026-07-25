@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 
@@ -7,6 +7,8 @@ const buildRoot = path.join(projectRoot, "references/knowledge/build");
 const gameFactsPath = path.join(buildRoot, "acumod-dev-game-facts.acukb");
 const moddingPath = path.join(buildRoot, "acumod-dev-modding.acukb");
 const guidesPath = path.join(buildRoot, "acumod-dev-game-guides.acukb");
+const acumodHelpPath = path.join(buildRoot, "acumod-dev-acumod-help.acukb");
+const sourceCatalogPath = path.join(projectRoot, "references/knowledge/sources/catalog.json");
 
 async function requireFile(filePath) {
   try {
@@ -24,6 +26,44 @@ function scalar(database, sql, parameters = []) {
 function expect(condition, message) {
   if (!condition) {
     throw new Error(`知识包验收失败：${message}`);
+  }
+}
+
+async function verifySourceCatalog() {
+  const catalog = JSON.parse(await readFile(sourceCatalogPath, "utf8"));
+  expect(Array.isArray(catalog.sources) && catalog.sources.length > 0, "来源目录不能为空。");
+  const ids = new Set();
+  for (const source of catalog.sources) {
+    expect(typeof source.id === "string" && source.id.trim(), "来源缺少稳定 ID。");
+    expect(!ids.has(source.id), `来源 ID 重复：${source.id}。`);
+    ids.add(source.id);
+    for (const field of ["title", "kind", "gameVersion", "usage", "redistribution", "licenseStatus", "verificationStatus"]) {
+      expect(typeof source[field] === "string" && source[field].trim(), `来源 ${source.id} 缺少 ${field}。`);
+    }
+    if (source.url !== null) {
+      expect(
+        typeof source.url === "string" && /^(https?|local):/.test(source.url),
+        `来源 ${source.id} 的 URL 必须是 HTTP(S) 或明确的 local 记录。`,
+      );
+    }
+    expect(
+      Array.isArray(source.notes) && source.notes.every((note) => typeof note === "string" && note.trim()),
+      `来源 ${source.id} 的 notes 必须是非空字符串数组。`,
+    );
+  }
+  return ids;
+}
+
+function verifyPackSourceReferences(filePath, catalogIds, label) {
+  const database = new DatabaseSync(filePath, { readOnly: true });
+  try {
+    const sourceIds = database.prepare("SELECT id FROM sources").all().map((row) => row.id);
+    expect(sourceIds.length > 0, `${label} 没有来源记录。`);
+    for (const sourceId of sourceIds) {
+      expect(catalogIds.has(sourceId), `${label} 引用了未登记来源：${sourceId}。`);
+    }
+  } finally {
+    database.close();
   }
 }
 
@@ -149,6 +189,33 @@ function verifyGameFacts() {
     expect(
       scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest'") >= 180,
       "活动、斗技场与挑战任务补充后，前置任务关系数量异常。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM entities WHERE kind = 'deliveryUnlockCondition'") >= 32,
+      "本体交货委托的可核验解锁条件数量异常。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresCondition' AND subject_id LIKE 'game-delivery:%'") >= 32,
+      "本体交货委托的解锁条件关系缺失。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest' AND subject_id LIKE 'game-delivery:%'") >= 21,
+      "交货委托的唯一任务前置关系数量异常。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest' AND subject_id = object_id") === 0,
+      "交货委托不得生成自指前置关系。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest' AND subject_id = 'game-delivery:1' AND object_id = 'game-quest:00601'") === 1,
+      "草木们，健康地成长吧。与惊愕的！毒妖鸟！调查！的交货委托前置关系缺失。",
+    );
+    const deliveryCondition = database.prepare(
+      "SELECT data_json FROM entities WHERE id = 'game-delivery-condition:1:0'",
+    ).get();
+    expect(
+      JSON.parse(deliveryCondition?.data_json ?? "{}").displayZhHans?.includes("惊愕的！毒妖鸟！调查！"),
+      "交货委托解锁条件没有保留简体中文显示文本。",
     );
     const arenaQuestCondition = database.prepare(
       "SELECT data_json FROM entities WHERE id = 'game-unlock-condition:03101:game8-arena:arena-quest-1:0'",
@@ -350,10 +417,49 @@ function verifyGuides() {
   }
 }
 
+function verifyAcumodHelp() {
+  const database = new DatabaseSync(acumodHelpPath, { readOnly: true });
+  try {
+    expect(
+      scalar(database, "SELECT kind FROM pack_manifest") === "acumod-help",
+      "Acumod 使用说明包类型错误。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM entities") === 0,
+      "Acumod 使用说明包不得混入游戏实体。",
+    );
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM documents WHERE namespace LIKE 'help-%'") >= 12,
+      "Acumod 使用说明包缺少核心操作说明。",
+    );
+    for (const id of [
+      "help-mod-import",
+      "help-conflict-priority",
+      "help-model-remap",
+      "help-knowledge-pack",
+      "help-acuai-boundary",
+    ]) {
+      expect(
+        scalar(database, "SELECT COUNT(*) FROM documents WHERE id = ?", [id]) === 1,
+        "缺少 Acumod 使用说明：" + id + "。",
+      );
+    }
+  } finally {
+    database.close();
+  }
+}
+
+const sourceCatalogIds = await verifySourceCatalog();
 await requireFile(gameFactsPath);
 await requireFile(moddingPath);
 await requireFile(guidesPath);
+await requireFile(acumodHelpPath);
+verifyPackSourceReferences(gameFactsPath, sourceCatalogIds, "游戏事实包");
+verifyPackSourceReferences(moddingPath, sourceCatalogIds, "MOD 技术包");
+verifyPackSourceReferences(guidesPath, sourceCatalogIds, "攻略包");
+verifyPackSourceReferences(acumodHelpPath, sourceCatalogIds, "Acumod 使用说明包");
 verifyGameFacts();
 verifyModding();
 verifyGuides();
-console.log("开发知识包验收通过：游戏事实实体、关系、MOD 技术文档和攻略文档均符合预期。");
+verifyAcumodHelp();
+console.log("开发知识包验收通过：游戏事实、攻略、MOD 技术和 Acumod 使用说明均符合预期。");

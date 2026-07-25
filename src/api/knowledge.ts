@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type KnowledgePackKind = "mhw-modding" | "mhw-game-facts" | "mhw-game-guides";
+export type KnowledgePackKind = "mhw-modding" | "mhw-game-facts" | "mhw-game-guides" | "acumod-help";
 
 export interface KnowledgePackSummary {
   packId: string;
@@ -29,10 +29,10 @@ export interface KnowledgeStatus {
   message: string;
 }
 
-export interface KnowledgeInstallResult {
+export interface KnowledgeBundleInstallResult {
   message: string;
-  installedPack: KnowledgePackSummary;
   status: KnowledgeStatus;
+  installedCount: number;
 }
 
 export interface KnowledgeSearchMatch {
@@ -117,8 +117,8 @@ export function getKnowledgeStatus(): Promise<KnowledgeStatus> {
   return invoke<KnowledgeStatus>("get_knowledge_status");
 }
 
-export function installKnowledgePack(sourcePath: string): Promise<KnowledgeInstallResult> {
-  return invoke<KnowledgeInstallResult>("install_knowledge_pack", { sourcePath });
+export function installKnowledgeBundle(sourcePath: string): Promise<KnowledgeBundleInstallResult> {
+  return invoke<KnowledgeBundleInstallResult>("install_knowledge_bundle", { sourcePath });
 }
 
 export function deleteKnowledgePack(packId: string): Promise<KnowledgeStatus> {

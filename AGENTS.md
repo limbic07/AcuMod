@@ -24,6 +24,8 @@
 4. `docs/features.md`：传统 MOD 管理、下载、AI Agent 的功能拆分。
 5. `docs/development.md`：开发命令、目录约定、Tauri invoke 检查清单。
 6. `docs/security.md`：文件操作安全、用户确认机制、AI 执行边界。
+7. `docs/knowledge-acceptance.md`：知识包、真实 DeepSeek V4 和传统管理器独立性的最终验收清单。
+8. `docs/knowledge-license-audit.md`：知识库来源许可、再分发边界和正式发布门槛。
 
 
 

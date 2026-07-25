@@ -1,8 +1,8 @@
 use crate::{
     operations::run_blocking_operation,
     services::knowledge::{
-        self, KnowledgeEntityLookupResponse, KnowledgeInstallResult, KnowledgeRelationResponse,
-        KnowledgeSearchResponse, KnowledgeStatus,
+        self, KnowledgeBundleInstallResult, KnowledgeEntityLookupResponse,
+        KnowledgeRelationResponse, KnowledgeSearchResponse, KnowledgeStatus,
     },
 };
 
@@ -12,17 +12,18 @@ pub fn get_knowledge_status() -> Result<KnowledgeStatus, String> {
     knowledge::get_status()
 }
 
-/// 将一个本地 `.acukb` 文件校验后原子安装到软件数据目录。
+/// 从一个知识包 ZIP 中校验并安装完整的四个知识包。
 #[tauri::command]
-pub async fn install_knowledge_pack(
+pub async fn install_knowledge_bundle(
     app: tauri::AppHandle,
     source_path: String,
-) -> Result<KnowledgeInstallResult, String> {
+) -> Result<KnowledgeBundleInstallResult, String> {
+    let unpack_app = app.clone();
     run_blocking_operation(
         app,
-        "installKnowledgePack",
-        "正在安装知识包",
-        move |progress| knowledge::install_pack(source_path, &progress),
+        "installKnowledgeBundle",
+        "正在安装整套知识包",
+        move |progress| knowledge::install_bundle(unpack_app, source_path, &progress),
     )
     .await
 }

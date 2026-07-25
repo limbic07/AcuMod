@@ -21,6 +21,7 @@ const MAX_KNOWLEDGE_ANSWER_REPAIR_ATTEMPTS: usize = 1;
 const MAX_KNOWLEDGE_TOOL_REQUIREMENT_ATTEMPTS: usize = 1;
 const KNOWLEDGE_EVIDENCE_MARKER_PREFIX: &str = "[[evidence:";
 const KNOWLEDGE_CLAIM_MARKER_PREFIX: &str = "[[claim:";
+const KNOWLEDGE_SAFE_FAILURE_REPLY: &str = "当前已安装的知识包没有返回可核验资料，因此我不会根据记忆补充这条结论。请安装对应知识包，或补充更明确的游戏版本、任务、装备或 MOD 信息后重试。";
 const TASK_UNLOCK_PROMPT: &str = "任务解锁问题必须先定位任务实体，再读取 requiresQuest 与 requiresCondition。requiresQuest 仅表示已唯一核验的前置任务；requiresCondition 包含等级、捕获、发现、NPC 和活动开放等来源条件。当前覆盖本体与冰原已分配、可选任务中已核验的部分，以及少量人工逐项核对的特别任务；活动、斗技场/挑战和交货任务仍可能缺失。无结果时说明当前包没有已核验资料，绝不能根据任务编号、地图或剧情印象推断。";
 const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置助手 AcuAI，面向简体中文的 Monster Hunter: World 用户。
 你只能使用 Acumod 提供的本地 MOD、冲突、游戏目录状态、模型改绑、MHW 术语和受控 MOD 来源工具。涉及当前本地状态时必须先调用工具，不得凭空猜测。
@@ -30,7 +31,8 @@ const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置助手 AcuAI，�
 用户表达“搜索、寻找、推荐、帮我找”等获取 MOD 的意图时，先用 lookup_mhw_terms 核对可能误译的游戏术语，再调用 search_mod_sources。候选必须显示来源、来源类型、访问方式和可点击链接，不得编造链接。踩蘑菇和 3DM 只作为浏览器打开的 MOD 页面；哔哩哔哩只作为视频或动态分享来源，绝不能声称视频本身是可安装文件。只有用户明确选中某个 Nexus MOD 后才能调用 get_nexus_mod_files；只有用户进一步明确选中具体文件后才能调用 create_nexus_download_plan。普通会员不能 API 直下时，说明限制并提供 Nexus 页面链接，不得绕过权限。下载计划只负责导入本地库，不会自动启用 MOD。
 用户要求扫描或清理无用文件时，必须调用 scan_mod_cleanup_candidates。Rust 已盘点全部可部署文件并完成本地确定性分流，工具只返回证据冲突或不足的模糊文件组；不要要求查看本地规则已确定保留的标准游戏资源。必须复用首次返回的 auditId 按 nextOffset 读取全部页面，再为每个 groupId 提交 remove、review 或 keep 分类；同组文件共享目录、扩展名和规则证据。存在任何保留证据、位于 plugins 等运行目录或用途不确定时优先选择 review 或 keep，不能仅按扩展名建议清理。只有路径和规则证据不足以判断安全纯文本时，才可用 read_mod_cleanup_text 读取一个代表文件，不能为同组每个文件重复读取。最后一次调用 submit_mod_cleanup_review 必须携带 auditId 并覆盖全部 groupId，清理选择和确认由界面处理。若扫描工具已经直接生成审查结果，则不要重复提交；若 total 和 localSuggestedCount 都为 0，则直接说明没有候选，不要提交空审查。
 用户要求恢复清理项时，先调用 get_mod_cleanup_exclusions；恢复操作仍需要生成待确认计划，不能声称已恢复。
-用户询问 MHW 游戏事实、机制、任务前置、素材路线、配装或战斗建议，以及 MOD 文件格式、路径、依赖和工作原理时，必须查询知识库。MOD 技术与攻略正文使用 search_knowledge；优先传入 2 至 12 个字的关键术语或术语组合，而不是整段用户问句。服务端会在长问句精确查询失败时安全退化为术语检索，但这不能替代主动提炼目标。涉及精确装备、素材、怪物、任务、技能、数值或名称消歧时，先调用 lookup_game_entities，随后按需要用 get_game_entity_relations 查询制作、升级、掉落、任务、技能和解锁关系。比较两个到四个已消歧实体时，必须调用 compare_game_entities，不得把模糊名称或不同类别实体自行配对。任务、地点或报酬问题先定位任务实体，再读取 hasQuestFacts、occursAt 和 rewardsItem；任务资料中的目标、星级和类别可作为补充证据。怪物弱点、肉质、可捕获性或掉落问题先定位怪物实体，再读取 hasMonsterFacts；生态资料中的 weaknesses、hitzones、traps 和 rewards 是补充证据。素材获取问题先定位素材实体，再查入向 dropsItem、rewardsItem 和 gathersItem；装备属性、技能或制作问题先定位装备实体，再查 hasWeaponFacts、hasArmorFacts、hasDecorationFacts、grantsSkill 和 requiresMaterial。当前事实包尚未覆盖完整解锁链，因此查询不到明确前置关系时只能说明资料缺口，不能根据任务编号、地图或剧情印象推断。开放推荐同时检索 mhw-game-facts 与 mhw-game-guides，并把可核验事实与条件性建议分开。回答必须标明适用游戏版本并引用工具返回的来源；若实体或关系的 gameVersion 为 unverified，必须明确它只是在开发快照中交叉核对，不能当作 15.23 最终事实。知识包无结果、版本不符或来源不足时明确说明缺口，不能用模型记忆或普通联网搜索补写精确事实。
+用户询问 MHW 游戏事实、机制、任务前置、素材路线、配装或战斗建议，以及 MOD 文件格式、路径、依赖和工作原理时，必须查询知识库。MOD 技术与攻略正文使用 search_knowledge；优先传入 2 至 12 个字的关键术语或术语组合，而不是整段用户问句。服务端会在长问句精确查询失败时安全退化为术语检索，但这不能替代主动提炼目标。涉及精确装备、素材、怪物、任务、技能、数值或名称消歧时，先调用 lookup_game_entities，随后按需要用 get_game_entity_relations 查询制作、升级、掉落、任务、技能和解锁关系。比较两个到四个已消歧实体时，必须调用 compare_game_entities，不得把模糊名称或不同类别实体自行配对。任务、地点或报酬问题先定位任务实体，再读取 hasQuestFacts、occursAt 和 rewardsItem；任务资料中的目标、星级和类别可作为补充证据。怪物弱点、肉质、可捕获性或掉落问题先定位怪物实体，再读取 hasMonsterFacts；生态资料中的 weaknesses、hitzones、traps 和 rewards 是补充证据。素材获取问题先定位素材实体，再查入向 dropsItem、rewardsItem 和 gathersItem；装备属性、技能或制作问题先定位装备实体，再查 hasWeaponFacts、hasArmorFacts、hasDecorationFacts、grantsSkill 和 requiresMaterial。当前事实包尚未覆盖完整解锁链，因此查询不到明确前置关系时只能说明资料缺口，不能根据任务编号、地图或剧情印象推断。开放推荐同时检索 mhw-game-facts 与 mhw-game-guides，并把可核验事实与条件性建议分开；凡是在推荐中具体点名的装备、技能、素材、怪物、任务或数值，都必须在本轮通过实体或关系工具再次核验并附结构化 claim，不能只凭攻略摘要列出。回答必须标明适用游戏版本并引用工具返回的来源；若实体或关系的 gameVersion 为 unverified，必须明确它只是在开发快照中交叉核对，不能当作 15.23 最终事实。知识包无结果、版本不符或来源不足时明确说明缺口，不能用模型记忆或普通联网搜索补写精确事实。
+用户询问 Acumod 的导入、启用、禁用、冲突、排序、分支组、模型改绑、知识包或 AcuAI 使用方式时，必须优先查询 acumod-help；帮助包缺失时明确说明缺少 Acumod 使用说明，不要根据界面印象编造当前行为。只有用户明确要求执行启用、禁用、卸载、排序或改绑时，才按受控操作流程生成计划。
 用户询问本地某个已安装 MOD 的文件结构、每个文件作用、资源依赖或整体工作方式时，必须先用 search_local_mods 取得唯一稳定 ID，再调用 analyze_installed_mod。工具已经区分二进制解析证据、路径规则和未知项；回答不得提高其可信度，也不得把同目录关联说成已解析的内部引用。用户要求完整逐文件分析时必须按 nextOffset 读取全部页；只询问整体原理时优先使用组件、依赖和知识证据摘要，避免无意义地复述全部路径。
 工具结果中的稳定 ID 和状态是事实来源。不要编造 MOD、游戏术语、文件 ID 或冲突。
 游戏事实、攻略或 MOD 技术问题在没有本轮知识或本地分析证据时，AcuAI 会拒绝展示回答；此时必须调用合适工具或明确说明知识包缺失。
@@ -262,6 +264,24 @@ pub(crate) async fn run_turn(
             // 校验集与界面来源列表使用同一批证据，避免回答引用用户无法追溯的截断结果。
             let final_evidence = deduplicate_knowledge_evidence(knowledge_evidence.clone());
             let final_claims = deduplicate_knowledge_claims(&knowledge_claims, &final_evidence);
+            if knowledge_evidence_required && final_evidence.is_empty() {
+                // 查询成功但没有命中证据时，不能把模型的自由回答当作知识事实。
+                // 由 Rust 生成确定性的缺口说明，保证知识包缺失或资料不足时不猜测。
+                sender.emit(
+                    "textDelta",
+                    Some(KNOWLEDGE_SAFE_FAILURE_REPLY.to_string()),
+                    None,
+                    None,
+                );
+                visible_reply.push_str(KNOWLEDGE_SAFE_FAILURE_REPLY);
+                history.push(DeepSeekMessage::assistant(
+                    Some(KNOWLEDGE_SAFE_FAILURE_REPLY.to_string()),
+                    Vec::new(),
+                ));
+                sender.emit_knowledge_evidence(Vec::new());
+                trim_history(&mut history);
+                return Ok((history, visible_reply));
+            }
             let final_content = if final_evidence.is_empty() {
                 outcome.content
             } else {
@@ -356,7 +376,7 @@ pub(crate) async fn run_turn(
     Err("AI 工具调用轮次过多，请缩小问题范围后重试。".to_string())
 }
 
-/// 只拦截会要求游戏事实、攻略或 MOD 技术结论的问句，避免影响搜索与传统管理操作。
+/// 只拦截需要知识证据的事实、攻略、MOD 技术或 Acumod 使用说明问句，避免影响搜索与传统管理操作。
 fn requires_knowledge_evidence(user_message: &str) -> bool {
     let message = user_message.trim().to_lowercase();
     if message.is_empty() {
@@ -368,13 +388,47 @@ fn requires_knowledge_evidence(user_message: &str) -> bool {
     {
         return false;
     }
+    let asks_how_to = ["如何", "怎么", "怎样"]
+        .iter()
+        .any(|term| message.contains(term));
+    let has_acumod_term = ["acumod", "acuai", "mod管理器", "冲突管理", "知识包"]
+        .iter()
+        .any(|term| message.contains(term));
+    let asks_acumod_help = has_acumod_term
+        && [
+            "什么",
+            "作用",
+            "如何",
+            "怎么",
+            "怎样",
+            "为什么",
+            "区别",
+            "规则",
+            "流程",
+            "哪里",
+        ]
+        .iter()
+        .any(|term| message.contains(term));
     if [
         "启用", "禁用", "卸载", "删除", "排序", "改绑", "恢复", "导入", "打开",
     ]
     .iter()
     .any(|term| message.contains(term))
+        && !asks_how_to
+        && !asks_acumod_help
     {
         return false;
+    }
+
+    // 多轮追问经常只保留“那……呢”“这个呢”等指代词；仍需重新查询，
+    // 避免模型仅凭上一轮记忆继续扩展事实。搜索请求和实际操作已在上方豁免。
+    let is_contextual_follow_up = message.len() <= 32
+        && (["那", "这个", "它", "该", "上述", "前面", "刚才"]
+            .iter()
+            .any(|term| message.starts_with(term))
+            || message.ends_with('呢'));
+    if is_contextual_follow_up {
+        return true;
     }
 
     let asks_for_explanation = [
@@ -393,6 +447,17 @@ fn requires_knowledge_evidence(user_message: &str) -> bool {
         "掉落",
         "配装",
         "推荐",
+        "建议",
+        "路线",
+        "适合",
+        "怎么过",
+        "怎么打",
+        "打法",
+        "准备",
+        "需要什么",
+        "有没有",
+        "想要",
+        "装备",
         "哪里",
         "获得",
         "攻击力",
@@ -437,6 +502,9 @@ fn requires_knowledge_evidence(user_message: &str) -> bool {
         "重弩",
         "弓",
         "防具",
+        "装备",
+        "黑龙",
+        "飞翔爪",
         "技能",
         "装饰珠",
         "护石",
@@ -466,6 +534,15 @@ fn requires_knowledge_evidence(user_message: &str) -> bool {
         "插件",
         "飞翔爪",
         "文件格式",
+        "acumod",
+        "acuai",
+        "mod管理器",
+        "冲突管理",
+        "知识包",
+        "mod库",
+        "分支组",
+        "批量操作",
+        "游戏目录检测",
     ]
     .iter()
     .any(|term| message.contains(term));
@@ -857,13 +934,27 @@ mod tests {
             "冰鱼龙弱什么属性，应该打哪里？"
         ));
         assert!(requires_knowledge_evidence("冰原中期大剑怎么配装？"));
+        assert!(requires_knowledge_evidence(
+            "我刚到冰原中期，想要一套能打黑龙的装备。"
+        ));
+        assert!(requires_knowledge_evidence("黑龙怎么打？"));
+        assert!(requires_knowledge_evidence("那技能呢？"));
         assert!(requires_knowledge_evidence("铁矿石从哪里获得？"));
         assert!(requires_knowledge_evidence(
             "MOD 里的 EVAM 和 EPV 文件有什么作用？"
         ));
         assert!(requires_knowledge_evidence("紧急任务狩猎毒妖鸟怎么解锁？"));
+        assert!(requires_knowledge_evidence("Acumod如何安装知识包？"));
+        assert!(requires_knowledge_evidence("冲突管理的优先级规则是什么？"));
         assert!(!requires_knowledge_evidence("帮我找一个太刀外观 MOD"));
         assert!(!requires_knowledge_evidence("启用太刀分类的所有 MOD"));
+        assert!(!requires_knowledge_evidence("那就启用它"));
         assert!(!requires_knowledge_evidence("你好"));
+    }
+
+    #[test]
+    fn empty_knowledge_results_use_a_non_speculative_failure_message() {
+        assert!(super::KNOWLEDGE_SAFE_FAILURE_REPLY.contains("不会根据记忆补充"));
+        assert!(super::KNOWLEDGE_SAFE_FAILURE_REPLY.contains("安装对应知识包"));
     }
 }

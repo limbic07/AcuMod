@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    {
+      "id": "help-mod-import",
+      "domain": "help-import",
+      "title": "导入文件夹或压缩包 MOD",
+      "body": "在 MOD 库页面可以把文件夹、ZIP、7Z 或 RAR 拖入程序任意位置，确认导入后 Acumod 会先识别内容根目录，再把一份副本保存到软件目录的本地 MOD 库。普通导入不会依赖 AcuAI。压缩包只作为临时导入来源，成功安装后不作为本地 MOD 库的第二份副本。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-mod-root-detection",
+      "domain": "help-import",
+      "title": "MOD 内容根目录识别",
+      "body": "Acumod 优先寻找 nativePC；如果压缩包或文件夹直接从 pl、wp、vfx、sound、quest、ui、plugins 等常见游戏资源一级目录开始，也会把它们作为 nativePC 内的内容导入。用户选择的文件夹应是 MOD 内容根目录，而不是深入到某个具体装备或文件。无法识别时会提示是否按游戏根目录 MOD 处理，不会静默猜测。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-mod-enable-disable",
+      "domain": "help-deployment",
+      "title": "启用、禁用和卸载 MOD",
+      "body": "启用 MOD 时，Acumod 从软件目录的本地 MOD 库复制文件到游戏目录；禁用时只删除该 MOD 已记录的部署文件，本地副本保留；卸载时先清理已记录的游戏目录文件，再删除本地 MOD 库副本。启用和禁用不需要 AcuAI，也不会因为状态变化重新读取整个 MOD 库。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-conflict-priority",
+      "domain": "help-conflict",
+      "title": "冲突管理和覆盖优先级",
+      "body": "冲突管理只显示同时启用且实际覆盖同一路径的 MOD。每个互不相关的冲突组单独排序；从上到下表示优先级，最上方的 MOD 最后覆盖同组下方 MOD。用户先启用的 MOD 会被后启用的冲突 MOD 默认覆盖，之后仍可手动调整整体顺序。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-branch-groups",
+      "domain": "help-library",
+      "title": "MOD 分支组",
+      "body": "分支组用于表示同一个 MOD 的多个内容选择，例如不同武器或不同外观版本。分支组可以启用多个分支，部署时遵循与冲突组相同的文件覆盖规则；自动创建分支组只提出候选，用户确认后才建立。分支组不会把内容复制成多份本地库文件。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-model-remap",
+      "domain": "help-model",
+      "title": "模型替换与恢复默认",
+      "body": "模型替换页面只允许在同一类别内改绑，例如太刀只能选择另一把太刀，防具可以选择另一套防具。防具整套替换时显示套装，只有部分部位被替换时才显示具体部位。恢复默认会恢复导入时记录的替换目标，不会修改本地 MOD 原始文件。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-sort-filter",
+      "domain": "help-library",
+      "title": "MOD 库搜索、分类和排序",
+      "body": "MOD 库支持按名称、备注、类别、替换目标、启用状态和冲突状态筛选。自动排序只改变浏览顺序，不改变冲突覆盖优先级；手动排序可以保留导入顺序，也可以把当前分类排序结果应用为手动浏览顺序。一个 MOD 可以同时拥有多个分类标签，并支持用户创建子分类。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-box-import",
+      "domain": "help-import",
+      "title": "从狩技 MOD 盒子导入",
+      "body": "从狩技 MOD 盒子导入时，Acumod 只读读取盒子目录和游戏路径，不修改盒子文件。导入界面默认选中盒子中的全部模块，用户确认后复用普通 MOD 识别、重复检查、模型识别和分类流程。盒子记录的安装状态只作为辅助信息，最终状态仍以导入文件与游戏目录实际文件内容比对为准。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-open-local-folder",
+      "domain": "help-library",
+      "title": "打开本地 MOD 文件夹",
+      "body": "在 MOD 库中可以打开某个已安装 MOD 的本地存档文件夹。打开的是 Acumod 软件目录中的本地副本，不是游戏目录中的部署文件；修改本地文件可能导致清单和内容指纹变化，应优先通过卸载后重新导入完成替换。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-knowledge-pack",
+      "domain": "help-knowledge",
+      "title": "安装和管理知识包",
+      "body": "知识包在设置页面通过一个整套 ZIP 安装，ZIP 内必须包含游戏事实、MOD 技术、游戏攻略和 Acumod 使用说明四个 .acukb 文件。安装前会解包并校验 SQLite 标识、版本、完整性、来源引用和允许的表结构；四个包在本地按类型独立存储。知识包保存在软件数据目录，不进入主程序安装包；知识包缺失、损坏或未启用时，传统 MOD 管理器仍可正常工作。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-acuai-boundary",
+      "domain": "help-ai",
+      "title": "AcuAI 的查询与操作边界",
+      "body": "AcuAI 使用 DeepSeek V4，可查询已安装的知识包、本地 MOD 分析和 MOD 库状态。启用、禁用、卸载、冲突调整、模型改绑和下载等会写入文件或配置的操作，必须先生成计划并等待用户确认；AcuAI 不能绕过传统管理器直接操作文件系统。知识库没有可靠资料时应说明缺口，不把普通联网搜索结果当作精确游戏事实。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    },
+    {
+      "id": "help-background-tasks",
+      "domain": "help-performance",
+      "title": "后台任务和刷新",
+      "body": "目录扫描、解包、复制、冲突应用和知识包安装等耗时操作在后台任务中执行，顶部任务条显示阶段与进度，完成后只更新受影响的数据。普通启用、禁用和排序不会为显示列表重新扫描所有 MOD；需要重新读取实际文件状态时再使用刷新或对应的状态检查。",
+      "gameVersion": "15.23",
+      "confidence": 1,
+      "sourceId": "acumod-help-documents"
+    }
+  ]
+}

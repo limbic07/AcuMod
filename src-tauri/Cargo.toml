@@ -34,3 +34,4 @@ quick-xml = { version = "0.37", features = ["serialize"] }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 # 导入时计算整包 SHA-256，避免损坏包或被替换的暂存文件进入活动索引。
 sha2 = "0.11.0"
+tauri-plugin-dialog = "2"

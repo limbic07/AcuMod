@@ -16,6 +16,7 @@ npm.cmd run build
 npm.cmd run knowledge:audit
 npm.cmd run knowledge:fetch-quest-unlocks
 npm.cmd run knowledge:build-dev
+npm.cmd run knowledge:package-bundle
 npm.cmd run knowledge:verify-dev
 npm.cmd run knowledge:verify-e2e
 npm.cmd run tauri:dev
@@ -42,12 +43,14 @@ cargo fmt
 - `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告。
 - `knowledge:fetch-quest-unlocks`：显式联网抓取公开可选任务解锁页面，只保存任务名、来源链接和可结构化解析的条件到本地忽略快照。
 - `knowledge:build-dev`：使用本地研究数据生成不提交、不分发的开发知识包，用于验证查询链路。
-- `knowledge:verify-dev`：校验开发包的版本、实体、关系、文档与固定问题集证据。
-- `knowledge:verify-e2e`：临时安装三个真实开发包，验证 24 类问题的实体、关系和全文检索链路；Windows 下自动为测试二进制加入 Tauri 所需 manifest。
+- `knowledge:package-bundle`：将四个 `.acukb` 打包为一个独立 ZIP，供本地安装测试或 release 上传；生成物位于被忽略的 `references/knowledge/release/`。
+- `knowledge:verify-dev`：校验开发包的版本、实体、关系和文档结构。
+- `knowledge:verify-e2e`：临时安装四个真实开发包，验证实体、关系和全文检索链路；Windows 下自动为测试二进制加入 Tauri 所需 manifest。
 - `preview`：预览前端构建结果。
 - `tauri`：调用 Tauri CLI。
 - `tauri:dev`：启动 Tauri 桌面开发模式。
 - `tauri:build`：构建 Tauri 桌面应用。
+- 系统文件选择器使用 Tauri 官方 `dialog` 插件；前端只接收用户主动选择的文件或目录路径，Rust 仍负责最终扩展名、文件类型和知识包内容校验。
 
 ## 目录约定
 
@@ -504,6 +507,6 @@ Windows 上保留 Tauri Webview 的原生文件拖入，以便接收文件系统
 - 改 Vue/TypeScript：运行 `npm.cmd run build`。
 - 改 Tauri/Rust：运行 `cd src-tauri` 后的 `cargo check` 和 `cargo fmt`。
 - 改前后端通信：同时运行前端 build 和 Rust check，并手动启动 `npm.cmd run tauri:dev` 验证窗口行为。
-- 改知识数据或构建脚本：运行对应 ETL、schema/SQLite 完整性、行数、重复 ID、外键、官方简繁覆盖和固定问题集检查；同时记录生成包的版本、SHA-256、压缩大小与安装大小。
+- 改知识数据或构建脚本：运行对应 ETL、schema/SQLite 完整性、行数、重复 ID、外键、官方简繁覆盖检查；同时记录生成包的版本、SHA-256、压缩大小与安装大小。
 
 验证失败时，必须保留错误信息并先说明失败位置，再决定下一步。

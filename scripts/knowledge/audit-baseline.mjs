@@ -13,6 +13,7 @@ const curatedRoot = path.join(projectRoot, "references/mhwi-data/curated");
 const defaultOutputRoot = path.join(projectRoot, "references/knowledge/audits");
 const questUnlockSnapshotPath = path.join(projectRoot, "references/knowledge/raw/game8-quest-unlocks/current.json");
 const curatedQuestNameMapPath = path.join(projectRoot, "references/knowledge/sources/quest-name-map.json");
+const deliveryUnlockSourcePath = path.join(projectRoot, "references/knowledge/sources/delivery-unlock-documents.json");
 const developmentGameFactsPath = path.join(projectRoot, "references/knowledge/build/acumod-dev-game-facts.acukb");
 
 const coverageDefinitions = [
@@ -404,6 +405,80 @@ async function auditQuestUnlockCoverage() {
   };
 }
 
+async function auditDeliveryUnlockCoverage() {
+  if (!(await pathExists(deliveryUnlockSourcePath))) {
+    return {
+      available: false,
+      message: "尚未登记交货委托解锁来源。",
+    };
+  }
+  const source = await readJson(deliveryUnlockSourcePath);
+  if (
+    source.schemaVersion !== 1
+    || source.sourceId !== "kuroyonhon-delivery-unlocks"
+    || !Array.isArray(source.entries)
+  ) {
+    throw new Error("交货委托解锁来源结构无效。");
+  }
+  let developmentPack = null;
+  if (await pathExists(developmentGameFactsPath)) {
+    const database = new DatabaseSync(developmentGameFactsPath, { readOnly: true });
+    try {
+      const scalar = (sql) => Number(Object.values(database.prepare(sql).get() ?? {})[0] ?? 0);
+      const hasDelivery = database.prepare("SELECT 1 FROM entities WHERE id = ?");
+      const unresolvedDeliveryCount = source.entries.filter(
+        (entry) => !hasDelivery.get(`game-delivery:${entry.deliveryId}`),
+      ).length;
+      developmentPack = {
+        conditionCount: scalar("SELECT COUNT(*) FROM entities WHERE kind = 'deliveryUnlockCondition'"),
+        prerequisiteRelationCount: scalar("SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest' AND subject_id LIKE 'game-delivery:%'"),
+        unresolvedDeliveryCount,
+      };
+    } finally {
+      database.close();
+    }
+  }
+  return {
+    available: true,
+    sourceId: source.sourceId,
+    sourceUrl: source.sourceUrl,
+    retrievedAt: source.retrievedAt,
+    sourceEntryCount: source.entries.length,
+    developmentPack,
+    message: "交货委托条件保留社区来源原文；只有本地任务 ID 唯一核验的项目才生成 requiresQuest。",
+  };
+}
+
+async function auditDevelopmentFacts() {
+  if (!(await pathExists(developmentGameFactsPath))) {
+    return {
+      available: false,
+      message: "尚未生成开发事实包；运行 knowledge:build-dev 后可统计最终实体和关系覆盖。",
+    };
+  }
+
+  const database = new DatabaseSync(developmentGameFactsPath, { readOnly: true });
+  try {
+    const scalar = (sql) => Number(Object.values(database.prepare(sql).get() ?? {})[0] ?? 0);
+    const grouped = (sql, key) => database.prepare(sql).all().map((row) => ({
+      [key]: row[key],
+      count: Number(row.count),
+    }));
+    return {
+      available: true,
+      packKind: String(Object.values(database.prepare("SELECT kind FROM pack_manifest").get() ?? {})[0] ?? "unknown"),
+      gameVersion: String(Object.values(database.prepare("SELECT game_version FROM pack_manifest").get() ?? {})[0] ?? "unknown"),
+      entityCount: scalar("SELECT COUNT(*) FROM entities"),
+      relationCount: scalar("SELECT COUNT(*) FROM relations"),
+      unverifiedEntityCount: scalar("SELECT COUNT(*) FROM entities WHERE game_version = 'unverified'"),
+      entityKinds: grouped("SELECT kind, COUNT(*) AS count FROM entities GROUP BY kind ORDER BY count DESC", "kind"),
+      relationPredicates: grouped("SELECT predicate, COUNT(*) AS count FROM relations GROUP BY predicate ORDER BY count DESC", "predicate"),
+    };
+  } finally {
+    database.close();
+  }
+}
+
 async function auditModLibrary(modLibraryRoot) {
   if (!modLibraryRoot) {
     return {
@@ -541,15 +616,38 @@ function renderReport(baseline, modProfile) {
     `- SQLite：${formatBytes(baseline.rawPackage.formats.sqlite.totalBytes)}。`,
     "- 原始数据只用于本地研究，重新分发前需要来源方许可。",
     "",
-    "## 游戏知识覆盖",
+    "## 原始资料字段覆盖",
     "",
     "| 主题 | 状态 | 现有内容 | 主要缺口 |",
     "| --- | --- | --- | --- |",
     ...baseline.coverage.map((item) => `| ${escapeCell(item.label)} | ${item.status} | ${escapeCell(item.available)} | ${escapeCell(item.missing)} |`),
     "",
-    "## 任务链覆盖",
+    "## 开发事实包实际内容",
     "",
   ];
+
+  if (!baseline.developmentFacts.available) {
+    lines.push(baseline.developmentFacts.message, "");
+  } else {
+    lines.push(
+      `- 包类型：\`${baseline.developmentFacts.packKind}\`；目标版本：\`${baseline.developmentFacts.gameVersion}\`。`,
+      `- 实体：${baseline.developmentFacts.entityCount}；关系：${baseline.developmentFacts.relationCount}；标记为 \'unverified\' 的实体：${baseline.developmentFacts.unverifiedEntityCount}。`,
+      "",
+      "| 实体类型 | 数量 |",
+      "| --- | ---: |",
+      ...baseline.developmentFacts.entityKinds.map((item) => `| ${escapeCell(item.kind)} | ${item.count} |`),
+      "",
+      "| 关系类型 | 数量 |",
+      "| --- | ---: |",
+      ...baseline.developmentFacts.relationPredicates.map((item) => `| ${escapeCell(item.predicate)} | ${item.count} |`),
+      "",
+    );
+  }
+
+  lines.push(
+    "## 任务链覆盖",
+    "",
+  );
 
   if (!baseline.questUnlocks.available) {
     lines.push(baseline.questUnlocks.message, "");
@@ -570,6 +668,25 @@ function renderReport(baseline, modProfile) {
         "",
       );
     }
+  }
+
+  lines.push(
+    "## 交货委托解锁覆盖",
+    "",
+  );
+  if (!baseline.deliveryUnlocks.available) {
+    lines.push(baseline.deliveryUnlocks.message, "");
+  } else {
+    lines.push(
+      `- 来源：\`${escapeCell(baseline.deliveryUnlocks.sourceId)}\`；来源页面：${baseline.deliveryUnlocks.sourceUrl}；抓取时间：${baseline.deliveryUnlocks.retrievedAt}。`,
+      `- 登记条目：${baseline.deliveryUnlocks.sourceEntryCount} 条。${baseline.deliveryUnlocks.message}`,
+    );
+    if (baseline.deliveryUnlocks.developmentPack) {
+      lines.push(
+        `- 当前开发包最终写入：${baseline.deliveryUnlocks.developmentPack.conditionCount} 条解锁条件，${baseline.deliveryUnlocks.developmentPack.prerequisiteRelationCount} 条任务前置关系；来源条目中无法映射本地交货实体：${baseline.deliveryUnlocks.developmentPack.unresolvedDeliveryCount} 条。`,
+      );
+    }
+    lines.push("");
   }
 
   lines.push(
@@ -603,9 +720,10 @@ function renderReport(baseline, modProfile) {
     "",
     "## 下一步",
     "",
-    "1. 按覆盖矩阵补齐 15.23 运行版本所需的游戏事实字段，并记录 15.10.00 内容基线、授权和字段核验状态。",
-    "2. 按真实 MOD 文件分布确定首批格式解析器与路径知识优先级。",
-    "3. 建立可安装、可卸载、可校验版本的 `.acukb` 薄端到端链路。",
+    "1. 完成特别任务、交货委托和仍有歧义的任务解锁关系人工核验。",
+    "2. 按真实 MOD 文件分布继续补充低频格式，并为每条规则完成来源和复现实验记录。",
+    "3. 完成外部原始数据、派生字段、繁简文本桥和攻略摘要的许可审计。",
+    "4. 使用真实 DeepSeek V4 按 docs/knowledge-acceptance.md 完成人工验收。",
     "",
   );
   return lines.join("\n");
@@ -617,10 +735,12 @@ async function main() {
     ? path.resolve(String(argumentsMap["output-dir"]))
     : defaultOutputRoot;
   const modLibraryRoot = await findModLibrary(argumentsMap["mod-root"]);
-  const [rawPackage, curatedData, questUnlocks, modProfile] = await Promise.all([
+  const [rawPackage, curatedData, questUnlocks, deliveryUnlocks, developmentFacts, modProfile] = await Promise.all([
     auditRawPackage(),
     auditCuratedData(),
     auditQuestUnlockCoverage(),
+    auditDeliveryUnlockCoverage(),
+    auditDevelopmentFacts(),
     auditModLibrary(modLibraryRoot),
   ]);
   const availableTables = new Set(rawPackage.tables.map((table) => table.tableName));
@@ -639,6 +759,8 @@ async function main() {
     rawPackage,
     curatedData,
     questUnlocks,
+    deliveryUnlocks,
+    developmentFacts,
     coverage,
   };
 

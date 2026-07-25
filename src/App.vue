@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open } from "@tauri-apps/plugin-dialog";
 import AppSidebar, { type WorkspaceView } from "./components/AppSidebar.vue";
 import AppTopbar from "./components/AppTopbar.vue";
 import AgentSettingsPanel from "./components/AgentSettingsPanel.vue";
@@ -1425,6 +1426,51 @@ function saveManualPath() {
   void runGameAction(() => saveGameDirectory(manualPath.value));
 }
 
+function selectedDialogPath(value: string | string[] | null): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+async function chooseGameDirectory() {
+  const selected = selectedDialogPath(
+    await open({ title: "选择 Monster Hunter World 游戏目录", directory: true, multiple: false }),
+  );
+  if (selected) {
+    manualPath.value = selected;
+  }
+}
+
+async function chooseModFolder() {
+  const selected = selectedDialogPath(
+    await open({ title: "选择 MOD 文件夹", directory: true, multiple: false }),
+  );
+  if (selected) {
+    importPath.value = selected;
+  }
+}
+
+async function chooseModArchive() {
+  const selected = selectedDialogPath(
+    await open({
+      title: "选择 MOD 压缩包",
+      directory: false,
+      multiple: false,
+      filters: [{ name: "MOD 压缩包", extensions: ["zip", "7z", "rar"] }],
+    }),
+  );
+  if (selected) {
+    archivePath.value = selected;
+  }
+}
+
+async function chooseLegacyBoxDirectory() {
+  const selected = selectedDialogPath(
+    await open({ title: "选择狩技 MOD 盒子目录", directory: true, multiple: false }),
+  );
+  if (selected) {
+    legacyBoxPath.value = selected;
+  }
+}
+
 function importSourceDisplayName(path: string) {
   const pathParts = path.split(/[\\/]/).filter(Boolean);
   const fileName = pathParts[pathParts.length - 1] ?? "MOD 分支组";
@@ -2409,6 +2455,7 @@ onBeforeUnmount(() => {
             placeholder="C:\Program Files (x86)\Steam\steamapps\common\Monster Hunter World"
           />
           <button type="submit" :disabled="isLoadingGame || !manualPath">保存</button>
+          <button type="button" :disabled="isLoadingGame" @click="chooseGameDirectory">选择目录</button>
         </div>
       </form>
 
@@ -2509,6 +2556,7 @@ onBeforeUnmount(() => {
           <button type="submit" :disabled="isPreviewingImport || !importPath">
             {{ isPreviewingImport ? "识别中" : "识别 MOD" }}
           </button>
+          <button type="button" :disabled="isPreviewingImport" @click="chooseModFolder">选择文件夹</button>
         </div>
       </form>
 
@@ -2525,6 +2573,7 @@ onBeforeUnmount(() => {
           <button type="submit" :disabled="isInstallingArchive || !archivePath">
             {{ isInstallingArchive ? "解包导入中" : "导入压缩包" }}
           </button>
+          <button type="button" :disabled="isInstallingArchive" @click="chooseModArchive">选择压缩包</button>
         </div>
         <p class="hint">支持 .zip / .7z / .rar；通过 Acumod 内置解包组件处理。</p>
       </form>
@@ -2550,6 +2599,7 @@ onBeforeUnmount(() => {
             <button type="submit" :disabled="isScanningLegacyBox || !legacyBoxPath">
               {{ isScanningLegacyBox ? "扫描中" : "扫描盒子" }}
             </button>
+            <button type="button" :disabled="isScanningLegacyBox" @click="chooseLegacyBoxDirectory">选择目录</button>
           </div>
         </form>
 
@@ -3550,7 +3600,7 @@ h3 {
 
 .path-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) repeat(2, auto);
   gap: 10px;
 }
 

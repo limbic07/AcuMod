@@ -12,12 +12,20 @@ dist
 dist-ssr
 target
 *.local
+coverage/
+*.tsbuildinfo
+
+# Local environment files may contain API keys or machine-specific settings.
+.env
+.env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
@@ -27,10 +35,26 @@ target
 # Local reference data copied from external sources.
 references/mhwi-data/raw/*
 !references/mhwi-data/raw/README.md
-# 知识包原始快照和构建报告仅保留在本地。
-references/knowledge/raw/
-references/knowledge/build/
-references/knowledge/audits/
+# Local knowledge-pack inputs, build outputs, and audit reports.
+references/knowledge/raw/**
+references/knowledge/build/**
+references/knowledge/audits/**
+references/knowledge/release/**
+# Generated knowledge packs must not enter Git even when a custom output
+# directory is used; SQLite sidecars are temporary files from local builds.
+*.acukb
+*.acukb-*
+references/knowledge/**/*.sqlite
+references/knowledge/**/*.sqlite-*
+# SQLite may create these sidecar files while a pack is being built or tested.
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+
+# Source metadata, question sets, and documentation under this directory are
+# maintained by the project and must remain trackable.
+!references/knowledge/sources/
+!references/knowledge/sources/**
 
 # Local runtime data when running portable/dev builds from the repo root.
 AcumodData/

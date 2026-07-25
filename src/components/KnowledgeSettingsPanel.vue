@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   deleteKnowledgePack,
   getKnowledgeStatus,
-  installKnowledgePack,
+  installKnowledgeBundle,
   type KnowledgePackKind,
   type KnowledgeStatus,
 } from "../api/knowledge";
 
 const status = ref<KnowledgeStatus | null>(null);
-const packagePath = ref("");
+const bundlePath = ref("");
 const error = ref("");
 const message = ref("");
 const isLoading = ref(false);
-const isInstalling = ref(false);
+const isInstallingBundle = ref(false);
 const deletingPackId = ref("");
 const confirmingDeletePackId = ref("");
 
@@ -21,6 +22,7 @@ const kindLabels: Record<KnowledgePackKind, string> = {
   "mhw-modding": "MOD 技术",
   "mhw-game-facts": "游戏事实",
   "mhw-game-guides": "攻略资料",
+  "acumod-help": "Acumod 使用说明",
 };
 
 function visibleError(value: unknown) {
@@ -46,21 +48,34 @@ async function loadStatus() {
   }
 }
 
-async function installPackage() {
-  const sourcePath = packagePath.value.trim();
+async function chooseBundle() {
+  const selected = await open({
+    title: "选择 Acumod 知识包",
+    multiple: false,
+    directory: false,
+    filters: [{ name: "知识包整套 ZIP", extensions: ["zip"] }],
+  });
+  if (typeof selected === "string") {
+    bundlePath.value = selected;
+    error.value = "";
+  }
+}
+
+async function installBundle() {
+  const sourcePath = bundlePath.value.trim();
   if (!sourcePath) return;
-  isInstalling.value = true;
+  isInstallingBundle.value = true;
   error.value = "";
   message.value = "";
   try {
-    const result = await installKnowledgePack(sourcePath);
+    const result = await installKnowledgeBundle(sourcePath);
     status.value = result.status;
-    packagePath.value = "";
+    bundlePath.value = "";
     message.value = result.message;
   } catch (value) {
     error.value = visibleError(value);
   } finally {
-    isInstalling.value = false;
+    isInstallingBundle.value = false;
   }
 }
 
@@ -96,26 +111,33 @@ onMounted(() => {
         <h2>知识库</h2>
         <p>为 AcuAI 提供带版本和来源的 MHW 游戏知识与 MOD 技术资料。</p>
       </div>
-      <button type="button" :disabled="isLoading || isInstalling" @click="loadStatus">
+      <button type="button" :disabled="isLoading || isInstallingBundle" @click="loadStatus">
         {{ isLoading ? "读取中" : "刷新" }}
       </button>
     </div>
 
-    <form class="knowledge-import" @submit.prevent="installPackage">
-      <label for="knowledge-package-path">本地知识包</label>
+    <form class="knowledge-import" @submit.prevent="installBundle">
+      <label for="knowledge-bundle-path">本地知识包整套 ZIP</label>
       <div>
         <input
-          id="knowledge-package-path"
-          v-model="packagePath"
+          id="knowledge-bundle-path"
+          v-model="bundlePath"
           type="text"
           autocomplete="off"
-          placeholder="输入或粘贴 .acukb 文件路径"
+          placeholder="请选择包含四个 .acukb 文件的 ZIP"
         />
-        <button type="submit" :disabled="isInstalling || !packagePath.trim()">
-          {{ isInstalling ? "安装中" : "安装" }}
+        <button type="button" :disabled="isInstallingBundle" @click="chooseBundle">
+          选择文件
+        </button>
+        <button
+          type="submit"
+          class="bundle-button"
+          :disabled="isInstallingBundle || !bundlePath.trim()"
+        >
+          {{ isInstallingBundle ? "整套安装中" : "整套安装" }}
         </button>
       </div>
-      <small>知识包独立存放在软件目录旁，不增加主程序安装包体积。</small>
+      <small>知识包独立发布，不绑定主程序安装包；一个 ZIP 必须同时包含游戏事实、MOD 技术、攻略和 Acumod 说明四个 `.acukb` 文件。</small>
     </form>
 
     <div v-if="status?.packs.length" class="pack-list">
@@ -223,7 +245,7 @@ onMounted(() => {
 
 .knowledge-import > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
 }
 
@@ -298,6 +320,12 @@ onMounted(() => {
 
 .knowledge-settings-panel .delete-button {
   color: #8a3d32;
+}
+
+.knowledge-settings-panel .bundle-button {
+  border-color: #7da99a;
+  color: #17613f;
+  background: #f2f8f5;
 }
 
 .knowledge-settings-panel .delete-button.confirming {

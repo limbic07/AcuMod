@@ -437,14 +437,11 @@ Vue UI
 4. `preview_enable_mod`、`enable_mod`、冲突检测和冲突顺序应用不再直接使用原始 `files[].deployRelativePath`，而是统一调用有效部署文件生成器。
 5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；飞翔爪改绑只修改已关联 `.evam` 的绑定字段；本地库原文件保持不变。
 
-例如“Nexus 下载并进入导入预览”（Slice 15 计划）：
+例如“外部来源页面与本地导入”：
 
-1. Vue 只提交 `monsterhunterworld` 的 Nexus mod/file ID 或后端解析过的页面 URL，不提交任意下载地址。
-2. `src/api/nexus.ts` 调用 `commands/nexus.rs`；Rust 从系统凭据存储读取授权，并通过 Nexus 适配层获取元数据、文件列表或一次性下载链接。
-3. Rust 创建 `staging/downloads/<task_id>/`，流式写入 `.part`，持续返回进度和剩余 API 配额；下载不提供取消。
-4. 下载完成后校验文件大小和可用哈希，再原子改名为归档文件；失败时只清理该 task ID 下由 Acumod 创建的文件。
-5. 用户点击“继续导入”后，把已完成归档交给现有 `install_mod_from_archive` 预览链路；多候选和游戏根目录 fallback 仍由现有 UI 确认。
-6. 成功安装后 manifest 记录可选 `nexusSource`，临时下载链接和 API key 永不写入 manifest。
+1. `search_mod_sources` 只返回已验证的具体来源页面，统一由系统浏览器打开。
+2. 应用不提交或保存站点 API Key、会员状态、文件 ID、一次性下载链接或 `nxm` 参数。
+3. 用户下载归档后，通过现有 `install_mod_from_archive` 预览链路导入；多候选和游戏根目录 fallback 仍由现有 UI 确认。
 
 重新生成模型索引：
 

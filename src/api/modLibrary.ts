@@ -6,7 +6,6 @@ export interface ModLibraryStatus {
   installedPath: string;
   stagingPath: string;
   importStagingPath: string;
-  downloadStagingPath: string;
   isReady: boolean;
   message: string;
 }

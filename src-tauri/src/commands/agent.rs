@@ -5,7 +5,6 @@ use crate::{
         self, AgentActionPlan, AgentActionResult, AgentConnectionResult, AgentCoordinator,
         AgentEvent, AgentSettings, AgentTurnResult,
     },
-    services::nexus::NexusConnectionResult,
     storage::config::DeepSeekModel,
 };
 
@@ -43,24 +42,6 @@ pub fn delete_deepseek_api_key(app: tauri::AppHandle) -> Result<AgentSettings, S
 #[tauri::command]
 pub async fn test_agent_connection(app: tauri::AppHandle) -> Result<AgentConnectionResult, String> {
     agent::test_agent_connection(&app).await
-}
-
-/// 将 Nexus Personal API Key 保存到系统凭据库。
-#[tauri::command]
-pub fn set_nexus_api_key(app: tauri::AppHandle, api_key: String) -> Result<AgentSettings, String> {
-    agent::set_nexus_api_key(&app, api_key)
-}
-
-/// 删除 Acumod 写入系统凭据库的 Nexus Personal API Key。
-#[tauri::command]
-pub fn delete_nexus_api_key(app: tauri::AppHandle) -> Result<AgentSettings, String> {
-    agent::delete_nexus_api_key(&app)
-}
-
-/// 验证 Nexus API Key、账户名称和 API 直接下载权限。
-#[tauri::command]
-pub async fn test_nexus_connection() -> Result<NexusConnectionResult, String> {
-    agent::test_nexus_connection().await
 }
 
 /// 开始一次 Agent 对话；写操作只能生成等待确认的受控计划。

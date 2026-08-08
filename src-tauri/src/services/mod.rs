@@ -7,4 +7,3 @@ pub mod mod_library;
 pub mod mod_state_sync;
 pub mod model_recognition;
 pub mod model_remap;
-pub mod nexus;

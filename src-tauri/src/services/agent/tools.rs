@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use futures_util::future::join_all;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use crate::{
-    operations::OperationReporter,
-    services::{game, knowledge, mod_analysis, mod_library, model_recognition, nexus},
+    operations::{run_blocking_operation, OperationReporter},
+    services::{game, knowledge, mod_analysis, mod_library, model_recognition},
     storage::config,
 };
 
@@ -558,37 +557,6 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "get_nexus_mod_files",
-                "description": "读取一个已选 Nexus MHW MOD 的官方元数据和文件列表。需要先配置 Nexus Personal API Key；不会下载。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "modId": { "type": "integer", "minimum": 1 }
-                    },
-                    "required": ["modId"],
-                    "additionalProperties": false
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "create_nexus_download_plan",
-                "description": "为用户明确选择的 Nexus MOD 文件生成下载并导入 Acumod 本地库的待确认计划。仅 Nexus Premium API 直接下载可用；只生成计划。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "modId": { "type": "integer", "minimum": 1 },
-                        "fileId": { "type": "integer", "minimum": 1 }
-                    },
-                    "required": ["modId", "fileId"],
-                    "additionalProperties": false
-                }
-            }
-        }),
     ]
 }
 
@@ -613,8 +581,6 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "lookup_game_entities" => "查询游戏实体",
         "get_game_entity_relations" => "查询游戏实体关系",
         "search_mod_sources" => "联网搜索 MOD",
-        "get_nexus_mod_files" => "读取 Nexus 文件列表",
-        "create_nexus_download_plan" => "生成 Nexus 下载计划",
         _ => "处理 AI 请求",
     }
 }
@@ -742,10 +708,13 @@ pub(crate) async fn execute_tool(
                     return Err("首次清理扫描必须从 offset 0 开始。".to_string());
                 }
                 let worker_app = app.clone();
-                let audit =
-                    tauri::async_runtime::spawn_blocking(move || cleanup::scan_audit(&worker_app))
-                        .await
-                        .map_err(|error| format!("清理候选扫描任务失败：{error}"))??;
+                let audit = run_blocking_operation(
+                    app.clone(),
+                    "agentCleanupScan",
+                    "正在扫描可清理 MOD 文件",
+                    move |progress| cleanup::scan_audit(&worker_app, &progress),
+                )
+                .await?;
                 coordinator.store_cleanup_audit(audit.clone())?;
                 audit
             };
@@ -936,42 +905,15 @@ pub(crate) async fn execute_tool(
             let args = parse_arguments::<SearchModSourcesArgs>(arguments)?;
             let key = super::require_deepseek_api_key()?;
             let model = config::load(app)?.deep_seek_model;
-            let mut results = source_search::search(&key, model, &args.query).await?;
-            let nexus_configured = nexus::credential_status()?.configured;
-            let mut verified_nexus_count = 0_usize;
+            let results = source_search::search(&key, model, &args.query).await?;
             let mut values = Vec::with_capacity(results.len());
-            let nexus_summaries = if nexus_configured {
-                join_all(results.iter().map(|result| async move {
-                    match result.nexus_mod_id {
-                        Some(mod_id) => nexus::get_mod_summary(mod_id).await.ok(),
-                        None => None,
-                    }
-                }))
-                .await
-            } else {
-                vec![None; results.len()]
-            };
-            for (result, summary) in results.iter_mut().zip(nexus_summaries) {
-                let mut nexus_verified = false;
-                let mut updated_at_unix_seconds = 0_u64;
-                if let Some(summary) = summary {
-                    result.title = summary.name;
-                    result.author = summary.author;
-                    result.summary = summary.summary;
-                    result.url = summary.page_url;
-                    updated_at_unix_seconds = summary.updated_at_unix_seconds;
-                    nexus_verified = true;
-                    verified_nexus_count += 1;
-                }
+            for result in results {
                 values.push(json!({
                     "title": result.title,
                     "url": result.url,
                     "source": result.source,
                     "author": result.author,
                     "summary": result.summary,
-                    "nexusModId": result.nexus_mod_id,
-                    "nexusVerified": nexus_verified,
-                    "updatedAtUnixSeconds": updated_at_unix_seconds,
                     "sourceKind": result.source_kind,
                     "sourceKindLabel": result.source_kind_label,
                     "accessMode": result.access_mode,
@@ -983,26 +925,10 @@ pub(crate) async fn execute_tool(
                 json!({
                     "ok": true,
                     "resultCount": values.len(),
-                    "nexusApiKeyConfigured": nexus_configured,
-                    "verifiedNexusCount": verified_nexus_count,
                     "results": values
                 })
                 .to_string(),
             ))
-        }
-        "get_nexus_mod_files" => {
-            let args = parse_arguments::<NexusModArgs>(arguments)?;
-            let files = nexus::get_mod_files(args.mod_id).await?;
-            Ok(ToolExecution::query(
-                serde_json::to_string(&json!({ "ok": true, "nexus": files }))
-                    .map_err(|error| format!("无法序列化 Nexus 文件列表：{error}"))?,
-            ))
-        }
-        "create_nexus_download_plan" => {
-            let args = parse_arguments::<NexusDownloadPlanArgs>(arguments)?;
-            let target = nexus::get_download_target(args.mod_id, args.file_id).await?;
-            let plan = super::create_nexus_download_plan(app, coordinator, target)?;
-            ToolExecution::plan(plan)
         }
         _ => Err("模型请求了未开放的工具。".to_string()),
     }
@@ -1150,19 +1076,6 @@ struct AnalyzeInstalledModArgs {
     query: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NexusModArgs {
-    mod_id: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NexusDownloadPlanArgs {
-    mod_id: u64,
-    file_id: u64,
 }
 
 fn parse_arguments<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, String> {

@@ -4,7 +4,7 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{services::nexus, storage::config::DeepSeekModel};
+use crate::storage::config::DeepSeekModel;
 
 const DEEPSEEK_ANTHROPIC_MESSAGES_URL: &str = "https://api.deepseek.com/anthropic/v1/messages";
 const MAX_SEARCH_RESULTS: usize = 8;
@@ -18,7 +18,6 @@ pub(crate) struct ModSourceSearchResult {
     pub source: String,
     pub author: String,
     pub summary: String,
-    pub nexus_mod_id: Option<u64>,
     pub source_kind: String,
     pub source_kind_label: String,
     pub access_mode: String,
@@ -189,7 +188,6 @@ fn parse_and_validate_results(text: &str) -> Result<Vec<ModSourceSearchResult>, 
             source: source.name.to_string(),
             author: sanitized(candidate.author, 120),
             summary: sanitized(candidate.summary, 500),
-            nexus_mod_id: nexus::parse_mod_id_from_url(&url),
             source_kind: source.kind.to_string(),
             source_kind_label: source.kind_label.to_string(),
             access_mode: source.access_mode.to_string(),
@@ -209,14 +207,14 @@ fn allowed_source(url: &Url) -> Option<SourceProfile> {
     }
     let host = url.host_str()?.to_ascii_lowercase();
     match host.as_str() {
-        "nexusmods.com" | "www.nexusmods.com" if nexus::parse_mod_id_from_url(url).is_some() => {
+        "nexusmods.com" | "www.nexusmods.com" if is_nexus_mhw_mod_page(url) => {
             Some(source_profile(
                 "Nexus Mods",
                 "modPage",
                 "MOD 页面",
-                "nexusApiOrBrowser",
-                "Nexus API 或浏览器",
-                "配置 Nexus Key 后可读取官方文件列表；下载权限取决于会员类型。",
+                "browserOnly",
+                "仅浏览器打开",
+                "请在原页面下载后，再使用 Acumod 的本地文件导入。",
             ))
         }
         "moddb.com" | "www.moddb.com" if has_path_prefix(url, "mods") => Some(source_profile(
@@ -283,6 +281,16 @@ fn allowed_source(url: &Url) -> Option<SourceProfile> {
         )),
         _ => None,
     }
+}
+
+fn is_nexus_mhw_mod_page(url: &Url) -> bool {
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>());
+    matches!(
+        segments.as_deref(),
+        Some(["monsterhunterworld", "mods", mod_id]) if mod_id.parse::<u64>().is_ok_and(|id| id > 0)
+    )
 }
 
 fn source_profile(
@@ -357,8 +365,12 @@ fn is_3dm_download_page(url: &Url) -> bool {
 }
 
 fn normalized_public_url(url: &Url) -> String {
-    if let Some(mod_id) = nexus::parse_mod_id_from_url(url) {
-        return nexus::page_url(mod_id);
+    if is_nexus_mhw_mod_page(url) {
+        let mut normalized = url.clone();
+        normalized.set_path(&url.path().trim_end_matches('/'));
+        normalized.set_fragment(None);
+        normalized.set_query(None);
+        return normalized.to_string();
     }
     let mut normalized = url.clone();
     normalized.set_fragment(None);
@@ -426,7 +438,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].nexus_mod_id, Some(42));
         assert_eq!(
             results[0].url,
             "https://www.nexusmods.com/monsterhunterworld/mods/42"

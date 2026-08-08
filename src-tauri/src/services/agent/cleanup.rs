@@ -93,9 +93,12 @@ pub struct CleanupClassification {
     pub confidence: f64,
 }
 
-pub fn scan_audit(app: &AppHandle) -> Result<AgentCleanupAudit, String> {
-    let scan =
-        mod_library::scan_mod_cleanup_candidates_with_progress(app, &OperationReporter::default())?;
+/// 在统一后台任务中扫描，进度会直接驱动主界面的全局进度条。
+pub fn scan_audit(
+    app: &AppHandle,
+    progress: &OperationReporter,
+) -> Result<AgentCleanupAudit, String> {
+    let scan = mod_library::scan_mod_cleanup_candidates_with_progress(app, progress)?;
     if scan.candidates.len() > MAX_CLEANUP_REVIEW_ITEMS {
         return Err(format!(
             "待确认文件超过 {MAX_CLEANUP_REVIEW_ITEMS} 个，请先缩小本地 MOD 库范围。"
@@ -179,6 +182,9 @@ pub fn create_review(
                     .cmp(&right.library_relative_path.to_lowercase())
             })
     });
+    // “保留”项只作为扫描计数，不占用用户的清理决策列表。
+    items.retain(|item| item.recommendation != "keep");
+    let cleanup_item_count = items.len();
     let review = AgentCleanupReview {
         review_id: format!(
             "cleanup-review-{}",
@@ -193,11 +199,8 @@ pub fn create_review(
         rule_version: audit.scan.rule_version,
         items,
         message: format!(
-            "已盘点 {} 个文件：本地保留 {} 个，本地建议排除 {} 个，AcuAI 审核 {} 个模糊文件。",
-            audit.scan.scanned_file_count,
-            audit.scan.local_keep_count,
-            audit.scan.local_remove_count,
-            audit.scan.ai_review_count
+            "已盘点 {} 个文件，发现 {} 个可确认清理项。",
+            audit.scan.scanned_file_count, cleanup_item_count,
         ),
     };
     coordinator.take_cleanup_audit(audit_id)?;

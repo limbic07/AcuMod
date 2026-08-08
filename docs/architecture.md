@@ -209,12 +209,11 @@ AppData/
       installed/           已导入并由 Acumod 管理的 MOD 副本
       staging/
         imports/           压缩包解包和导入预览的暂存目录
-        downloads/         Nexus 下载中的 .part 文件和待导入归档
 ```
 
 MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装包时，需要确保软件目录对普通用户可写；如果安装到 `Program Files` 等受限目录，应提供 MOD 库位置设置或选择用户可写安装位置。
 
-`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`staging/downloads` 只保存 Nexus 下载中的 `.part` 文件和等待导入或分支选择的归档；普通归档导入完成后立即删除，多分支归档在选择完成后删除。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
+`staging/imports` 不是第二份 MOD 库。它只在压缩包识别期间暂存完整解压结果：进程首次访问 MOD 库时清理上次异常退出留下的内容，开始新压缩包导入前清理已放弃的候选，成功安装后立即删除本次暂存。`installed/<mod_id>/content` 才是唯一长期副本，多分支压缩包只复制用户选择的候选分支。
 
 ## 狩技 MOD 盒子导入与自动状态同步
 
@@ -235,9 +234,8 @@ MOD 文件和导入暂存可能很大，不放入 `AppData`。后续制作安装
   -> 复用标准文件夹导入
   -> 识别或关联重复 MOD
   -> AcumodData/mods/installed/<mod_id>/content
-  -> mod_state_sync service
-  -> 自动判定启用状态、部分覆盖关系和冲突顺序
-  -> 一次返回导入与状态同步结果
+  -> 沿用 info.xml 中的启用状态作为初始状态
+  -> 一次返回导入结果与“可手动检测实际状态”的提示
 
 用户刷新实际状态
   -> refreshGameModStates()
@@ -481,7 +479,7 @@ services/mod_analysis/             文件清单、分类、格式解析和资源
 ### 五项能力的服务边界
 
 - **冗余文件清理**：传统部署 service 只拥有通用的“部署排除记录和重新协调”能力；完整文件盘点、本地双信号规则和 AI 分类仅由 Agent 主动调用。Rust 先确定无需 AI 的保留项与排除建议，只把证据冲突或证据不足的文件组交给模型；清理计划确认后由部署 service 删除游戏副本或恢复其他冲突所有者，本地 MOD 库原始副本始终保留。
-- **联网搜索与安装**：新增来源适配层，Nexus 由官方 API adapter 负责；踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge 只返回通过站点规则校验的外部链接。结果携带来源类型和访问方式，DeepSeek Chat Completions 只负责选择固定工具和整理候选，不充当浏览器、下载器或站点抓取器。
+- **联网搜索与本地导入**：来源适配层只返回通过站点规则校验的外部链接，包含 Nexus、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge。结果携带来源类型和访问方式，用户在系统浏览器自行下载后复用传统本地导入；DeepSeek 不充当浏览器、下载器或站点抓取器。
 - **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
 - **MOD 知识分析**：`modding` 域保存跨 MOD 复用的制作知识；本地 MOD 是待分析对象。Rust 先枚举全部文件、运行路径规则和格式解析器、复用模型识别并建立资源依赖图，DeepSeek 只根据结构化证据和命中资料解释整体工作链。精确冲突与部署状态继续查询工作区快照。
 - **游戏知识问答**：`game-facts` 保存 MHW Steam/PC 最终版本 `15.23` 的精确实体、属性和关系，`game-guides` 保存带来源和条件的攻略经验。项目确认 `15.10` 是最后一次有明显游戏内容和机制变化的更新；`15.11` 至 `15.23` 主要处理修复、Steam Deck/语言适配、系统文件和宣传数据，没有新增怪物、武器或大型任务。因此本地 `15.10.00` 可作为 `15.23` 的内容事实基线，但每条派生事实仍必须保留该基线；AcuAI 通过通用实体查询、关系遍历、全文检索、比较和核验工具回答不同类型问题，不为配装或素材路线分别复制业务流程。
@@ -604,27 +602,11 @@ AI 文本请求使用独立的异步状态，不占用全局文件任务锁；�
 - 第一版只保存当前运行期间的会话，不把聊天记录持久化；设置中后续再增加可选历史记录。
 - DeepSeek API Key 应保存到 Windows Credential Manager。开发阶段可使用进程环境变量 `DEEPSEEK_API_KEY`，禁止写入 `AppData/config.json` 或 `AcumodData/`。
 
-### Nexus Mods 边界
+### 外部来源边界
 
-Nexus 元数据和下载由独立 Rust `services/nexus.rs` 实现，不能写在模型工具循环中。该 service 可由 Agent 的待确认计划调用，传统管理器本身不依赖 Agent；后续是否增加独立下载页面不影响此边界。当前 Nexus v3 规范没有关键词搜索和直接下载接口，因此候选检索使用 DeepSeek 官方服务端搜索并由 Rust 校验固定来源；选定 Nexus 页面后，文件列表和 Premium 下载使用 Nexus 官方兼容 API。公开发行前需要按官方流程注册应用，开发期个人 API Key 只用于测试。Agent 不保存临时下载链接，不抓取网页代替 API，也不绕过会员或下载权限。
+候选检索使用 DeepSeek 官方服务端搜索，并由 Rust 校验 HTTPS、精确域名和具体内容页面。所有来源包括 Nexus Mods 均只返回页面链接；应用不保存 API Key、不读取账户信息、不下载文件、不解析登录态或站内下载参数。用户在系统浏览器自行完成站点交互，再通过传统本地文件导入将归档或文件夹加入 MOD 库。
 
-Nexus 下载执行链路：
-
-```text
-search_mod_sources
-  -> DeepSeek 官方联网搜索
-  -> Rust HTTPS/精确域名/具体内容页面校验与来源分类
-  -> get_nexus_mod_files（官方 API）
-  -> create_nexus_download_plan
-  -> 用户确认
-  -> services/nexus.rs 下载到 staging/downloads
-  -> mod_library::install_mod_from_archive_with_progress
-  -> 普通安装完成，或 App.vue 继续现有多分支选择
-```
-
-Nexus Key 使用独立的 Windows Credential Manager 条目；开发环境可用 `NEXUS_API_KEY`。普通会员没有 API 直接下载权限时只返回页面链接，当前实现不接收或伪造网页下载所需的临时参数。
-
-国内来源边界：踩蘑菇只接受 `/post/<数字>.html` 帖子，3DM 只接受具体 MOD 或数字补丁页面，哔哩哔哩只接受具体视频、动态或专栏。上述来源统一通过系统浏览器打开，不解析登录态、积分、私信、评论区、网盘链接或站点下载按钮。
+踩蘑菇只接受 `/post/<数字>.html` 帖子，3DM 只接受具体 MOD 或数字补丁页面，哔哩哔哩只接受具体视频、动态或专栏；它们不代表页面内一定有可下载文件。
 
 外部接口依据（核对于 2026-07-17）：
 
@@ -632,8 +614,6 @@ Nexus Key 使用独立的 Windows Credential Manager 条目；开发环境可用
 - [DeepSeek V4 工具调用](https://api-docs.deepseek.com/guides/tool_calls)
 - [DeepSeek 思考模式和工具消息规则](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)
 - [DeepSeek API 更新记录](https://api-docs.deepseek.com/updates)
-- [Nexus Mods API v3](https://api-docs.nexusmods.com/)
-- [Nexus Mods API 使用政策与应用注册](https://help.nexusmods.com/article/114-api-acceptable-use-policy)
 
 ## 已完成的第一个 MVP 切片
 

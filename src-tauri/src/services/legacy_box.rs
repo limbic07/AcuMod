@@ -115,6 +115,8 @@ pub(crate) struct LegacyBoxImportSource {
     pub(crate) box_path: PathBuf,
     pub(crate) module_id: String,
     pub(crate) name: String,
+    /// 狩技盒子保存的开关是导入时的初始意图；不以导入瞬间的文件探测覆盖它。
+    pub(crate) box_enabled: bool,
     pub(crate) module_path: PathBuf,
     pub(crate) files_path: PathBuf,
 }
@@ -236,6 +238,7 @@ fn load_import_sources_from_paths(
             box_path: paths.box_path.clone(),
             module_id: module_id.clone(),
             name,
+            box_enabled: info.enable.trim().eq_ignore_ascii_case("true"),
             module_path,
             files_path,
         });
@@ -258,6 +261,10 @@ pub(crate) fn import_source_box_path(source: &LegacyBoxImportSource) -> &Path {
 
 pub(crate) fn import_source_name(source: &LegacyBoxImportSource) -> &str {
     &source.name
+}
+
+pub(crate) fn import_source_box_enabled(source: &LegacyBoxImportSource) -> bool {
+    source.box_enabled
 }
 
 pub(crate) fn import_source_module_path(source: &LegacyBoxImportSource) -> &Path {

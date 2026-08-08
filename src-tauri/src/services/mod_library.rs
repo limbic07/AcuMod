@@ -60,7 +60,6 @@ pub struct ModLibraryStatus {
     pub installed_path: String,
     pub staging_path: String,
     pub import_staging_path: String,
-    pub download_staging_path: String,
     pub is_ready: bool,
     pub message: String,
 }
@@ -764,6 +763,9 @@ struct InstalledModManifest {
 struct LegacyBoxSourceRef {
     box_path: String,
     module_id: String,
+    /// 盒子中的原始开关，用于保留导入时的初始状态，不替代后续手动实际状态检测。
+    #[serde(default)]
+    box_enabled: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -928,7 +930,6 @@ pub fn get_mod_library_status(app: &tauri::AppHandle) -> Result<ModLibraryStatus
         installed_path: path_to_string(&paths.installed_path),
         staging_path: path_to_string(&paths.staging_path),
         import_staging_path: path_to_string(&paths.import_staging_path),
-        download_staging_path: path_to_string(&paths.download_staging_path),
         is_ready: true,
         message: "MOD library directories are ready.".to_string(),
     })
@@ -1556,16 +1557,11 @@ pub fn install_mod_branches_with_progress(
     })?;
     let should_cleanup_staging =
         original_source_path.is_some() && source.starts_with(&staging_root);
-    let download_staging_root = paths.download_staging_path.canonicalize().ok();
 
     let original_source = original_source_path
         .as_deref()
         .map(normalize_user_path)
         .unwrap_or_else(|| source.clone());
-    let should_cleanup_download = original_source_path.is_some()
-        && download_staging_root
-            .as_ref()
-            .is_some_and(|root| original_source.starts_with(root));
     let mut contexts = load_all_installed_manifests(&paths.installed_path)?;
     let mut results = Vec::new();
     let mut newly_installed_ids = Vec::new();
@@ -1684,15 +1680,6 @@ pub fn install_mod_branches_with_progress(
             }
         }
     }
-    if should_cleanup_download {
-        if let Err(error) = fs::remove_file(&original_source) {
-            if error.kind() != ErrorKind::NotFound {
-                result
-                    .message
-                    .push_str(&format!(" 下载归档清理失败：{error}"));
-            }
-        }
-    }
     Ok(result)
 }
 
@@ -1729,6 +1716,7 @@ pub fn import_legacy_box_mods_with_progress(
         let source_ref = LegacyBoxSourceRef {
             box_path: path_to_string(legacy_box::import_source_box_path(&source)),
             module_id: module_id.clone(),
+            box_enabled: legacy_box::import_source_box_enabled(&source),
         };
         // 盒子模块先按已保存来源、再按完整内容关联。这样同名但内容不同的 MOD 不会被误吞掉。
         let existing = match find_installed_mod_by_legacy_source(&installed_contexts, &source_ref)?
@@ -1763,6 +1751,7 @@ pub fn import_legacy_box_mods_with_progress(
                     &paths.installed_path,
                     &result.mod_id,
                     source_ref,
+                    legacy_box::import_source_box_enabled(&source),
                 ) {
                     Ok(context) => context,
                     Err(error) => {
@@ -1795,7 +1784,7 @@ pub fn import_legacy_box_mods_with_progress(
                         name,
                         status: "imported".to_string(),
                         mod_id: Some(result.mod_id),
-                        message: "已复制到 Acumod 本地 MOD 库，正在检测游戏目录中的实际状态。"
+                        message: "已复制到 Acumod 本地 MOD 库，已沿用盒子记录的启用状态。"
                             .to_string(),
                     });
                 }
@@ -1811,39 +1800,17 @@ pub fn import_legacy_box_mods_with_progress(
         progress.report("正在导入狩技 MOD 盒子内容", index + 1, Some(total), None);
     }
 
-    let (mut state_sync, snapshot_updated) = match resolve_game_root(app) {
-        Ok(game_root) => match synchronize_legacy_mod_states_with_progress(
-            &paths.installed_path,
-            &game_root,
-            progress,
-        ) {
-            Ok(result) => (result, true),
-            // 本地副本已经完成时，不应因只读状态检测失败而把整个导入判为失败。
-            // 用户仍可在修复游戏目录或本地数据后手动重新检测。
-            Err(error) => (
-                ModStateSyncResult::unavailable(format!(
-                    "MOD 已导入本地库，但状态同步未完成：{error}"
-                )),
-                false,
-            ),
-        },
-        Err(error) => (
-            ModStateSyncResult::unavailable(format!(
-                "MOD 已导入本地库，但尚未检测游戏状态：{error}"
-            )),
-            false,
-        ),
-    };
-    if !snapshot_updated {
-        if let Err(error) = save_workspace_snapshot_from_contexts(
-            &paths.installed_path,
-            &installed_contexts,
-            progress,
-        ) {
-            state_sync
-                .warnings
-                .push(format!("工作区快照更新失败，下次刷新时会重新生成：{error}"));
-        }
+    // 导入时优先保留盒子记录的开关；实际文件比对改由用户显式触发，避免外部部署状态覆盖来源意图。
+    let mut state_sync = ModStateSyncResult::unavailable(
+        "已沿用狩技 MOD 盒子的启用状态；如需以游戏目录实际文件为准，请手动点击“检测游戏实际状态”。"
+            .to_string(),
+    );
+    if let Err(error) =
+        save_workspace_snapshot_from_contexts(&paths.installed_path, &installed_contexts, progress)
+    {
+        state_sync
+            .warnings
+            .push(format!("工作区快照更新失败，下次刷新时会重新生成：{error}"));
     }
 
     let failed_count = items.iter().filter(|item| item.status == "failed").count();
@@ -4146,18 +4113,28 @@ fn associate_legacy_box_source(
     installed_root: &Path,
     mod_id: &str,
     source_ref: LegacyBoxSourceRef,
+    box_enabled: bool,
 ) -> Result<InstalledManifestContext, String> {
     let mut context = load_installed_manifest(installed_root, mod_id)?;
-    if !context
+    let source_exists = context
         .manifest
         .legacy_sources
         .iter()
-        .any(|stored| legacy_box_source_matches(stored, &source_ref))
-    {
+        .any(|stored| legacy_box_source_matches(stored, &source_ref));
+    if !source_exists {
         context.manifest.legacy_sources.push(source_ref);
-        context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
-        save_manifest(&context.manifest_path, &context.manifest)?;
+    } else if let Some(stored) = context
+        .manifest
+        .legacy_sources
+        .iter_mut()
+        .find(|stored| legacy_box_source_matches(stored, &source_ref))
+    {
+        stored.box_enabled = source_ref.box_enabled;
     }
+    // 来源关联成功后立刻以盒子记录初始化状态；导入不写游戏目录，也不伪造 deployed_files。
+    context.manifest.enabled = box_enabled;
+    context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+    save_manifest(&context.manifest_path, &context.manifest)?;
     Ok(context)
 }
 
@@ -5325,9 +5302,13 @@ fn scan_mod_cleanup_candidates_from(
     let mut local_keep_count = 0;
     let mut local_remove_count = 0;
     let mut ai_review_count = 0;
-    progress.report("正在盘点 MOD 文件", 0, Some(contexts.len()), None);
+    let total_file_count = contexts
+        .iter()
+        .map(|context| context.manifest.files.len())
+        .sum::<usize>();
+    progress.report("正在盘点 MOD 文件", 0, Some(total_file_count), None);
 
-    for (index, context) in contexts.iter().enumerate() {
+    for context in contexts {
         let excluded_paths = context
             .manifest
             .deployment_exclusions
@@ -5352,11 +5333,26 @@ fn scan_mod_cleanup_candidates_from(
         let recognized_path_keys = recognized_cleanup_path_keys(&context.manifest);
 
         for file in &context.manifest.files {
+            // 无论文件最终保留、排除还是需要 AI 判断，都计入进度，避免大 MOD 长时间没有反馈。
+            let inspected_file_count = scanned_file_count + 1;
             let library_key = conflict_path_key(&file.library_relative_path);
             if excluded_paths.contains(&library_key) {
+                scanned_file_count = inspected_file_count;
+                progress.report(
+                    "正在盘点 MOD 文件",
+                    scanned_file_count,
+                    Some(total_file_count),
+                    Some(manifest_display_name(&context.manifest)),
+                );
                 continue;
             }
-            scanned_file_count += 1;
+            scanned_file_count = inspected_file_count;
+            progress.report(
+                "正在盘点 MOD 文件",
+                scanned_file_count,
+                Some(total_file_count),
+                Some(manifest_display_name(&context.manifest)),
+            );
             let source_path = match source_path_for_installed_file(context, file) {
                 Ok(path) => path,
                 Err(error) => {
@@ -5441,13 +5437,6 @@ fn scan_mod_cleanup_candidates_from(
                 exclude_signals: evidence.exclude_signals,
             });
         }
-
-        progress.report(
-            "正在盘点 MOD 文件",
-            index + 1,
-            Some(contexts.len()),
-            Some(manifest_display_name(&context.manifest)),
-        );
     }
 
     candidates.sort_by(|left, right| {
@@ -9530,7 +9519,6 @@ struct LibraryPaths {
     workspace_snapshot_path: PathBuf,
     staging_path: PathBuf,
     import_staging_path: PathBuf,
-    download_staging_path: PathBuf,
 }
 
 fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
@@ -9541,7 +9529,6 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
     let workspace_snapshot_path = mods_path.join("workspace-snapshot.json");
     let staging_path = mods_path.join("staging");
     let import_staging_path = staging_path.join("imports");
-    let download_staging_path = staging_path.join("downloads");
 
     Ok(LibraryPaths {
         software_data_path,
@@ -9551,7 +9538,6 @@ fn library_paths(_app: &tauri::AppHandle) -> Result<LibraryPaths, String> {
         workspace_snapshot_path,
         staging_path,
         import_staging_path,
-        download_staging_path,
     })
 }
 
@@ -9561,84 +9547,12 @@ fn ensure_library_directories(paths: &LibraryPaths) -> Result<(), String> {
         &paths.installed_path,
         &paths.staging_path,
         &paths.import_staging_path,
-        &paths.download_staging_path,
     ] {
         fs::create_dir_all(path)
             .map_err(|error| format!("Could not create directory {}: {error}", path.display()))?;
     }
 
     Ok(())
-}
-
-/// 为受控下载创建位于 Acumod 暂存目录内的最终文件和 `.part` 路径。
-pub fn prepare_download_staging_archive(
-    app: &tauri::AppHandle,
-    file_stem: &str,
-    extension: &str,
-) -> Result<(PathBuf, PathBuf), String> {
-    let paths = library_paths(app)?;
-    ensure_library_directories(&paths)?;
-    let extension = extension
-        .trim()
-        .trim_start_matches('.')
-        .to_ascii_lowercase();
-    if !matches!(extension.as_str(), "zip" | "7z" | "rar") {
-        return Err("Nexus 文件不是 Acumod 支持的 ZIP、7Z 或 RAR 压缩包。".to_string());
-    }
-    let safe_stem = file_stem
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .take(96)
-        .collect::<String>();
-    let safe_stem = safe_stem.trim_matches('-');
-    if safe_stem.is_empty() {
-        return Err("无法生成下载暂存文件名。".to_string());
-    }
-    let final_path = paths
-        .download_staging_path
-        .join(format!("{safe_stem}.{extension}"));
-    let part_path = paths
-        .download_staging_path
-        .join(format!("{safe_stem}.{extension}.part"));
-    Ok((final_path, part_path))
-}
-
-/// 删除下载暂存文件前再次校验边界，避免网络元数据影响任意本地路径。
-pub fn remove_download_staging_file(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
-    let paths = library_paths(app)?;
-    ensure_library_directories(&paths)?;
-    let root = paths
-        .download_staging_path
-        .canonicalize()
-        .map_err(|error| {
-            format!(
-                "无法确认下载暂存目录 {}：{error}",
-                paths.download_staging_path.display()
-            )
-        })?;
-    let normalized = if path.exists() {
-        path.canonicalize()
-            .map_err(|error| format!("无法确认下载暂存文件 {}：{error}", path.display()))?
-    } else {
-        path.to_path_buf()
-    };
-    if !normalized.starts_with(&root) {
-        return Err("拒绝清理 Acumod 下载暂存目录之外的文件。".to_string());
-    }
-    match fs::remove_file(&normalized) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!(
-            "无法清理下载暂存文件 {}：{error}",
-            normalized.display()
-        )),
-    }
 }
 
 fn load_or_initialize_mod_category_store(paths: &LibraryPaths) -> Result<ModCategoryStore, String> {

@@ -263,7 +263,7 @@ async function sendQuickPrompt(prompt: string) {
 
 function cleanupReviewGroups(review: AgentCleanupReview) {
   const groups = new Map<string, { modId: string; modName: string; items: AgentCleanupReviewItem[] }>();
-  for (const item of review.items) {
+  for (const item of review.items.filter((item) => item.recommendation !== "keep")) {
     const group = groups.get(item.modId) ?? {
       modId: item.modId,
       modName: item.modName,
@@ -529,7 +529,7 @@ watch(
           <strong>DeepSeek V4 已就绪</strong>
           <span>可以查询本地 MOD，也可以直接描述想要的 MOD，由助手联网搜索。</span>
           <div class="agent-quick-actions">
-            <button type="button" @click="sendQuickPrompt('扫描全部已安装 MOD 中可以清理的图片、说明和教程文件')">
+            <button type="button" @click="sendQuickPrompt('扫描全部已安装 MOD 中不影响 MOD 生效的冗余文件')">
               扫描可清理文件
             </button>
             <button type="button" @click="sendQuickPrompt('查看当前清理记录，并帮我恢复最近一次清理')">
@@ -584,7 +584,6 @@ watch(
             <p>{{ cleanup.review.message }}</p>
             <div class="cleanup-audit-summary">
               <span>扫描 {{ cleanup.review.scannedFileCount }}</span>
-              <span>本地保留 {{ cleanup.review.localKeepCount }}</span>
               <span>本地建议 {{ cleanup.review.localRemoveCount }}</span>
               <span>AcuAI 审核 {{ cleanup.review.aiReviewCount }}</span>
             </div>

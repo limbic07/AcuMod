@@ -108,7 +108,7 @@
         "当前整理全武器冰原中后期进阶的条件化建议，不复制配装页面、表格、图片或长文。",
         "攻略中的装备名称、技能和数值必须再由本地 game-facts 实体和关系查询核对；攻略不能覆盖事实包。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-story-progression",
@@ -122,7 +122,7 @@
       "notes": [
         "只保留主线推进原则；具体任务解锁条件必须由事实关系单独核验。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-beginner-guide",
@@ -136,7 +136,7 @@
       "notes": [
         "只保留新手准备和学习路线的原创摘要，不把单一武器或防卫队路线宣称为唯一答案。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-guiding-lands",
@@ -150,7 +150,7 @@
       "notes": [
         "只保留聚魔之地规划方法；具体区域等级、怪物和素材条件仍需由事实关系核验。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-fatalis-strategy",
@@ -164,7 +164,7 @@
       "notes": [
         "只保留黑龙战斗准备与场地处理的原创摘要；肉质、任务条件和数值不由攻略覆盖。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-great-sword",
@@ -178,7 +178,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-longsword",
@@ -192,7 +192,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-sword-and-shield",
@@ -206,7 +206,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-dual-blades",
@@ -220,7 +220,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-hammer",
@@ -234,7 +234,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-lance",
@@ -248,7 +248,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-gunlance",
@@ -262,7 +262,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-switch-axe",
@@ -276,7 +276,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-charge-blade",
@@ -290,7 +290,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-hunting-horn",
@@ -304,7 +304,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-insect-glaive",
@@ -318,7 +318,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-bow",
@@ -332,7 +332,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-light-bowgun",
@@ -346,7 +346,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-iceborne-build-heavy-bowgun",
@@ -360,7 +360,7 @@
       "notes": [
         "作者页面标注为 Monster Hunter World Walkthrough Team；只保留条件化的原创摘要。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "mhw-modding-atlas",
@@ -492,7 +492,7 @@
         "仅使用公开页面中的已分配任务名称和可结构化解锁条件；原始网页快照仅在本地开发目录保存，不打包或提交。",
         "主线顺序不是前置关系证据；只有页面明确的 Unlock Requirements 且任务名能唯一映射时才建立 requiresQuest。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-assigned-iceborne",
@@ -507,7 +507,7 @@
         "覆盖冰原已分配任务页面，使用边界与本体已分配任务来源相同。",
         "页面中无法唯一对应的故事进度或怪物名称保留为来源条件原文，不推断为稳定任务关系。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-optional-base",
@@ -522,7 +522,7 @@
         "仅使用公开页面中的可选任务名称和可结构化解锁条件；原始网页快照仅在本地开发目录保存，不打包或提交。",
         "任务英文名只在与本地稳定任务 ID 唯一精确对应时建立 requiresQuest 关系；捕获、发现、等级和 NPC 等条件始终保留来源页链接。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-optional-iceborne",
@@ -537,7 +537,7 @@
         "覆盖冰原可选任务页面，使用边界与本体可选任务来源相同。",
         "该来源不代表完整任务链；已分配、特别任务、活动任务和交货链仍需要独立的可核验来源。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-event-base",
@@ -552,7 +552,7 @@
         "用于确认本体活动任务属于活动开放制；只在英文名、任务类别和本地已核验任务资料同时一致时写入任务开放条件。",
         "页面列出的星级仅作为任务资料，不擅自转换为 HR 前置关系。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-event-iceborne",
@@ -566,7 +566,7 @@
       "notes": [
         "用于确认冰原活动任务属于活动开放制；不将活动页的目标怪物或星级猜测为剧情前置。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-arena",
@@ -580,7 +580,7 @@
       "notes": [
         "斗技场页面明确列出每项任务的解锁条件和目标怪物；构建时以类别、目标怪物和已交叉验证的本地任务资料共同定位。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "game8-challenge",
@@ -594,7 +594,7 @@
       "notes": [
         "挑战任务页面明确列出 HR/MR 门槛；仅在任务类别和英文名或目标怪物能安全对应时写入等级条件。"
       ],
-      "licenseStatus": "notAudited"
+      "licenseStatus": "requiresPermission"
     },
     {
       "id": "acumod-validated-modding",

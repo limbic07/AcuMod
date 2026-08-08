@@ -140,6 +140,14 @@ onMounted(() => {
       <small>知识包独立发布，不绑定主程序安装包；一个 ZIP 必须同时包含游戏事实、MOD 技术、攻略和 Acumod 说明四个 `.acukb` 文件。</small>
     </form>
 
+    <aside class="knowledge-disclaimer" aria-label="知识库本地开发使用声明">
+      <strong>本地开发使用声明</strong>
+      <p>
+        当前知识包仅供个人、本地开发与研究测试，不作为公开下载内容或主程序内置数据发布。来源内容可能受其权利人和平台条款保护；使用者应自行确认其导入、整理或使用的资料具有合法来源与必要权限。
+      </p>
+      <p>本声明用于明确使用边界，不授予第三方内容许可，也不替代适用法律或平台条款。</p>
+    </aside>
+
     <div v-if="status?.packs.length" class="pack-list">
       <article v-for="pack in status.packs" :key="`${pack.packId}:${pack.sha256}`" class="pack-row">
         <div class="pack-state" :class="{ unhealthy: !pack.healthy }" aria-hidden="true"></div>
@@ -257,6 +265,25 @@ onMounted(() => {
   color: #203b34;
   background: #ffffff;
   font: inherit;
+}
+
+.knowledge-disclaimer {
+  padding: 12px 14px;
+  border: 1px solid #e2d3a8;
+  border-radius: 5px;
+  color: #685724;
+  background: #fffdf4;
+  font-size: 0.86rem;
+}
+
+.knowledge-disclaimer strong,
+.knowledge-disclaimer p {
+  margin: 0;
+}
+
+.knowledge-disclaimer p {
+  margin-top: 6px;
+  line-height: 1.55;
 }
 
 .pack-list {

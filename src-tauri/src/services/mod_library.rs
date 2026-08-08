@@ -1734,9 +1734,12 @@ pub fn import_legacy_box_mods_with_progress(
         let existing = match find_installed_mod_by_legacy_source(&installed_contexts, &source_ref)?
         {
             Some(existing) => Some(existing),
-            None => find_installed_mod_by_content(
+            // 狩技盒子的 files/ 已经是相对游戏根目录的部署结构；其中 DLL 等加载器
+            // 不会位于 nativePC，内容关联时也必须使用同一映射，避免整批导入中断。
+            None => find_installed_mod_by_content_with_options(
                 &installed_contexts,
                 legacy_box::import_source_files_path(&source),
+                true,
                 progress,
             )?,
         };
@@ -1744,7 +1747,7 @@ pub fn import_legacy_box_mods_with_progress(
             Some(result) => Ok(result),
             None => install_mod_from_folder_into_with_options_and_progress_allow_same_name(
                 path_to_string(legacy_box::import_source_files_path(&source)),
-                false,
+                true,
                 &paths.installed_path,
                 Some(name.clone()),
                 Some(path_to_string(legacy_box::import_source_module_path(
@@ -4031,14 +4034,6 @@ fn find_installed_mod_by_legacy_source(
         .cloned();
 
     context.map(existing_mod_install_result).transpose()
-}
-
-fn find_installed_mod_by_content(
-    contexts: &[InstalledManifestContext],
-    source_path: &Path,
-    progress: &OperationReporter,
-) -> Result<Option<ModInstallResult>, String> {
-    find_installed_mod_by_content_with_options(contexts, source_path, false, progress)
 }
 
 fn find_installed_mod_by_content_with_options(
@@ -10227,7 +10222,7 @@ mod tests {
         build_mod_conflict_report_from_workspace_index, build_workspace_mod_index,
         clear_import_staging, collect_nested_archives, copy_import_source_directory,
         create_mod_branch_group_from, disable_mod_from, effective_installed_files_for_context,
-        enable_mod_from, find_installed_mod_by_content, get_mod_conflict_report_from,
+        enable_mod_from, find_installed_mod_by_content_with_options, get_mod_conflict_report_from,
         install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
         installed_mod_list_from_contexts, list_installed_mods_from, load_all_installed_manifests,
         load_installed_manifest, load_normalized_mod_branch_groups,
@@ -10412,6 +10407,32 @@ mod tests {
     }
 
     #[test]
+    fn content_matching_accepts_game_root_files_when_the_caller_allows_it() {
+        let root = temp_root("game_root_content_matching");
+        write_file(&root.join("lua_framework").join("scripts.lua"));
+        write_file(&root.join("hid.dll"));
+
+        let blocked = find_installed_mod_by_content_with_options(
+            &[],
+            &root,
+            false,
+            &OperationReporter::default(),
+        );
+        assert!(blocked.is_err());
+
+        let matched = find_installed_mod_by_content_with_options(
+            &[],
+            &root,
+            true,
+            &OperationReporter::default(),
+        )
+        .unwrap();
+        assert!(matched.is_none());
+
+        cleanup(root);
+    }
+
+    #[test]
     fn reports_ambiguous_same_depth_candidates() {
         let root = temp_root("ambiguous");
         write_file(
@@ -10506,10 +10527,14 @@ mod tests {
         let installed =
             install_mod_from_folder_into(root_to_string(&source), false, &installed_root).unwrap();
         let contexts = load_all_installed_manifests(&installed_root).unwrap();
-        let matched =
-            find_installed_mod_by_content(&contexts, &duplicate, &OperationReporter::default())
-                .unwrap()
-                .expect("相同内容应从预加载索引中找到");
+        let matched = find_installed_mod_by_content_with_options(
+            &contexts,
+            &duplicate,
+            false,
+            &OperationReporter::default(),
+        )
+        .unwrap()
+        .expect("相同内容应从预加载索引中找到");
 
         assert_eq!(matched.mod_id, installed.mod_id);
         assert!(matched.already_installed);

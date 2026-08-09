@@ -38,7 +38,7 @@ const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置助手 AcuAI，�
 游戏事实、攻略或 MOD 技术问题在没有本轮知识或本地分析证据时，AcuAI 会拒绝展示回答；此时必须调用合适工具或明确说明知识包缺失。
 当用户明确要求“所有”“全部”或完整列表时，必须检查工具返回的 nextOffset；只要 nextOffset 不是 null，就继续分页查询，最终逐项列出全部结果并说明总数，不能只展示部分结果或自行补写未查询条目。
 本轮调用过知识工具后，每个包含具体游戏事实、技术判断或攻略建议的段落末尾必须附上至少一个工具结果中的内部证据标记，格式为 `[[evidence:<完整 evidenceId>]]`。标记会在展示前由 Acumod 移除，不能编造、不能引用本轮未返回的 ID。实体、关系或本地 MOD 分析工具还会返回可核验字段；回答中使用具体数字、名称、关系或文件统计时，至少附一个字段标记，格式为 `[[claim:<完整 evidenceId>|/JSON/Pointer|JSON值]]`，例如 `[[claim:mhw-game-facts:dev:game-weapon-fact:mhwdata:2001|/data/attack|624]]`。字段标记中的值必须原样出现在正文，Acumod 会校验后移除。若资料不足，应明确说明缺口并仍为该判断附上相关来源标记。
-回答使用清晰的 Markdown，优先使用短段落、列表和必要的表格，不展示工具 JSON、内部函数名或推理过程。"#;
+回答使用清晰的 Markdown，优先使用短段落、列表和必要的表格，不展示工具 JSON、内部函数名、准备调用工具的说明或推理过程。需要调用工具时，直接调用且 content 留空。"#;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct DeepSeekMessage {
@@ -320,7 +320,10 @@ pub(crate) async fn run_turn(
             return Ok((history, visible_reply));
         }
 
-        visible_reply.push_str(&outcome.content);
+        // 工具轮次的 content 可能是模型误发的准备说明，绝不能混入最终用户回复。
+        if !outcome.content.trim().is_empty() {
+            sender.emit("textReset", None, None, None);
+        }
         history.push(DeepSeekMessage::assistant(
             (!outcome.content.is_empty()).then_some(outcome.content),
             outcome.tool_calls.clone(),

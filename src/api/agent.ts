@@ -86,6 +86,7 @@ export interface AgentActionResult {
 
 export type AgentEventKind =
   | "started"
+  | "textReset"
   | "textDelta"
   | "toolStarted"
   | "toolFinished"

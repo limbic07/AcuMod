@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
 import MarkdownIt from "markdown-it";
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
@@ -86,6 +86,7 @@ const downloadWatchDirectory = ref("");
 const detectedDownloads = ref<DetectedDownload[]>([]);
 const importingDownloadWatchId = ref("");
 const messageList = ref<HTMLElement | null>(null);
+const shouldAutoScroll = ref(true);
 let nextMessageId = 1;
 let stopDownloadWatchListener: (() => void) | undefined;
 const markdown = new MarkdownIt({
@@ -169,7 +170,7 @@ function downloadSourceLabel(sourceUrl: string) {
 
 async function openModSourceAndWaitForDownload(sourceUrl: string) {
   if (!downloadWatchDirectory.value) {
-    const selected = await open({
+    const selected = await openDirectoryDialog({
       title: "选择浏览器下载 MOD 使用的目录",
       directory: true,
       multiple: false,
@@ -196,6 +197,7 @@ function handleDownloadWatch(event: DownloadWatchEvent) {
         error: "",
       });
     }
+    statusMessage.value = event.message;
   } else {
     statusMessage.value = event.message;
   }
@@ -214,8 +216,12 @@ async function importDetectedDownload(download: DetectedDownload) {
       (item) => item.watchId !== download.watchId,
     );
     if (outcome.status === "ambiguous") {
+      statusMessage.value = "已识别下载归档，需要选择导入分支，请在导入页面继续。";
       emit("archiveImportReady", outcome);
     } else {
+      const modName = outcome.installResult?.name ?? download.fileName;
+      statusMessage.value =
+        outcome.status === "alreadyInstalled" ? `MOD 已在库中：${modName}` : `已成功导入 MOD：${modName}`;
       emit("workspaceChanged");
     }
   } catch (value) {
@@ -225,9 +231,15 @@ async function importDetectedDownload(download: DetectedDownload) {
   }
 }
 
-async function scrollToLatest() {
+function handleMessageListScroll(event: Event) {
+  const list = event.currentTarget as HTMLElement;
+  // 用户主动上滑阅读时，不再让后续流式片段抢回滚动位置。
+  shouldAutoScroll.value = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+}
+
+async function scrollToLatest(force = false) {
   await nextTick();
-  if (messageList.value) {
+  if (messageList.value && (force || shouldAutoScroll.value)) {
     messageList.value.scrollTop = messageList.value.scrollHeight;
   }
 }
@@ -245,6 +257,10 @@ async function loadSettings() {
 }
 
 function applyAgentEvent(event: AgentEvent, assistant: ChatMessage) {
+  if (event.kind === "textReset") {
+    assistant.text = "";
+    assistant.renderedHtml = "";
+  }
   if (event.kind === "textDelta" && event.text) {
     assistant.text += event.text;
     void scrollToLatest();
@@ -336,7 +352,7 @@ async function sendMessage() {
   error.value = "";
   statusMessage.value = "正在连接 DeepSeek V4";
   isSending.value = true;
-  await scrollToLatest();
+  await scrollToLatest(true);
 
   try {
     const result = await startAgentTurn(message, (event) => {
@@ -608,7 +624,7 @@ onBeforeUnmount(() => {
 
 <template>
   <button
-    v-if="!open"
+    v-if="!props.open"
     type="button"
     class="agent-launcher"
     title="打开 AcuAI"
@@ -664,7 +680,7 @@ onBeforeUnmount(() => {
           <p v-if="download.error" class="plan-error">{{ download.error }}</p>
         </div>
       </section>
-      <div ref="messageList" class="message-list" aria-live="polite">
+      <div ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageListScroll">
         <div v-if="messages.length === 0" class="welcome-message">
           <strong>DeepSeek V4 已就绪</strong>
           <span>可以查询本地 MOD，也可以直接描述想要的 MOD，由助手联网搜索。</span>
@@ -1402,6 +1418,7 @@ onBeforeUnmount(() => {
 .message-list {
   display: flex;
   min-height: 0;
+  min-width: 0;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 14px;
@@ -1435,6 +1452,7 @@ onBeforeUnmount(() => {
 
 .chat-message > p,
 .message-content {
+  min-width: 0;
   padding: 9px 11px;
   border: 1px solid #dce6e2;
   border-radius: 6px;
@@ -1453,7 +1471,8 @@ onBeforeUnmount(() => {
 
 .markdown-body {
   min-width: 0;
-  overflow-x: auto;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body :deep(:first-child) {
@@ -1501,7 +1520,9 @@ onBeforeUnmount(() => {
 }
 
 .markdown-body :deep(pre) {
-  overflow-x: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   padding: 8px;
   border: 1px solid #d7e2de;
   border-radius: 4px;
@@ -1527,9 +1548,10 @@ onBeforeUnmount(() => {
 
 .markdown-body :deep(table) {
   display: table;
-  width: max-content;
-  min-width: 100%;
-  max-width: none;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
@@ -1539,6 +1561,8 @@ onBeforeUnmount(() => {
   border: 1px solid #ccd9d4;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .agent-status,

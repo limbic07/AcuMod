@@ -129,6 +129,7 @@ const isAnalyzingMod = ref(false);
 let modAnalysisRequestToken = 0;
 const selectedRemapGroupKey = ref("");
 const selectedRemapTargetId = ref("");
+const remapTargetSearchQuery = ref("");
 const manualSlingerTargetId = ref("");
 const remapSaveWarnings = ref<string[]>([]);
 const remapError = ref("");
@@ -721,6 +722,32 @@ const selectedConflictGroup = computed(() =>
 const selectedRemapGroup = computed(() =>
   remapDetails.value?.groups.find((group) => group.groupKey === selectedRemapGroupKey.value),
 );
+const filteredRemapTargets = computed(() => {
+  const group = selectedRemapGroup.value;
+  if (!group) {
+    return [];
+  }
+  const query = remapTargetSearchQuery.value.trim().toLocaleLowerCase();
+  if (!query) {
+    return group.targets;
+  }
+  return group.targets.filter((target) => {
+    // 保留当前选择，避免筛选后原生 select 丢失已选值。
+    if (target.targetId === selectedRemapTargetId.value) {
+      return true;
+    }
+    const searchableText = [
+      target.targetId,
+      target.modelId,
+      ...target.displayNames,
+      ...target.displayNames.map((name) => localizedGameText(name)),
+      remapTargetOptionLabel(group, target.targetId),
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    return searchableText.includes(query);
+  });
+});
 const visibleRemapWarnings = computed(() =>
   [...new Set([...(remapDetails.value?.warnings ?? []), ...remapSaveWarnings.value])],
 );
@@ -2046,6 +2073,7 @@ function remapGroupSourceLabel(group: ModelRemapGroup) {
 
 function selectRemapGroup(groupKey: string) {
   selectedRemapGroupKey.value = groupKey;
+  remapTargetSearchQuery.value = "";
   const group = remapDetails.value?.groups.find((candidate) => candidate.groupKey === groupKey);
   const savedTargetId = group?.selectedTargetId ?? "";
   const isKnownTarget = group?.targets.some((target) => target.targetId === savedTargetId) ?? false;
@@ -2157,6 +2185,7 @@ function closeRemapManager(force = false) {
   remapDetails.value = null;
   selectedRemapGroupKey.value = "";
   selectedRemapTargetId.value = "";
+  remapTargetSearchQuery.value = "";
   manualSlingerTargetId.value = "";
   remapSaveWarnings.value = [];
   remapError.value = "";
@@ -3296,11 +3325,24 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="remap-fields simplified-remap-fields">
+          <label class="remap-target-search">
+            <span>搜索目标</span>
+            <input
+              v-model="remapTargetSearchQuery"
+              type="search"
+              :disabled="isApplyingRemap || remapDetails.enabled"
+              placeholder="名称或模型 ID"
+            />
+            <small v-if="remapTargetSearchQuery">
+              显示 {{ filteredRemapTargets.length }} / {{ selectedRemapGroup.targets.length }} 个目标
+            </small>
+          </label>
+
           <label>
             <span>替换模型</span>
             <select :value="selectedRemapTargetId" :disabled="isApplyingRemap || remapDetails.enabled" @change="updateRemapTarget">
               <option value="">恢复默认</option>
-              <option v-for="target in selectedRemapGroup.targets" :key="target.targetId" :value="target.targetId">
+              <option v-for="target in filteredRemapTargets" :key="target.targetId" :value="target.targetId">
                 {{ remapTargetOptionLabel(selectedRemapGroup, target.targetId) }}
               </option>
               <option v-if="selectedRemapGroup.allowsManualTarget" :value="MANUAL_SLINGER_TARGET">
@@ -4450,6 +4492,11 @@ button.danger:hover {
   color: #61756f;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.remap-target-search small {
+  color: #61756f;
+  font-size: 0.74rem;
 }
 
 .remap-group-tabs {

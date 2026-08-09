@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { open } from "@tauri-apps/plugin-dialog";
 import MarkdownIt from "markdown-it";
-import { nextTick, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   cancelAgentActionPlan,
   clearAgentSession,
@@ -17,8 +18,13 @@ import {
   type AgentKnowledgeEvidence,
   type AgentSettings,
 } from "../api/agent";
-import { openModCleanupCandidateFolder } from "../api/modLibrary";
+import { installModFromArchive, openModCleanupCandidateFolder } from "../api/modLibrary";
 import type { ModArchiveImportOutcome } from "../api/modLibrary";
+import {
+  listenDownloadWatch,
+  startDownloadWatch,
+  type DownloadWatchEvent,
+} from "../api/downloadWatch";
 
 interface ChatMessage {
   id: number;
@@ -45,6 +51,15 @@ interface VisibleCleanupReview {
   error: string;
 }
 
+interface DetectedDownload {
+  watchId: string;
+  sourceUrl: string;
+  filePath: string;
+  fileName: string;
+  sizeBytes: number;
+  error: string;
+}
+
 const props = defineProps<{
   open: boolean;
 }>();
@@ -67,8 +82,12 @@ const isSending = ref(false);
 const activePlanId = ref("");
 const activeCleanupReviewId = ref("");
 const openingCleanupCandidateId = ref("");
+const downloadWatchDirectory = ref("");
+const detectedDownloads = ref<DetectedDownload[]>([]);
+const importingDownloadWatchId = ref("");
 const messageList = ref<HTMLElement | null>(null);
 let nextMessageId = 1;
+let stopDownloadWatchListener: (() => void) | undefined;
 const markdown = new MarkdownIt({
   html: false,
   breaks: true,
@@ -110,9 +129,99 @@ async function openMarkdownLink(event: MouseEvent) {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("不支持的链接协议");
     }
-    await openUrl(url.toString());
+    // 知识库证据链接只用于阅读资料，不应被误当成下载入口创建监听会话。
+    const isKnowledgeEvidenceLink = Boolean(target?.closest(".knowledge-evidence-card"));
+    if (!isKnowledgeEvidenceLink && isModSourceUrl(url)) {
+      await openModSourceAndWaitForDownload(url.toString());
+    } else {
+      await openUrl(url.toString());
+    }
   } catch {
     error.value = "无法打开回答中的链接。";
+  }
+}
+
+function isModSourceUrl(url: URL) {
+  return new Set([
+    "nexusmods.com",
+    "www.nexusmods.com",
+    "moddb.com",
+    "www.moddb.com",
+    "github.com",
+    "www.curseforge.com",
+    "caimogu.cc",
+    "www.caimogu.cc",
+    "caimogu.org",
+    "www.caimogu.org",
+    "mod.3dmgame.com",
+    "dl.3dmgame.com",
+  ]).has(url.hostname.toLowerCase());
+}
+
+/** 下载发现卡片只展示来源域名，避免较长链接挤占操作区域。 */
+function downloadSourceLabel(sourceUrl: string) {
+  try {
+    return new URL(sourceUrl).hostname;
+  } catch {
+    return "来源页面";
+  }
+}
+
+async function openModSourceAndWaitForDownload(sourceUrl: string) {
+  if (!downloadWatchDirectory.value) {
+    const selected = await open({
+      title: "选择浏览器下载 MOD 使用的目录",
+      directory: true,
+      multiple: false,
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+    downloadWatchDirectory.value = selected;
+  }
+  const watch = await startDownloadWatch(downloadWatchDirectory.value, sourceUrl);
+  statusMessage.value = watch.message;
+  await openUrl(sourceUrl);
+}
+
+function handleDownloadWatch(event: DownloadWatchEvent) {
+  if (event.status === "found" && event.filePath && event.fileName && event.sizeBytes !== null) {
+    if (!detectedDownloads.value.some((item) => item.watchId === event.watchId)) {
+      detectedDownloads.value.push({
+        watchId: event.watchId,
+        sourceUrl: event.sourceUrl,
+        filePath: event.filePath,
+        fileName: event.fileName,
+        sizeBytes: event.sizeBytes,
+        error: "",
+      });
+    }
+  } else {
+    statusMessage.value = event.message;
+  }
+  void scrollToLatest();
+}
+
+async function importDetectedDownload(download: DetectedDownload) {
+  if (importingDownloadWatchId.value) {
+    return;
+  }
+  importingDownloadWatchId.value = download.watchId;
+  download.error = "";
+  try {
+    const outcome = await installModFromArchive(download.filePath, false);
+    detectedDownloads.value = detectedDownloads.value.filter(
+      (item) => item.watchId !== download.watchId,
+    );
+    if (outcome.status === "ambiguous") {
+      emit("archiveImportReady", outcome);
+    } else {
+      emit("workspaceChanged");
+    }
+  } catch (value) {
+    download.error = visibleError(value);
+  } finally {
+    importingDownloadWatchId.value = "";
   }
 }
 
@@ -481,6 +590,20 @@ watch(
   },
   { immediate: true },
 );
+
+onMounted(() => {
+  void listenDownloadWatch(handleDownloadWatch)
+    .then((unlisten) => {
+      stopDownloadWatchListener = unlisten;
+    })
+    .catch(() => {
+      // Browser-only Vite development has no Tauri event API.
+    });
+});
+
+onBeforeUnmount(() => {
+  stopDownloadWatchListener?.();
+});
 </script>
 
 <template>
@@ -524,6 +647,23 @@ watch(
       <button type="button" @click="openSettings">前往设置</button>
     </div>
     <template v-else>
+      <section v-if="detectedDownloads.length" class="download-watch-card">
+        <strong>发现浏览器下载文件</strong>
+        <div v-for="download in detectedDownloads" :key="download.watchId">
+          <span>
+            {{ download.fileName }} · {{ formatFileSize(download.sizeBytes) }}
+            · 来源：{{ downloadSourceLabel(download.sourceUrl) }}
+          </span>
+          <button
+            type="button"
+            :disabled="Boolean(importingDownloadWatchId)"
+            @click="importDetectedDownload(download)"
+          >
+            {{ importingDownloadWatchId === download.watchId ? "正在导入" : "导入此文件" }}
+          </button>
+          <p v-if="download.error" class="plan-error">{{ download.error }}</p>
+        </div>
+      </section>
       <div ref="messageList" class="message-list" aria-live="polite">
         <div v-if="messages.length === 0" class="welcome-message">
           <strong>DeepSeek V4 已就绪</strong>
@@ -946,6 +1086,48 @@ watch(
   color: #263d36;
   background: #f7faf8;
   font-size: 0.8rem;
+}
+
+.download-watch-card {
+  display: grid;
+  gap: 9px;
+  margin: 10px 12px 0;
+  padding: 11px;
+  border: 1px solid #9fc8b9;
+  border-radius: 7px;
+  background: #f1faf6;
+}
+
+.download-watch-card > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #385f52;
+  font-size: 0.86rem;
+}
+
+.download-watch-card p {
+  width: 100%;
+  margin: 0;
+}
+
+.download-watch-card button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #24745b;
+  border-radius: 4px;
+  color: #ffffff;
+  background: #24745b;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.download-watch-card button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .cleanup-review-card p {

@@ -25,6 +25,7 @@ pub fn run() {
             commands::agent::start_agent_turn,
             commands::agent::test_agent_connection,
             commands::app::get_app_info,
+            commands::download_watch::start_download_watch,
             commands::game::detect_game_directory,
             commands::game::get_game_directory_status,
             commands::game::get_game_text_settings,

@@ -187,7 +187,8 @@ async function openModSourceAndWaitForDownload(sourceUrl: string) {
 
 function handleDownloadWatch(event: DownloadWatchEvent) {
   if (event.status === "found" && event.filePath && event.fileName && event.sizeBytes !== null) {
-    if (!detectedDownloads.value.some((item) => item.watchId === event.watchId)) {
+    // 同一文件可能被两个来源点击会话同时发现；文件路径才是用户需要确认的唯一对象。
+    if (!detectedDownloads.value.some((item) => item.filePath === event.filePath)) {
       detectedDownloads.value.push({
         watchId: event.watchId,
         sourceUrl: event.sourceUrl,
@@ -202,6 +203,12 @@ function handleDownloadWatch(event: DownloadWatchEvent) {
     statusMessage.value = event.message;
   }
   void scrollToLatest();
+}
+
+function dismissDetectedDownloads() {
+  // 仅移除界面提示，绝不触碰浏览器下载文件或 MOD 库内容。
+  detectedDownloads.value = [];
+  statusMessage.value = "已关闭下载文件提示。";
 }
 
 async function importDetectedDownload(download: DetectedDownload) {
@@ -664,7 +671,18 @@ onBeforeUnmount(() => {
     </div>
     <template v-else>
       <section v-if="detectedDownloads.length" class="download-watch-card">
-        <strong>发现浏览器下载文件</strong>
+        <header class="download-watch-card__heading">
+          <strong>发现浏览器下载文件</strong>
+          <button
+            type="button"
+            class="download-watch-card__close"
+            title="关闭下载文件提示"
+            aria-label="关闭下载文件提示"
+            @click="dismissDetectedDownloads"
+          >
+            ×
+          </button>
+        </header>
         <div v-for="download in detectedDownloads" :key="download.watchId">
           <span>
             {{ download.fileName }} · {{ formatFileSize(download.sizeBytes) }}
@@ -1122,6 +1140,30 @@ onBeforeUnmount(() => {
   gap: 8px;
   color: #385f52;
   font-size: 0.86rem;
+}
+
+.download-watch-card__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.download-watch-card .download-watch-card__close {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: transparent;
+  color: #4d6c60;
+  background: transparent;
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.download-watch-card .download-watch-card__close:hover {
+  color: #1e3d32;
+  background: #dcefe7;
 }
 
 .download-watch-card p {

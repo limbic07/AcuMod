@@ -50,6 +50,46 @@ pub struct ModAnalysisReport {
     pub message: String,
 }
 
+/// MOD 库刷新用的轻量特效汇总：只依据部署相对路径，不读取文件内容或写入清单。
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectRecognitionSummary {
+    pub effect_file_count: usize,
+    pub local_weapon_effect_count: usize,
+    pub global_weapon_effect_count: usize,
+    pub global_hit_effect_count: usize,
+    pub global_critical_effect_count: usize,
+    pub armor_effect_count: usize,
+    pub unclassified_effect_count: usize,
+}
+
+/// 根据已导入 MOD 的部署路径重建特效汇总；用于库刷新时让识别结果立即可见。
+pub fn summarize_effect_paths<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
+) -> EffectRecognitionSummary {
+    let mut summary = EffectRecognitionSummary::default();
+    for path in paths {
+        let extension = file_extension(path);
+        if !matches!(extension.as_str(), "efx" | "epv3" | "evwp") {
+            continue;
+        }
+        summary.effect_file_count += 1;
+        match classify_effect_role(path, &extension).map(|rule| rule.role) {
+            Some("localWeaponEffect") | Some("localWeaponEffectBinding") => {
+                summary.local_weapon_effect_count += 1;
+            }
+            Some("globalWeaponEffectBinding") | Some("globalWeaponEffectMapping") => {
+                summary.global_weapon_effect_count += 1;
+            }
+            Some("globalHitEffect") => summary.global_hit_effect_count += 1,
+            Some("globalCriticalEffect") => summary.global_critical_effect_count += 1,
+            Some("armorEffectBinding") => summary.armor_effect_count += 1,
+            _ => summary.unclassified_effect_count += 1,
+        }
+    }
+    summary
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyzedModFile {
@@ -1572,5 +1612,21 @@ mod tests {
             super::classify_role("nativePC/vfx/efx/wp_TU/two/two010/two010_003.efx").role,
             "localWeaponEffect"
         );
+    }
+
+    #[test]
+    fn summarizes_effect_paths_for_library_refresh_without_reading_file_contents() {
+        let summary = super::summarize_effect_paths([
+            "nativePC/vfx/efx/cm/cm_all/cm_critical_000.efx",
+            "nativePC/wp/two/two010/epv/two010.epv3",
+            "nativePC/wp/two/epv/bs_two.epv3",
+            "nativePC/wp/two/two010/mod/two010.evwp",
+            "nativePC/weapon/ignored.mod3",
+        ]);
+        assert_eq!(summary.effect_file_count, 4);
+        assert_eq!(summary.global_critical_effect_count, 1);
+        assert_eq!(summary.local_weapon_effect_count, 1);
+        assert_eq!(summary.global_weapon_effect_count, 2);
+        assert_eq!(summary.unclassified_effect_count, 0);
     }
 }

@@ -208,6 +208,17 @@ export interface InstalledModSummary {
   originalModelReplacements: ModelReplacement[];
   modelRemapCount: number;
   effectRemapCount: number;
+  effectRecognition: EffectRecognitionSummary;
+}
+
+export interface EffectRecognitionSummary {
+  effectFileCount: number;
+  localWeaponEffectCount: number;
+  globalWeaponEffectCount: number;
+  globalHitEffectCount: number;
+  globalCriticalEffectCount: number;
+  armorEffectCount: number;
+  unclassifiedEffectCount: number;
 }
 
 export interface ModelRemapTarget {

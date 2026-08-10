@@ -22,6 +22,7 @@ use super::effect_remap::{
     EffectRemapGroup, EffectRemapSelection,
 };
 use super::legacy_box::{self, LegacyBoxImportItem, LegacyBoxImportResult};
+use super::mod_analysis::{summarize_effect_paths, EffectRecognitionSummary};
 use super::mod_state_sync::{
     self, ModStateSyncFile, ModStateSyncInput, ModStateSyncPlan, ModStateSyncPriorityEdge,
     ModStateSyncResult,
@@ -313,6 +314,7 @@ pub struct InstalledModSummary {
     pub original_model_replacements: Vec<ModelReplacement>,
     pub model_remap_count: usize,
     pub effect_remap_count: usize,
+    pub effect_recognition: EffectRecognitionSummary,
 }
 
 /// MOD 分析服务的受控输入。绝对路径只在 Rust 内部使用，不会序列化给前端或模型。
@@ -4757,6 +4759,12 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             .iter()
             .map(|category| category.id.clone())
             .collect();
+        let effect_recognition = summarize_effect_paths(
+            manifest
+                .files
+                .iter()
+                .map(|file| file.deploy_relative_path.as_str()),
+        );
 
         mods.push(InstalledModSummary {
             id: manifest.id.clone(),
@@ -4780,6 +4788,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             original_model_replacements,
             model_remap_count: manifest.model_remaps.len(),
             effect_remap_count: manifest.effect_remaps.len(),
+            effect_recognition,
         });
     }
 
@@ -4868,6 +4877,12 @@ fn installed_mod_list_from_contexts(
             original_model_replacements,
             model_remap_count: manifest.model_remaps.len(),
             effect_remap_count: manifest.effect_remaps.len(),
+            effect_recognition: summarize_effect_paths(
+                manifest
+                    .files
+                    .iter()
+                    .map(|file| file.deploy_relative_path.as_str()),
+            ),
         });
         progress.report(
             "正在整理 MOD 列表",

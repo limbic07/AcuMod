@@ -440,6 +440,22 @@ function hasRemappableTarget(mod: InstalledModSummary) {
   return mod.originalModelReplacements.some((replacement) => supportedKinds.has(replacement.modelKind));
 }
 
+/** 刷新时由 Rust 重新按路径计算，列表只负责压缩成用户可读的风险摘要。 */
+function effectRecognitionSummary(mod: InstalledModSummary) {
+  const summary = mod.effectRecognition;
+  if (!summary.effectFileCount) {
+    return "特效：无特效资源";
+  }
+  const parts: string[] = [];
+  if (summary.localWeaponEffectCount) parts.push(`本地武器 ${summary.localWeaponEffectCount}`);
+  if (summary.globalWeaponEffectCount) parts.push(`全局武器 ${summary.globalWeaponEffectCount}`);
+  if (summary.globalCriticalEffectCount) parts.push(`会心 ${summary.globalCriticalEffectCount}`);
+  if (summary.globalHitEffectCount) parts.push(`通用命中 ${summary.globalHitEffectCount}`);
+  if (summary.armorEffectCount) parts.push(`防具 ${summary.armorEffectCount}`);
+  if (summary.unclassifiedEffectCount) parts.push(`待确认 ${summary.unclassifiedEffectCount}`);
+  return `特效：${parts.join("、") || `待确认 ${summary.effectFileCount}`}`;
+}
+
 function isEditing(mod: InstalledModSummary, field: EditableField) {
   return editingCell.value?.modId === mod.id && editingCell.value.field === field;
 }
@@ -1263,6 +1279,7 @@ watch(
                 </span>
               </template>
               <span v-else>未识别到游戏内替换目标</span>
+              <small class="effect-recognition-summary">{{ effectRecognitionSummary(mod) }}</small>
             </td>
 
             <td class="mod-note">
@@ -2279,6 +2296,15 @@ watch(
   color: #61756f;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.effect-recognition-summary {
+  display: block;
+  margin-top: 5px;
+  color: #587068;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .mod-actions {

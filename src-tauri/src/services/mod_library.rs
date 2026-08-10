@@ -17,6 +17,10 @@ use tauri_plugin_opener::OpenerExt;
 use crate::operations::OperationReporter;
 use crate::storage::config;
 
+use super::effect_remap::{
+    build_effect_remap_groups, build_effective_effect_remap_paths, updated_effect_remap_selections,
+    EffectRemapGroup, EffectRemapSelection,
+};
 use super::legacy_box::{self, LegacyBoxImportItem, LegacyBoxImportResult};
 use super::mod_state_sync::{
     self, ModStateSyncFile, ModStateSyncInput, ModStateSyncPlan, ModStateSyncPriorityEdge,
@@ -33,7 +37,7 @@ use super::model_remap::{
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
-const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 17;
+const CURRENT_MOD_MANIFEST_SCHEMA_VERSION: u32 = 18;
 const CURRENT_MODEL_RECOGNITION_SCHEMA_VERSION: u32 = 16;
 const WORKSPACE_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
@@ -308,6 +312,7 @@ pub struct InstalledModSummary {
     pub model_replacements: Vec<ModelReplacement>,
     pub original_model_replacements: Vec<ModelReplacement>,
     pub model_remap_count: usize,
+    pub effect_remap_count: usize,
 }
 
 /// MOD 分析服务的受控输入。绝对路径只在 Rust 内部使用，不会序列化给前端或模型。
@@ -386,6 +391,44 @@ pub struct ModRemapApplyResult {
     pub changed_file_count: usize,
     pub mrl3_rewrite_count: usize,
     pub evam_rewrite_count: usize,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModEffectRemapDetails {
+    pub mod_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub groups: Vec<EffectRemapGroup>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModEffectRemapPlan {
+    pub mod_id: String,
+    pub name: String,
+    pub group_key: String,
+    pub source_label: String,
+    pub target_id: Option<String>,
+    pub target_label: String,
+    pub changed_file_count: usize,
+    pub files: Vec<ModRemapPlanFile>,
+    pub warnings: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModEffectRemapApplyResult {
+    pub mod_id: String,
+    pub name: String,
+    pub group_key: String,
+    pub target_id: Option<String>,
+    pub selection_count: usize,
+    pub changed_file_count: usize,
     pub message: String,
 }
 
@@ -751,6 +794,9 @@ struct InstalledModManifest {
     model_replacements: Vec<ModelReplacement>,
     #[serde(default)]
     model_remaps: Vec<ModelRemapSelection>,
+    /// 特效改绑仅保存被兼容索引验证过的本地武器槽位选择。
+    #[serde(default)]
+    effect_remaps: Vec<EffectRemapSelection>,
     /// AI 清理只改变部署选择；本地库中的原始文件永不删除。
     #[serde(default)]
     deployment_exclusions: Vec<ModDeploymentExclusion>,
@@ -3449,6 +3495,55 @@ pub fn apply_mod_remap_with_progress(
     Ok(result)
 }
 
+/// 读取受兼容索引约束的本地武器特效改绑项。
+pub fn get_mod_effect_remap_details(
+    app: &tauri::AppHandle,
+    mod_id: String,
+) -> Result<ModEffectRemapDetails, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    get_mod_effect_remap_details_from(&paths.installed_path, &mod_id)
+}
+
+pub fn preview_mod_effect_remap(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<ModEffectRemapPlan, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    preview_mod_effect_remap_from(&paths.installed_path, &mod_id, &group_key, target_id)
+}
+
+pub fn apply_mod_effect_remap_with_progress(
+    app: &tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+    progress: &OperationReporter,
+) -> Result<ModEffectRemapApplyResult, String> {
+    let paths = library_paths(app)?;
+    ensure_library_directories(&paths)?;
+    let mut result = apply_mod_effect_remap_from_with_progress(
+        &paths.installed_path,
+        &mod_id,
+        &group_key,
+        target_id,
+        progress,
+    )?;
+    if let Err(error) = update_workspace_snapshot_after_mod_changes(
+        &paths,
+        std::slice::from_ref(&result.mod_id),
+        &[],
+    ) {
+        result
+            .message
+            .push_str(&format!(" 工作区快照更新失败，请手动刷新：{error}"));
+    }
+    Ok(result)
+}
+
 pub fn preview_enable_mod(
     app: &tauri::AppHandle,
     mod_id: String,
@@ -3896,6 +3991,7 @@ fn install_mod_from_folder_into_with_duplicate_name_check(
             files: installed_files.clone(),
             model_replacements: model_replacements.clone(),
             model_remaps: Vec::new(),
+            effect_remaps: Vec::new(),
             deployment_exclusions: Vec::new(),
             deployed_files: Vec::new(),
         };
@@ -4683,6 +4779,7 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             model_replacements,
             original_model_replacements,
             model_remap_count: manifest.model_remaps.len(),
+            effect_remap_count: manifest.effect_remaps.len(),
         });
     }
 
@@ -4770,6 +4867,7 @@ fn installed_mod_list_from_contexts(
             model_replacements,
             original_model_replacements,
             model_remap_count: manifest.model_remaps.len(),
+            effect_remap_count: manifest.effect_remaps.len(),
         });
         progress.report(
             "正在整理 MOD 列表",
@@ -4996,6 +5094,165 @@ fn model_kind_label(model_kind: &str) -> &str {
         "playerAccessory" => "玩家附件",
         "palicoAccessory" => "随从附件",
         _ => "未识别",
+    }
+}
+
+fn get_mod_effect_remap_details_from(
+    installed_root: &Path,
+    mod_id: &str,
+) -> Result<ModEffectRemapDetails, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    let paths = context
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
+    let (groups, warnings) = build_effect_remap_groups(&paths, &context.manifest.effect_remaps)?;
+    let message = if groups.is_empty() {
+        "未发现已验证可改绑的独立武器特效槽。通用命中、会心、全局 EPV/EVWP 与未知特效仅支持识别。"
+            .to_string()
+    } else if context.manifest.enabled || !context.manifest.deployed_files.is_empty() {
+        "请先禁用并清理该 MOD 的部署记录，再修改特效目标。".to_string()
+    } else {
+        format!("可安全改绑 {} 个已验证的独立武器特效槽。", groups.len())
+    };
+    Ok(ModEffectRemapDetails {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        enabled: context.manifest.enabled,
+        groups,
+        warnings,
+        message,
+    })
+}
+
+fn preview_mod_effect_remap_from(
+    installed_root: &Path,
+    mod_id: &str,
+    group_key: &str,
+    target_id: Option<String>,
+) -> Result<ModEffectRemapPlan, String> {
+    let context = load_installed_manifest(installed_root, mod_id)?;
+    ensure_manifest_can_remap(&context.manifest)?;
+    let paths = context
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
+    let (groups, _) = build_effect_remap_groups(&paths, &context.manifest.effect_remaps)?;
+    let group = groups
+        .iter()
+        .find(|group| group.group_key == group_key)
+        .ok_or_else(|| format!("未找到可改绑特效分组：{group_key}"))?;
+    let normalized_target_id = normalize_effect_target_id(group, target_id)?;
+    let selections = updated_effect_remap_selections(
+        &context.manifest.effect_remaps,
+        group_key,
+        normalized_target_id.clone(),
+    );
+    let effective_paths = build_effective_effect_remap_paths(&paths, &selections)?;
+    let files = paths
+        .iter()
+        .zip(&effective_paths)
+        .filter_map(|(source, effective)| {
+            (!source.eq_ignore_ascii_case(effective)).then(|| ModRemapPlanFile {
+                source_deploy_relative_path: source.clone(),
+                effective_deploy_relative_path: effective.clone(),
+                path_changed: true,
+                mrl3_rewrite_count: 0,
+                evam_rewrite_count: 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    let target_label = normalized_target_id
+        .as_deref()
+        .and_then(|target_id| {
+            group
+                .targets
+                .iter()
+                .find(|target| target.target_id == target_id)
+        })
+        .map(|target| target.target_label.clone())
+        .unwrap_or_else(|| "恢复导入时的原始槽位".to_string());
+    let changed_file_count = files.len();
+    Ok(ModEffectRemapPlan {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        group_key: group_key.to_string(),
+        source_label: group.source_label.clone(),
+        target_id: normalized_target_id,
+        target_label,
+        changed_file_count,
+        files,
+        warnings: vec!["只会重定向已验证的本地槽位部署路径；不会改写 MOD 原文件、EFX/EPV 二进制内容，也不会处理全局会心或通用命中特效。".to_string()],
+        message: format!("本次特效改绑会改变 {changed_file_count} 个部署文件路径。"),
+    })
+}
+
+fn apply_mod_effect_remap_from_with_progress(
+    installed_root: &Path,
+    mod_id: &str,
+    group_key: &str,
+    target_id: Option<String>,
+    progress: &OperationReporter,
+) -> Result<ModEffectRemapApplyResult, String> {
+    progress.report("正在检查特效替换", 0, None, None);
+    let plan = preview_mod_effect_remap_from(installed_root, mod_id, group_key, target_id)?;
+    progress.report("正在保存特效替换设置", 0, Some(1), None);
+    let mut context = load_installed_manifest(installed_root, mod_id)?;
+    ensure_manifest_can_remap(&context.manifest)?;
+    let paths = context
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.deploy_relative_path.clone())
+        .collect::<Vec<_>>();
+    let (groups, _) = build_effect_remap_groups(&paths, &context.manifest.effect_remaps)?;
+    let group = groups
+        .iter()
+        .find(|group| group.group_key == group_key)
+        .ok_or_else(|| format!("未找到可改绑特效分组：{group_key}"))?;
+    let normalized_target_id = normalize_effect_target_id(group, plan.target_id.clone())?;
+    context.manifest.effect_remaps = updated_effect_remap_selections(
+        &context.manifest.effect_remaps,
+        group_key,
+        normalized_target_id.clone(),
+    );
+    context.manifest.schema_version = CURRENT_MOD_MANIFEST_SCHEMA_VERSION;
+    save_manifest(&context.manifest_path, &context.manifest)?;
+    progress.report("正在保存特效替换设置", 1, Some(1), None);
+    Ok(ModEffectRemapApplyResult {
+        mod_id: context.manifest.id.clone(),
+        name: manifest_display_name(&context.manifest),
+        group_key: group_key.to_string(),
+        target_id: normalized_target_id,
+        selection_count: context.manifest.effect_remaps.len(),
+        changed_file_count: plan.changed_file_count,
+        message: "特效替换目标已保存，本地 MOD 原始副本未被修改。".to_string(),
+    })
+}
+
+fn normalize_effect_target_id(
+    group: &EffectRemapGroup,
+    target_id: Option<String>,
+) -> Result<Option<String>, String> {
+    let Some(target_id) = target_id else {
+        return Ok(None);
+    };
+    let target_id = target_id.trim();
+    if target_id.is_empty() {
+        return Ok(None);
+    }
+    if group
+        .targets
+        .iter()
+        .any(|target| target.target_id == target_id)
+    {
+        Ok(Some(target_id.to_string()))
+    } else {
+        Err(format!("不支持的特效替换目标：{target_id}"))
     }
 }
 
@@ -6067,7 +6324,15 @@ fn effective_remap_files_for_manifest(
         .iter()
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
-    build_effective_remap_files(&paths, replacements, &manifest.model_remaps)
+    let mut effective = build_effective_remap_files(&paths, replacements, &manifest.model_remaps)?;
+    let effect_paths = build_effective_effect_remap_paths(&paths, &manifest.effect_remaps)?;
+    for (file, effect_path) in effective.iter_mut().zip(effect_paths) {
+        // 特效规则只在版本化兼容索引命中本地槽位时覆盖部署路径。
+        if !paths[file.file_index].eq_ignore_ascii_case(&effect_path) {
+            file.deploy_relative_path = effect_path;
+        }
+    }
+    Ok(effective)
 }
 
 fn effective_installed_files_for_manifest(

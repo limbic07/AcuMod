@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod download_watch;
+pub mod effect_remap;
 pub mod game;
 pub mod knowledge;
 pub mod legacy_box;

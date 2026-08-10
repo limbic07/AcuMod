@@ -70,7 +70,10 @@ function outputPathFromArguments(argv) {
     return path.resolve(argv[outputIndex + 1]);
   }
   const inline = argv.find((argument) => argument.startsWith("--output="));
-  return inline ? path.resolve(inline.slice("--output=".length)) : defaultOutputPath;
+  if (inline) return path.resolve(inline.slice("--output=".length));
+  return argv.includes("--modding-only")
+    ? path.join(projectRoot, "references/knowledge/build/acumod-dev-modding.acukb")
+    : defaultOutputPath;
 }
 
 function uniqueStrings(values) {
@@ -2315,8 +2318,91 @@ function validateKnowledgeDocuments(documentStore, sourceIds, label) {
   return documentStore.documents;
 }
 
+/**
+ * 仅构建 MOD 技术包时不应要求完整游戏事实原始表；这让本地开发可以独立
+ * 验证技术知识问答，同时不把缺失的游戏数据伪装成空事实包。
+ */
+async function buildModdingOnlyPack(outputPath, sourceCatalog, technicalDocuments) {
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await rm(outputPath, { force: true });
+  const database = new DatabaseSync(outputPath);
+  database.exec(`
+    PRAGMA application_id = 1094931787;
+    PRAGMA user_version = 1;
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE pack_manifest (
+      pack_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, kind TEXT NOT NULL,
+      version TEXT NOT NULL, game_version TEXT NOT NULL, locale TEXT NOT NULL,
+      min_app_version TEXT NOT NULL, description TEXT NOT NULL
+    );
+    CREATE TABLE sources (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT, kind TEXT NOT NULL,
+      game_version TEXT NOT NULL, license_note TEXT NOT NULL
+    );
+    CREATE TABLE entities (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, domain TEXT NOT NULL,
+      canonical_name TEXT NOT NULL, name_zh_hans TEXT, name_zh_hant TEXT,
+      summary TEXT NOT NULL, game_version TEXT NOT NULL, confidence REAL NOT NULL,
+      source_id TEXT, data_json TEXT NOT NULL, FOREIGN KEY (source_id) REFERENCES sources(id)
+    );
+    CREATE TABLE aliases (
+      entity_id TEXT NOT NULL, locale TEXT NOT NULL, alias TEXT NOT NULL,
+      PRIMARY KEY (entity_id, locale, alias), FOREIGN KEY (entity_id) REFERENCES entities(id)
+    );
+    CREATE TABLE relations (
+      id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, predicate TEXT NOT NULL,
+      object_id TEXT NOT NULL, game_version TEXT NOT NULL, confidence REAL NOT NULL,
+      source_id TEXT, data_json TEXT NOT NULL, FOREIGN KEY (source_id) REFERENCES sources(id)
+    );
+    CREATE TABLE documents (
+      id TEXT PRIMARY KEY, namespace TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+      game_version TEXT NOT NULL, confidence REAL NOT NULL, source_id TEXT,
+      FOREIGN KEY (source_id) REFERENCES sources(id)
+    );
+    CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+      result_id UNINDEXED, result_kind UNINDEXED, domain UNINDEXED, title, body, tokenize='trigram'
+    );
+    CREATE INDEX aliases_alias_index ON aliases(alias);
+    CREATE INDEX entities_kind_index ON entities(kind);
+    CREATE INDEX relations_subject_index ON relations(subject_id, predicate);
+    CREATE INDEX relations_object_index ON relations(object_id, predicate);
+  `);
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.prepare("INSERT INTO pack_manifest VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+      "acumod-dev-modding", "AcuAI MOD 技术开发包", "mhw-modding", "0.1.0-dev",
+      targetGameVersion, "zh-Hans", "0.1.0",
+      "项目已验证技术规则的本地开发包，仅包含 MOD 技术文档，不包含游戏事实数据。",
+    );
+    const insertSource = database.prepare("INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?)");
+    const usedSourceIds = new Set(technicalDocuments.map((document) => document.sourceId));
+    for (const source of sourceCatalog.sources.filter((source) => usedSourceIds.has(source.id))) {
+      insertSource.run(source.id, source.title ?? source.id, source.url ?? null, source.kind, source.gameVersion, [
+        `用途：${source.usage}`, `分发：${source.redistribution}`, `许可状态：${source.licenseStatus}`,
+        ...(source.notes ?? []),
+      ].join("；"));
+    }
+    const insertDocument = database.prepare("INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?)");
+    const insertFts = database.prepare("INSERT INTO knowledge_fts VALUES (?, ?, ?, ?, ?)");
+    for (const document of technicalDocuments) {
+      insertDocument.run(document.id, document.domain, document.title, document.body, document.gameVersion, document.confidence, document.sourceId);
+      insertFts.run(document.id, "document", document.domain, document.title, document.body);
+    }
+    database.exec("COMMIT; VACUUM");
+    const integrity = database.prepare("PRAGMA integrity_check(1)").get();
+    if (integrity.integrity_check !== "ok") throw new Error(`MOD 技术开发包完整性检查失败: ${integrity.integrity_check}`);
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* 事务已提交时无需回滚。 */ }
+    throw error;
+  } finally {
+    database.close();
+  }
+  process.stdout.write(`MOD 技术开发包已生成：${path.relative(projectRoot, outputPath)}，文档 ${technicalDocuments.length} 篇\n`);
+}
+
 async function main() {
-  const outputPath = outputPathFromArguments(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const outputPath = outputPathFromArguments(argv);
   const moddingOutputPath = path.join(path.dirname(outputPath), "acumod-dev-modding.acukb");
   const guideOutputPath = path.join(path.dirname(outputPath), "acumod-dev-game-guides.acukb");
   const acumodHelpOutputPath = path.join(path.dirname(outputPath), "acumod-dev-acumod-help.acukb");
@@ -2338,6 +2424,10 @@ async function main() {
     sourceIds,
     "Acumod 使用说明文件",
   );
+  if (argv.includes("--modding-only")) {
+    await buildModdingOnlyPack(outputPath, sourceCatalog, technicalDocuments);
+    return;
+  }
   const gameFacts = await rawGameFacts(modelIndex);
   const entities = gameFacts.entities;
   await mkdir(path.dirname(outputPath), { recursive: true });

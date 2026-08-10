@@ -74,6 +74,24 @@
       "sourceId": "mhw-modding-atlas"
     },
     {
+      "id": "modding-efx-scope",
+      "domain": "mod-vfx",
+      "title": "MHW 特效的作用范围与替换边界",
+      "body": "特效文件必须按路径区分作用范围。vfx/efx/cm/cm_all 下的命中、会心和格挡 EFX 属于共享调用资源；例如 cm_critical_000 是会心命中特效，不能当作单把武器的独立特效迁移。vfx/efx/wp_TU 下的武器本地 EFX 可能绑定特定武器槽，但仅凭目录名仍不能证明可转移性。AcuMOD 只允许版本化索引明确标记兼容目标的独立武器特效进入替换计划；全局与未知资源只能识别、说明、启停和处理冲突。",
+      "gameVersion": "15.23",
+      "confidence": 0.98,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
+      "id": "modding-weapon-epv-scope",
+      "domain": "mod-vfx",
+      "title": "武器本地 EPV、全局 EPV 与 EVWP",
+      "body": "武器本地 EPV 通常位于具体武器资源旁，主要服务该武器槽的拔刀或特殊状态；全局 EPV 位于武器类别的 epv 目录，并可能影响该类别多数武器。EVWP 负责把武器映射到全局 EPV。EPV 的记录选择 EFX 与触发条件，EFX 是否接受颜色、尺寸等参数取决于其自身定义。任何包含全局 EPV 或 EVWP 的 MOD 都必须显示高风险提示，不能用“替换到另一把武器”的普通路径改名处理。",
+      "gameVersion": "15.23",
+      "confidence": 0.98,
+      "sourceId": "mhw-modding-atlas"
+    },
+    {
       "id": "modding-evwp",
       "domain": "mod-weapon-parameter",
       "title": "EVWP 武器位置与全局 EPV 参数",

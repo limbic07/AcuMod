@@ -2807,6 +2807,48 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "需要先运行 npm.cmd run knowledge:build-modding-dev，使用真实 MOD 技术包验证安装与检索链路"]
+    fn generated_modding_pack_installs_and_answers_effect_scope_questions() {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("src-tauri 必须位于项目根目录下");
+        let modding = project_root
+            .join("references")
+            .join("knowledge")
+            .join("build")
+            .join("acumod-dev-modding.acukb");
+        assert!(modding.is_file(), "缺少 MOD 技术开发包：{modding:?}");
+
+        let test_root = unique_test_path("generated-modding-effect-pack");
+        let knowledge_root = test_root.join("knowledge");
+        fs::create_dir_all(&test_root).unwrap();
+        install_pack_into(
+            &knowledge_root,
+            modding.to_string_lossy().into_owned(),
+            &OperationReporter::default(),
+        )
+        .unwrap();
+        let domains = vec!["mhw-modding".to_string()];
+        for (query, expected_document) in [
+            ("会心特效和武器独立特效有什么区别", "modding-efx-scope"),
+            (
+                "本地 EPV、全局 EPV 与 EVWP 如何区分",
+                "modding-weapon-epv-scope",
+            ),
+        ] {
+            let response = search_from(&knowledge_root, query, Some(&domains), 20).unwrap();
+            assert!(
+                response
+                    .matches
+                    .iter()
+                    .any(|item| item.result_id == expected_document),
+                "特效问句“{query}”必须召回 {expected_document}"
+            );
+        }
+        fs::remove_dir_all(test_root).unwrap();
+    }
+
+    #[test]
     fn rejects_invalid_structured_knowledge_before_installation() {
         let path = unique_test_path("invalid-json").with_extension("acukb");
         create_test_game_pack(&path);

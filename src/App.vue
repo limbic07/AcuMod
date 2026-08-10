@@ -39,6 +39,7 @@ import {
 } from "./domain/gameText";
 import {
   applyModRemap,
+  applyModEffectRemap,
   applyConflictOrder,
   batchUpdateMods,
   createModBranchGroup,
@@ -48,6 +49,7 @@ import {
   enableMod,
   getModLibraryStatus,
   getModRemapDetails,
+  getModEffectRemapDetails,
   getModWorkspaceSnapshot,
   refreshModWorkspaceSnapshot,
   installModFromArchive,
@@ -61,6 +63,7 @@ import {
   previewEnableMod,
   previewModImport,
   previewModRemap,
+  previewModEffectRemap,
   previewRestoreAllMods,
   previewUninstallMod,
   renameModCategory,
@@ -89,6 +92,8 @@ import {
   type ModStateSyncResult,
   type ModMetadataPatch,
   type ModRemapDetails,
+  type ModEffectRemapDetails,
+  type EffectRemapGroup,
   type ModelRemapGroup,
   type ModelReplacement,
   type ModCategory,
@@ -122,6 +127,7 @@ const conflictReport = ref<ModConflictReport | null>(null);
 const modCategories = ref<ModCategory[]>([]);
 const modBranchGroups = ref<ModBranchGroup[]>([]);
 const remapDetails = ref<ModRemapDetails | null>(null);
+const effectRemapDetails = ref<ModEffectRemapDetails | null>(null);
 const analysisDialogMod = ref<InstalledModSummary | null>(null);
 const modAnalysisReport = ref<ModAnalysisReport | null>(null);
 const modAnalysisError = ref("");
@@ -134,6 +140,10 @@ const manualSlingerTargetId = ref("");
 const remapSaveWarnings = ref<string[]>([]);
 const remapError = ref("");
 const isApplyingRemap = ref(false);
+const selectedEffectRemapGroupKey = ref("");
+const selectedEffectRemapTargetId = ref("");
+const effectRemapError = ref("");
+const isApplyingEffectRemap = ref(false);
 const manualPath = ref("");
 const importPath = ref("");
 const archivePath = ref("");
@@ -2162,6 +2172,63 @@ async function openModAnalysis(mod: InstalledModSummary) {
   }
 }
 
+const selectedEffectRemapGroup = computed<EffectRemapGroup | null>(() =>
+  effectRemapDetails.value?.groups.find((group) => group.groupKey === selectedEffectRemapGroupKey.value) ?? null,
+);
+
+function selectEffectRemapGroup(groupKey: string) {
+  selectedEffectRemapGroupKey.value = groupKey;
+  const group = effectRemapDetails.value?.groups.find((candidate) => candidate.groupKey === groupKey);
+  selectedEffectRemapTargetId.value = group?.selectedTargetId ?? "";
+  effectRemapError.value = "";
+}
+
+async function openEffectRemapManager(mod: InstalledModSummary) {
+  effectRemapDetails.value = null;
+  effectRemapError.value = "";
+  try {
+    effectRemapDetails.value = await getModEffectRemapDetails(mod.id);
+    const firstGroup = effectRemapDetails.value.groups[0];
+    if (firstGroup) selectEffectRemapGroup(firstGroup.groupKey);
+  } catch (error) {
+    effectRemapError.value = userFacingError(error);
+    modLibraryError.value = effectRemapError.value;
+  }
+}
+
+function closeEffectRemapManager(force = false) {
+  if (isApplyingEffectRemap.value && !force) return;
+  effectRemapDetails.value = null;
+  selectedEffectRemapGroupKey.value = "";
+  selectedEffectRemapTargetId.value = "";
+  effectRemapError.value = "";
+}
+
+async function applySelectedEffectRemap() {
+  const details = effectRemapDetails.value;
+  const group = selectedEffectRemapGroup.value;
+  if (!details || !group) return;
+  isApplyingEffectRemap.value = true;
+  effectRemapError.value = "";
+  try {
+    const plan = await previewModEffectRemap(details.modId, group.groupKey, selectedEffectRemapTargetId.value || null);
+    const shouldSave = await requestConfirmation({
+      title: "确认保存特效替换",
+      message: "将只改变 AcuMOD 部署副本的本地特效槽路径，不改写原始 MOD 文件。",
+      details: [...plan.warnings, `将改变 ${plan.changedFileCount} 个部署文件路径。`],
+      confirmLabel: "保存特效替换",
+    });
+    if (!shouldSave) return;
+    await applyModEffectRemap(details.modId, group.groupKey, plan.targetId);
+    await loadModViewsFromSnapshot();
+    closeEffectRemapManager(true);
+  } catch (error) {
+    effectRemapError.value = userFacingError(error);
+  } finally {
+    isApplyingEffectRemap.value = false;
+  }
+}
+
 function closeModAnalysis() {
   // 后台任务不能取消，但递增令牌可阻止已关闭弹窗接收迟到结果。
   modAnalysisRequestToken += 1;
@@ -3124,6 +3191,7 @@ onBeforeUnmount(() => {
           @rename-branch-group="renameBranchGroup"
            @ungroup-mods="ungroupInstalledMods"
            @manage-remap="openRemapManager"
+           @manage-effect="openEffectRemapManager"
            @analyze="openModAnalysis"
            @reorder="reorderModLibraryItem"
           @uninstall="uninstallInstalledMod"
@@ -3372,6 +3440,35 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <p v-else class="hint">没有可改绑的模型目标。人物语音仅保留识别。</p>
+    </section>
+  </div>
+
+  <div v-if="effectRemapDetails" class="dialog-backdrop" role="presentation">
+    <section class="confirm-dialog remap-dialog" role="dialog" aria-modal="true" aria-labelledby="effect-remap-dialog-title">
+      <div class="remap-dialog-heading">
+        <div>
+          <h2 id="effect-remap-dialog-title">管理独立武器特效</h2>
+          <p>{{ effectRemapDetails.name }}</p>
+        </div>
+        <button type="button" class="dialog-close-button" :disabled="isApplyingEffectRemap" aria-label="关闭" @click="closeEffectRemapManager()"><span aria-hidden="true">&times;</span></button>
+      </div>
+      <p class="hint">{{ effectRemapDetails.message }}</p>
+      <ul v-if="effectRemapDetails.warnings.length" class="compact-list remap-warnings">
+        <li v-for="warning in effectRemapDetails.warnings" :key="warning"><span>{{ warning }}</span></li>
+      </ul>
+      <template v-if="selectedEffectRemapGroup">
+        <div v-if="effectRemapDetails.groups.length > 1" class="remap-group-tabs">
+          <button v-for="group in effectRemapDetails.groups" :key="group.groupKey" type="button" :class="{ active: group.groupKey === selectedEffectRemapGroupKey }" :disabled="isApplyingEffectRemap || effectRemapDetails.enabled" @click="selectEffectRemapGroup(group.groupKey)">{{ group.sourceLabel }}</button>
+        </div>
+        <div class="remap-fields simplified-remap-fields">
+          <label><span>来源特效</span><input :value="selectedEffectRemapGroup.sourceLabel" disabled /></label>
+          <label><span>替换到</span><select v-model="selectedEffectRemapTargetId" :disabled="isApplyingEffectRemap || effectRemapDetails.enabled"><option value="">恢复默认槽位</option><option v-for="target in selectedEffectRemapGroup.targets" :key="target.targetId" :value="target.targetId">{{ target.targetLabel }}</option></select></label>
+        </div>
+        <p class="hint">{{ selectedEffectRemapGroup.note }} 依据：<a :href="selectedEffectRemapGroup.evidenceUrl" target="_blank" rel="noreferrer">兼容性来源</a></p>
+        <p v-if="effectRemapError" class="error">{{ effectRemapError }}</p>
+        <div class="section-actions"><button type="button" class="secondary-button" :disabled="isApplyingEffectRemap" @click="closeEffectRemapManager()">取消</button><button type="button" :disabled="isApplyingEffectRemap || effectRemapDetails.enabled" @click="applySelectedEffectRemap">{{ isApplyingEffectRemap ? "保存中" : "保存修改" }}</button></div>
+      </template>
+      <p v-else class="hint">未检测到可安全改绑的独立武器特效。请使用“分析文件作用”查看全局、会心或未知特效的作用范围。</p>
     </section>
   </div>
 

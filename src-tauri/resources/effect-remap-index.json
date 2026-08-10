@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "gameVersion": "15.23",
+  "entries": [
+    {
+      "id": "local-swo010-to-swo001",
+      "weaponType": "太刀",
+      "sourceSlot": "swo010",
+      "sourceRoot": "wp/swo/swo010",
+      "requiredFiles": ["wp/swo/swo010/mod/swo010.evwp"],
+      "targets": [
+        {
+          "targetId": "swo001",
+          "targetLabel": "太刀槽位 swo001",
+          "targetRoot": "wp/swo/swo001"
+        }
+      ],
+      "evidenceUrl": "https://www.nexusmods.com/monsterhunterworld/mods/5840?tab=posts",
+      "note": "该规则仅重定向已验证的本地 EVWP 槽位及同目录文件；不修改 EFX、EPV 文件内容，也不适用于全局 EPV、会心或通用命中特效。"
+    }
+  ]
+}

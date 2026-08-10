@@ -442,6 +442,69 @@ pub async fn apply_mod_remap(
 }
 
 #[tauri::command]
+pub async fn get_mod_effect_remap_details(
+    app: tauri::AppHandle,
+    mod_id: String,
+) -> Result<mod_library::ModEffectRemapDetails, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "effectRemapDetails",
+        "正在读取特效替换信息",
+        move |progress| {
+            progress.report("正在检查本地特效槽", 0, None, None);
+            mod_library::get_mod_effect_remap_details(&worker_app, mod_id)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_mod_effect_remap(
+    app: tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<mod_library::ModEffectRemapPlan, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "effectRemapPreview",
+        "正在检查特效替换",
+        move |progress| {
+            progress.report("正在生成安全替换预览", 0, None, None);
+            mod_library::preview_mod_effect_remap(&worker_app, mod_id, group_key, target_id)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn apply_mod_effect_remap(
+    app: tauri::AppHandle,
+    mod_id: String,
+    group_key: String,
+    target_id: Option<String>,
+) -> Result<mod_library::ModEffectRemapApplyResult, String> {
+    let worker_app = app.clone();
+    run_blocking_operation(
+        app,
+        "effectRemapApply",
+        "正在保存特效替换",
+        move |progress| {
+            mod_library::apply_mod_effect_remap_with_progress(
+                &worker_app,
+                mod_id,
+                group_key,
+                target_id,
+                &progress,
+            )
+        },
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn preview_enable_mod(
     app: tauri::AppHandle,
     mod_id: String,

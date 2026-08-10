@@ -207,6 +207,7 @@ export interface InstalledModSummary {
   modelReplacements: ModelReplacement[];
   originalModelReplacements: ModelReplacement[];
   modelRemapCount: number;
+  effectRemapCount: number;
 }
 
 export interface ModelRemapTarget {
@@ -273,6 +274,54 @@ export interface ModRemapApplyResult {
   changedFileCount: number;
   mrl3RewriteCount: number;
   evamRewriteCount: number;
+  message: string;
+}
+
+export interface EffectRemapTarget {
+  targetId: string;
+  targetLabel: string;
+}
+
+export interface EffectRemapGroup {
+  groupKey: string;
+  weaponType: string;
+  sourceSlot: string;
+  sourceLabel: string;
+  selectedTargetId: string | null;
+  targets: EffectRemapTarget[];
+  evidenceUrl: string;
+  note: string;
+}
+
+export interface ModEffectRemapDetails {
+  modId: string;
+  name: string;
+  enabled: boolean;
+  groups: EffectRemapGroup[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModEffectRemapPlan {
+  modId: string;
+  name: string;
+  groupKey: string;
+  sourceLabel: string;
+  targetId: string | null;
+  targetLabel: string;
+  changedFileCount: number;
+  files: ModRemapPlanFile[];
+  warnings: string[];
+  message: string;
+}
+
+export interface ModEffectRemapApplyResult {
+  modId: string;
+  name: string;
+  groupKey: string;
+  targetId: string | null;
+  selectionCount: number;
+  changedFileCount: number;
   message: string;
 }
 
@@ -658,6 +707,22 @@ export function applyModRemap(
     groupKey,
     targetId,
   });
+}
+
+export function getModEffectRemapDetails(modId: string): Promise<ModEffectRemapDetails> {
+  return invoke<ModEffectRemapDetails>("get_mod_effect_remap_details", { modId });
+}
+
+export function previewModEffectRemap(
+  modId: string, groupKey: string, targetId: string | null,
+): Promise<ModEffectRemapPlan> {
+  return invoke<ModEffectRemapPlan>("preview_mod_effect_remap", { modId, groupKey, targetId });
+}
+
+export function applyModEffectRemap(
+  modId: string, groupKey: string, targetId: string | null,
+): Promise<ModEffectRemapApplyResult> {
+  return invoke<ModEffectRemapApplyResult>("apply_mod_effect_remap", { modId, groupKey, targetId });
 }
 
 export function previewModImport(

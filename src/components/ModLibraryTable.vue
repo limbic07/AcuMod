@@ -57,6 +57,7 @@ const emit = defineEmits<{
   disable: [mod: InstalledModSummary];
   uninstall: [mod: InstalledModSummary];
   manageRemap: [mod: InstalledModSummary];
+  manageEffect: [mod: InstalledModSummary];
   analyze: [mod: InstalledModSummary];
   reorder: [modIds: string[], targetModIds: string[], placeAfter: boolean];
   batchEnable: [mods: InstalledModSummary[]];
@@ -1351,6 +1352,9 @@ watch(
                   <p class="detail-path">{{ mod.contentPath }}</p>
                   <button type="button" class="detail-command" @click="$emit('analyze', mod)">
                     分析文件作用
+                  </button>
+                  <button type="button" class="detail-command" :disabled="isRowActionDisabled()" @click="$emit('manageEffect', mod)">
+                    管理独立特效
                   </button>
                 </section>
                 <section>

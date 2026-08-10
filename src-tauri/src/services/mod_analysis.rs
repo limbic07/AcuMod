@@ -548,6 +548,11 @@ fn classify_role(path: &str) -> RoleRule {
             ),
         };
     }
+    if matches!(extension.as_str(), "efx" | "epv3" | "evwp") {
+        if let Some(effect_role) = classify_effect_role(path, &extension) {
+            return effect_role;
+        }
+    }
     match extension.as_str() {
         "mod3" => role(
             "model",
@@ -725,6 +730,82 @@ fn classify_role(path: &str) -> RoleRule {
             None,
         ),
     }
+}
+
+/// 特效路径决定影响范围；不能仅按扩展名把全局 EPV 当作单武器资源。
+fn classify_effect_role(path: &str, extension: &str) -> Option<RoleRule> {
+    let normalized = normalize_path(path);
+    if normalized.contains("/vfx/efx/cm/cm_all/") {
+        if normalized.contains("cm_critical_") {
+            return Some(role(
+                "globalCriticalEffect",
+                "全局会心命中特效",
+                "该 EFX 位于通用命中目录，会影响使用此命中调用的会心效果；不是单把武器特效，禁止自动迁移。",
+                0.98,
+                Some("MHW 会心 EFX"),
+            ));
+        }
+        return Some(role(
+            "globalHitEffect",
+            "全局命中特效",
+            "该 EFX 位于通用命中目录，可能影响斩击、刺击、弹药、格挡或其它共享命中效果；禁止自动迁移。",
+            0.96,
+            Some("MHW 通用命中 EFX"),
+        ));
+    }
+    if extension == "efx" && normalized.contains("/vfx/efx/wp_tu/") {
+        return Some(role(
+            "localWeaponEffect",
+            "武器独立特效资源",
+            "该 EFX 位于武器本地特效目录；只有索引明确验证目标槽兼容时才可替换，当前分析会保留为待确认资源。",
+            0.86,
+            Some("MHW 武器独立 EFX"),
+        ));
+    }
+    if extension == "epv3" && normalized.contains("/wp/") && normalized.contains("/epv/") {
+        let is_local = normalized.contains("/wp/")
+            && normalized
+                .split('/')
+                .collect::<Vec<_>>()
+                .windows(4)
+                .any(|parts| parts[0] == "wp" && parts[3] == "epv");
+        return Some(if is_local {
+            role(
+                "localWeaponEffectBinding",
+                "武器本地特效触发",
+                "该 EPV3 位于具体武器资源旁，通常控制该槽的拔刀或特殊状态效果；替换前仍需验证目标武器槽。",
+                0.88,
+                Some("MHW 本地 EPV"),
+            )
+        } else {
+            role(
+                "globalWeaponEffectBinding",
+                "武器类别全局特效触发",
+                "该 EPV3 位于武器类别 EPV 目录，可能影响该类别多数武器；禁止自动迁移。",
+                0.94,
+                Some("MHW 全局 EPV"),
+            )
+        });
+    }
+    if extension == "evwp" && normalized.contains("/wp/") {
+        return Some(role(
+            "globalWeaponEffectMapping",
+            "武器全局特效映射",
+            "EVWP 决定武器使用的全局 EPV 映射；修改可能影响整个武器类别，禁止自动迁移。",
+            0.95,
+            Some("MHW EVWP"),
+        ));
+    }
+    if extension == "epv3" && normalized.contains("/pl/") {
+        return Some(role(
+            "armorEffectBinding",
+            "防具特效触发",
+            "该 EPV3 随防具部位部署，可能控制常驻、装备或套装触发的视觉效果。",
+            0.9,
+            Some("MHW 防具 EPV"),
+        ));
+    }
+    None
 }
 
 fn role(
@@ -1471,5 +1552,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn classifies_global_and_local_effect_paths_without_overstating_scope() {
+        assert_eq!(
+            super::classify_role("nativePC/vfx/efx/cm/cm_all/cm_critical_000.efx").role,
+            "globalCriticalEffect"
+        );
+        assert_eq!(
+            super::classify_role("nativePC/wp/two/epv/bs_two.epv3").role,
+            "globalWeaponEffectBinding"
+        );
+        assert_eq!(
+            super::classify_role("nativePC/wp/two/two010/epv/two010.epv3").role,
+            "localWeaponEffectBinding"
+        );
+        assert_eq!(
+            super::classify_role("nativePC/vfx/efx/wp_TU/two/two010/two010_003.efx").role,
+            "localWeaponEffect"
+        );
     }
 }

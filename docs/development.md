@@ -16,6 +16,8 @@ npm.cmd run build
 npm.cmd run knowledge:audit
 npm.cmd run knowledge:fetch-quest-unlocks
 npm.cmd run knowledge:build-dev
+npm.cmd run knowledge:build-modding-dev
+npm.cmd run knowledge:package-modding-dev
 npm.cmd run knowledge:package-bundle
 npm.cmd run knowledge:verify-dev
 npm.cmd run knowledge:verify-e2e
@@ -43,6 +45,8 @@ cargo fmt
 - `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告。
 - `knowledge:fetch-quest-unlocks`：显式联网抓取公开可选任务解锁页面，只保存任务名、来源链接和可结构化解析的条件到本地忽略快照。
 - `knowledge:build-dev`：使用本地研究数据生成不提交、不分发的开发知识包，用于验证查询链路。
+- `knowledge:build-modding-dev`：只生成 MOD 技术开发包；用于缺少完整游戏事实原始表时验证 MOD 技术知识检索。
+- `knowledge:package-modding-dev`：把技术开发包打成可从应用设置页安装的单包 ZIP。
 - `knowledge:package-bundle`：将四个 `.acukb` 打包为一个独立 ZIP，供本地安装测试或 release 上传；生成物位于被忽略的 `references/knowledge/release/`。
 - `knowledge:verify-dev`：校验开发包的版本、实体、关系和文档结构。
 - `knowledge:verify-e2e`：临时安装四个真实开发包，验证实体、关系和全文检索链路；Windows 下自动为测试二进制加入 Tauri 所需 manifest。

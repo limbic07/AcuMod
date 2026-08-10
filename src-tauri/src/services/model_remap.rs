@@ -24,25 +24,92 @@ const ARMOR_DAT_MAGIC: u16 = 0x005F;
 const ARMOR_DAT_HEADER_SIZE: usize = 10;
 const ARMOR_DAT_ENTRY_SIZE: usize = 60;
 
-/// 这两套外观由剧情角色专用资源链加载，不能沿用普通防具的“输入性别即目标性别”规则。
-const SPECIAL_CHARACTER_ARMOR_TARGETS: [SpecialCharacterArmorTarget; 2] = [
+/// 角色外观套装的已核实资源链。
+///
+/// 只有 `resource_gender` 明确存在时才改变资源根和文件名前缀；没有该字段的
+/// 角色套装仍是专用外观，但必须保留来源 MOD 的男女资源，不能凭角色形象猜测目录。
+const SPECIAL_CHARACTER_ARMOR_TARGETS: [SpecialCharacterArmorTarget; 9] = [
+    SpecialCharacterArmorTarget {
+        model_id: "pl069_0000",
+        character_name: "隆",
+        resource_gender: None,
+        slinger_model_id: None,
+        face_path: Some("nativePC/pl/m_face/face003"),
+        hair_path: None,
+        appearance_note: "该套装没有可核实的独立投射器绑定，保留来源 MOD 的原有绑定。",
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl070_0000",
+        character_name: "樱",
+        resource_gender: None,
+        slinger_model_id: None,
+        face_path: Some("nativePC/pl/f_face/face002"),
+        hair_path: None,
+        appearance_note: "该套装没有可核实的独立投射器绑定，保留来源 MOD 的原有绑定。",
+    },
     SpecialCharacterArmorTarget {
         model_id: "pl118_0000",
         character_name: "杰洛特",
-        resource_gender: "male",
-        slinger_model_id: "slg118_0000",
-        face_path: "nativePC/pl/m_face/face004",
-        hair_path: "nativePC/pl/hair/hair403",
-        voice_path: Some("nativePC/sound/wwise/Windows/pl_act_vo_c_03_m.nbnk"),
+        resource_gender: Some("male"),
+        slinger_model_id: Some("slg118_0000"),
+        face_path: Some("nativePC/pl/m_face/face004"),
+        hair_path: Some("nativePC/pl/hair/hair403"),
+        appearance_note: "人物语音不随防具改绑自动部署。",
     },
     SpecialCharacterArmorTarget {
         model_id: "pl119_0000",
         character_name: "希里",
-        resource_gender: "female",
-        slinger_model_id: "slg119_0000",
-        face_path: "nativePC/pl/f_face/face003",
-        hair_path: "nativePC/pl/hair/hair404",
-        voice_path: None,
+        resource_gender: Some("female"),
+        slinger_model_id: Some("slg119_0000"),
+        face_path: Some("nativePC/pl/f_face/face003"),
+        hair_path: Some("nativePC/pl/hair/hair404"),
+        appearance_note: "人物语音不随防具改绑自动部署。",
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl120_0000",
+        character_name: "巴耶克",
+        resource_gender: Some("male"),
+        slinger_model_id: Some("slg120_0000"),
+        face_path: Some("nativePC/pl/m_face/face005"),
+        hair_path: None,
+        appearance_note: "该套装在男女猎人身上均使用男性资源链；脸部资源不会自动搬运。",
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl130_0000",
+        character_name: "里昂",
+        resource_gender: Some("male"),
+        slinger_model_id: Some("slg130_0000"),
+        face_path: Some("nativePC/pl/m_face/face006"),
+        hair_path: Some("nativePC/pl/hair/hair406"),
+        appearance_note: "人物语音不随防具改绑自动部署。",
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl131_0000",
+        character_name: "克莱尔",
+        resource_gender: Some("female"),
+        // 克莱尔的原版 EVAM 绑定复用里昂的 slg130，而不是按防具编号猜测 slg131。
+        slinger_model_id: Some("slg130_0000"),
+        face_path: Some("nativePC/pl/f_face/face004"),
+        hair_path: Some("nativePC/pl/hair/hair407"),
+        appearance_note: "人物语音不随防具改绑自动部署。",
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl132_0010",
+        character_name: "阿尔忒弥斯",
+        resource_gender: Some("female"),
+        slinger_model_id: Some("slg132_0000"),
+        face_path: Some("nativePC/pl/f_face/face005"),
+        hair_path: None,
+        appearance_note: "没有可核实的独立发型路径；不会自动移动脸部或语音资源。",
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl133_0000",
+        character_name: "埃洛伊",
+        resource_gender: None,
+        slinger_model_id: Some("slg133_0000"),
+        face_path: None,
+        hair_path: None,
+        appearance_note: "完整套装由游戏自身处理埃洛伊外观；保留来源 MOD 的男女防具资源根。",
     },
 ];
 
@@ -216,11 +283,11 @@ struct ArmorDatNormalizationRule {
 struct SpecialCharacterArmorTarget {
     model_id: &'static str,
     character_name: &'static str,
-    resource_gender: &'static str,
-    slinger_model_id: &'static str,
-    face_path: &'static str,
-    hair_path: &'static str,
-    voice_path: Option<&'static str>,
+    resource_gender: Option<&'static str>,
+    slinger_model_id: Option<&'static str>,
+    face_path: Option<&'static str>,
+    hair_path: Option<&'static str>,
+    appearance_note: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -257,16 +324,29 @@ fn armor_file_gender(gender: &str) -> &'static str {
 pub fn special_character_armor_target_warning(target_id: &str) -> Option<String> {
     let model_id = target_id.strip_prefix("armor:").unwrap_or(target_id);
     let target = special_character_armor_target(model_id)?;
-    let mut resources = vec![target.face_path, target.hair_path];
-    if let Some(voice_path) = target.voice_path {
-        resources.push(voice_path);
-    }
+    let resources = [target.face_path, target.hair_path]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let deployment = match target.resource_gender {
+        Some(gender) => format!(
+            "防具会固定部署到 {} 并同步文件名前缀",
+            armor_equip_directory(gender)
+        ),
+        None => "防具保留来源 MOD 的男女资源根和文件名前缀".to_string(),
+    };
+    let slinger = target
+        .slinger_model_id
+        .map(|model_id| format!("配套投射器按原版绑定使用 {model_id}"))
+        .unwrap_or_else(|| "没有可核实的专用投射器绑定，保留来源 MOD 的原有绑定".to_string());
+    let companion_resources = if resources.is_empty() {
+        "未发现可自动处理的独立脸部或发型路径".to_string()
+    } else {
+        format!("配套脸部/发型资源为 {}", resources.join("、"))
+    };
     Some(format!(
-        "{}为专用{}角色资源链：防具会部署到 {} 并同步文件名前缀；配套投射器使用该角色的原版绑定。不会自动替换脸、头发或语音资源（{}），请仅在 MOD 明确提供兼容资源时另行处理。",
-        target.character_name,
-        gender_label(target.resource_gender),
-        armor_equip_directory(target.resource_gender),
-        resources.join("、")
+        "{}为专用角色套装：{}；{}。{}；{}。",
+        target.character_name, deployment, slinger, companion_resources, target.appearance_note
     ))
 }
 
@@ -520,7 +600,8 @@ fn build_armor_dat_normalization_rules(
         // 只有 DAT 跨槽位资源或外部槽位别名确实命中本地核心资源时，才删除全局表。
         if !mapped_models.is_empty() {
             let target_file_gender = special_character_armor_target(&target.model_id)
-                .map(|target| armor_file_gender(target.resource_gender));
+                .and_then(|target| target.resource_gender)
+                .map(armor_file_gender);
             rules.push(ArmorDatNormalizationRule {
                 source_model_id: source_model_id.to_string(),
                 target_model_id: target.model_id,
@@ -1012,8 +1093,12 @@ fn add_armor_groups(
     let mut targets = index
         .armor_remap_targets
         .iter()
-        // 改绑入口只展示实际外观装备菜单目标，避免把基础防具、HARDUMMY 或不可用 ID 暴露给用户。
-        .filter(|entry| menu_order.target_orders.contains_key(&entry.target_id))
+        // 改绑入口只展示实际外观装备菜单目标。专用角色套装虽然可能没有常规菜单
+        // 顺序（例如阿尔忒弥斯），仍明确允许作为受控例外展示。
+        .filter(|entry| {
+            menu_order.target_orders.contains_key(&entry.target_id)
+                || special_character_armor_target(&entry.model_id).is_some()
+        })
         .map(armor_target)
         .collect::<Vec<_>>();
     targets.sort_by(|left, right| {
@@ -1164,7 +1249,9 @@ fn add_slinger_groups(
         .map(simple_target)
         .collect::<Vec<_>>();
     for target in SPECIAL_CHARACTER_ARMOR_TARGETS {
-        let special_target = special_character_slinger_target(&target);
+        let Some(special_target) = special_character_slinger_target(&target) else {
+            continue;
+        };
         if !base_targets
             .iter()
             .any(|candidate| candidate.target_id == special_target.target_id)
@@ -1294,10 +1381,10 @@ fn infer_paired_slinger_targets(
                 continue;
             }
 
-            // 杰洛特、希里的装备目录只由固定性别加载。即使来源 MOD 是另一性别，
-            // 配套飞翔爪也必须使用角色实际 EVAM 的目标绑定。
+            // 固定资源性别的角色套装必须使用其实际 EVAM 绑定；没有固定目录的
+            // 专用套装则保留来源 MOD 的性别，避免错误移动资源根。
             let target_gender = special_character_armor_target(target_armor_id)
-                .map(|target| target.resource_gender)
+                .and_then(|target| target.resource_gender)
                 .unwrap_or(gender);
             let Some(target_slinger_id) =
                 armor_slinger_model_id(index, target_armor_id, target_gender)
@@ -1403,7 +1490,7 @@ fn armor_slinger_binding<'a>(
     })
 }
 
-/// 从生成索引取得原版绑定；索引尚未重建时，回退到两套已核实的特殊角色绑定。
+/// 从生成索引取得原版绑定；索引尚未重建时，回退到已核实的角色套装绑定。
 /// 外层 None 表示没有可确认记录，内层 None 表示原版明确不绑定投射器。
 fn armor_slinger_model_id<'a>(
     index: &'a RemapIndex,
@@ -1414,8 +1501,13 @@ fn armor_slinger_model_id<'a>(
         return Some(binding.slinger_model_id.as_deref());
     }
     special_character_armor_target(armor_model_id)
-        .filter(|target| target.resource_gender == gender)
-        .map(|target| Some(target.slinger_model_id))
+        .filter(|target| {
+            target
+                .resource_gender
+                .map(|fixed| fixed == gender)
+                .unwrap_or(true)
+        })
+        .map(|target| target.slinger_model_id.map(Some).unwrap_or(None))
 }
 
 fn armor_path_gender(path: &str, armor_model_id: &str) -> Option<&'static str> {
@@ -1496,15 +1588,18 @@ fn simple_target(entry: &SimpleRemapTargetEntry) -> ModelRemapTarget {
     }
 }
 
-fn special_character_slinger_target(target: &SpecialCharacterArmorTarget) -> ModelRemapTarget {
-    ModelRemapTarget {
-        target_id: format!("slinger:{}", target.slinger_model_id),
-        model_id: target.slinger_model_id.to_string(),
-        model_paths: vec![format!("wp/slg/{}", target.slinger_model_id)],
-        game_ids: vec![target.slinger_model_id.to_string()],
+fn special_character_slinger_target(
+    target: &SpecialCharacterArmorTarget,
+) -> Option<ModelRemapTarget> {
+    let slinger_model_id = target.slinger_model_id?;
+    Some(ModelRemapTarget {
+        target_id: format!("slinger:{slinger_model_id}"),
+        model_id: slinger_model_id.to_string(),
+        model_paths: vec![format!("wp/slg/{slinger_model_id}")],
+        game_ids: vec![slinger_model_id.to_string()],
         display_names: vec![format!("【{}】服装关联投射器", target.character_name)],
         affected_parts: Vec::new(),
-    }
+    })
 }
 
 fn manual_slinger_target(target_id: &str) -> Result<ModelRemapTarget, String> {
@@ -1579,7 +1674,7 @@ fn path_rules_for_group(
             let target_set_id = armor_set_base_id(target_id)
                 .ok_or_else(|| format!("防具目标模型 ID 不符合 plNNN_NNNN 格式：{target_id}"))?;
             let forced_target_gender =
-                special_character_armor_target(target_id).map(|target| target.resource_gender);
+                special_character_armor_target(target_id).and_then(|target| target.resource_gender);
             Ok(["female", "male"]
                 .into_iter()
                 .map(|source_gender| {
@@ -2108,13 +2203,16 @@ mod tests {
             "armor:pl068_0000",
             "armor:pl068_0010",
             "armor:pl068_0020",
-            "armor:pl132_0010",
         ] {
             assert!(!groups[0]
                 .targets
                 .iter()
                 .any(|target| target.target_id == hidden_target));
         }
+        assert!(groups[0]
+            .targets
+            .iter()
+            .any(|target| target.target_id == "armor:pl132_0010"));
     }
 
     #[test]
@@ -2439,6 +2537,84 @@ mod tests {
             ciri[0].deploy_relative_path,
             "nativePC/pl/f_equip/pl119_0000/body/epv/f_body119.epv3"
         );
+
+        let bayek = build_effective_remap_files(
+            &[female_source.to_string()],
+            &replacements,
+            &[ModelRemapSelection {
+                group_key: "armor:pl105_0000".to_string(),
+                target_id: "armor:pl120_0000".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            bayek[0].deploy_relative_path,
+            "nativePC/pl/m_equip/pl120_0000/body/mod/m_body120_0000.mod3"
+        );
+
+        let claire = build_effective_remap_files(
+            &[male_source.to_string()],
+            &replacements,
+            &[ModelRemapSelection {
+                group_key: "armor:pl105_0000".to_string(),
+                target_id: "armor:pl131_0000".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            claire[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl131_0000/body/epv/f_body131.epv3"
+        );
+
+        let artemis = build_effective_remap_files(
+            &[male_source.to_string()],
+            &replacements,
+            &[ModelRemapSelection {
+                group_key: "armor:pl105_0000".to_string(),
+                target_id: "armor:pl132_0010".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            artemis[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl132_0010/body/epv/f_body132.epv3"
+        );
+    }
+
+    #[test]
+    fn special_character_targets_without_fixed_resource_gender_preserve_source_paths() {
+        let female_source = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3";
+        let male_source = "nativePC/pl/m_equip/pl105_0000/body/mod/m_body105_0000.mod3";
+        let replacements = vec![replacement("armor", "防具套装", "set", "pl105_0000")];
+
+        for (target_id, source_path, expected_path) in [
+            (
+                "armor:pl069_0000",
+                female_source,
+                "nativePC/pl/f_equip/pl069_0000/body/mod/f_body069_0000.mod3",
+            ),
+            (
+                "armor:pl070_0000",
+                male_source,
+                "nativePC/pl/m_equip/pl070_0000/body/mod/m_body070_0000.mod3",
+            ),
+            (
+                "armor:pl133_0000",
+                male_source,
+                "nativePC/pl/m_equip/pl133_0000/body/mod/m_body133_0000.mod3",
+            ),
+        ] {
+            let effective = build_effective_remap_files(
+                &[source_path.to_string()],
+                &replacements,
+                &[ModelRemapSelection {
+                    group_key: "armor:pl105_0000".to_string(),
+                    target_id: target_id.to_string(),
+                }],
+            )
+            .unwrap();
+            assert_eq!(effective[0].deploy_relative_path, expected_path);
+        }
     }
 
     #[test]
@@ -2486,10 +2662,52 @@ mod tests {
     }
 
     #[test]
-    fn special_character_target_warning_does_not_promise_face_hair_or_voice_moves() {
+    fn claire_special_target_uses_her_verified_shared_leon_slinger_binding() {
+        let armor_path = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string();
+        let slinger_path = "nativePC/wp/slg/slg000_0000/mod/slg000_0000.mod3".to_string();
+        let mut armor = replacement("armor", "防具套装", "set", "pl105_0000");
+        armor.matched_files = vec![armor_path.clone()];
+        let mut slinger = replacement("slinger", "投射器", "model", "slg000_0000");
+        slinger.matched_files = vec![slinger_path.clone()];
+        let replacements = vec![armor, slinger];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl131_0000".to_string(),
+        }];
+
+        let (groups, _) = build_model_remap_groups(&replacements, &selections).unwrap();
+        let slinger_group = groups
+            .iter()
+            .find(|group| group.group_key == "slinger:slg000_0000")
+            .unwrap();
+        assert_eq!(
+            slinger_group.selected_target_id.as_deref(),
+            Some("slinger:slg130_0000")
+        );
+
+        let effective =
+            build_effective_remap_files(&[armor_path, slinger_path], &replacements, &selections)
+                .unwrap();
+        assert_eq!(
+            effective[1].deploy_relative_path,
+            "nativePC/wp/slg/slg130_0000/mod/slg130_0000.mod3"
+        );
+    }
+
+    #[test]
+    fn special_character_target_warning_explains_the_full_special_target_table() {
         let warning = special_character_armor_target_warning("armor:pl118_0000").unwrap();
-        assert!(warning.contains("不会自动替换脸、头发或语音"));
+        assert!(warning.contains("人物语音不随防具改绑自动部署"));
         assert!(warning.contains("m_face/face004"));
+        assert!(special_character_armor_target_warning("armor:pl069_0000")
+            .unwrap()
+            .contains("保留来源 MOD 的男女资源根"));
+        assert!(special_character_armor_target_warning("armor:pl133_0000")
+            .unwrap()
+            .contains("slg133_0000"));
+        assert!(special_character_armor_target_warning("armor:pl132_0010")
+            .unwrap()
+            .contains("f_face/face005"));
         assert!(special_character_armor_target_warning("armor:pl105_0000").is_none());
     }
 

@@ -23,6 +23,21 @@
       "note": "The mod's documented Geralt replacement layout uses pl118_0000, m_face/face004, hair403 and slg118_0000."
     },
     {
+      "title": "Monster Hunter World Modding Wiki - Face IDs",
+      "url": "https://github-wiki-see.page/m/Ezekial711/MonsterHunterWorldModding/wiki/Face-IDs",
+      "note": "Documents the dedicated face slots for Ryu, Sakura, Geralt, Ciri, Bayek, Leon, Claire and Artemis. Face resources remain advisory only and are never moved automatically."
+    },
+    {
+      "title": "Monster Hunter World Modding Wiki - Hairstyle IDs",
+      "url": "https://github-wiki-see.page/m/Ezekial711/MonsterHunterWorldModding/wiki/Hairstyle-IDs",
+      "note": "Documents the dedicated Geralt, Ciri, Leon and Claire hairstyle slots. Hairstyle resources remain advisory only and are never moved automatically."
+    },
+    {
+      "title": "PlayStation Blog - Horizon Zero Dawn Aloy armor",
+      "url": "https://blog.playstation.com/2018/02/27/monster-hunter-world-meets-horizon-zero-dawn-how-to-unlock-aloys-armor-and-bow/",
+      "note": "Confirms the Aloy complete armor changes the hunter appearance. Its armor resource gender is intentionally preserved because no separate fixed face or hairstyle root is documented."
+    },
+    {
       "title": "Gala Suit Slinger",
       "url": "https://www.nexusmods.com/monsterhunterworld/mods/2298?tab=posts",
       "note": "The original mod page identifies slg078_0000 as the Gala Suit slinger model."
@@ -97,6 +112,30 @@
       "modelId": "slg119_0000",
       "gameIds": ["slg119_0000"],
       "displayNames": ["【希里】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg120_0000",
+      "modelId": "slg120_0000",
+      "gameIds": ["slg120_0000"],
+      "displayNames": ["【巴耶克】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg130_0000",
+      "modelId": "slg130_0000",
+      "gameIds": ["slg130_0000"],
+      "displayNames": ["【里昂/克莱尔】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg132_0000",
+      "modelId": "slg132_0000",
+      "gameIds": ["slg132_0000"],
+      "displayNames": ["【阿尔忒弥斯】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg133_0000",
+      "modelId": "slg133_0000",
+      "gameIds": ["slg133_0000"],
+      "displayNames": ["【埃洛伊】服装关联投射器"]
     },
     {
       "modelPath": "wp/slg/slg127_0000",

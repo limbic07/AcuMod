@@ -295,7 +295,7 @@ src-tauri/src/services/model_recognition.rs
 src-tauri/src/services/model_remap.rs
   读取同一份精简索引中的可选目标
   仅支持武器、防具、随从防具、投射器和玩家发型
-  根据 manifest.modelRemaps 以类别化路径规则生成有效部署路径；防具规范 EPV 文件按三位套装号重命名，杰洛特/希里目标强制采用专用性别根和投射器绑定，人物语音始终只读
+  根据 manifest.modelRemaps 以类别化路径规则生成有效部署路径；防具规范 EPV 文件按三位套装号重命名，角色套装表只对已核实的固定性别目标强制专用资源根和投射器绑定，人物语音始终只读
 ```
 
 已新增 `src-tauri/src/services/mod_state_sync.rs`，避免继续扩大 `mod_library.rs`。职责边界：
@@ -436,7 +436,7 @@ Vue UI
 例如“修改模型替换目标”：
 
 1. Vue 调用 `get_mod_remap_details`，只显示后端判定为可改绑的五类分组和同类型目标。
-2. 用户选择目标并点击保存后，Vue 在内部调用 `preview_mod_remap`；Rust 校验原路径、有效路径、MRL3 修正、EVAM 绑定、DAT 型防具的逐部位映射和碰撞，不写 manifest。DAT 的来源/外观 ID、部位主模型号和核心文件均吻合时，或其它来源槽位已别名到当前资源目录时，预览会提示有效部署将排除 `armor.am_dat`；选择杰洛特或希里时还会说明固定资源性别和未自动处理的脸、头发、语音边界；前端只显示必要警告，不展示技术统计。
+2. 用户选择目标并点击保存后，Vue 在内部调用 `preview_mod_remap`；Rust 校验原路径、有效路径、MRL3 修正、EVAM 绑定、DAT 型防具的逐部位映射和碰撞，不写 manifest。DAT 的来源/外观 ID、部位主模型号和核心文件均吻合时，或其它来源槽位已别名到当前资源目录时，预览会提示有效部署将排除 `armor.am_dat`；选择角色套装时还会说明固定或保留的资源性别、已验证投射器，以及未自动处理的脸、头发、语音边界；前端只显示必要警告，不展示技术统计。
 3. 校验通过后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 16 manifest。
 4. `preview_enable_mod`、`enable_mod`、冲突检测和冲突顺序应用不再直接使用原始 `files[].deployRelativePath`，而是统一调用有效部署文件生成器。
 5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；飞翔爪改绑只修改已关联 `.evam` 的绑定字段；DAT 型防具只改写有效部署路径并自动跳过全局 DAT；本地库原文件保持不变。

@@ -18,6 +18,11 @@
       "note": "The original mod page identifies slg119_0000 as the slinger used with the Ciri armor model."
     },
     {
+      "title": "Player Furious Rajang",
+      "url": "https://www.nexusmods.com/monsterhunterworld/mods/3440",
+      "note": "The mod's documented Geralt replacement layout uses pl118_0000, m_face/face004, hair403 and slg118_0000."
+    },
+    {
       "title": "Gala Suit Slinger",
       "url": "https://www.nexusmods.com/monsterhunterworld/mods/2298?tab=posts",
       "note": "The original mod page identifies slg078_0000 as the Gala Suit slinger model."
@@ -80,6 +85,12 @@
       "modelId": "slg106_0000",
       "gameIds": ["slg106_0000"],
       "displayNames": ["【浴场】服装关联投射器"]
+    },
+    {
+      "modelPath": "wp/slg/slg118_0000",
+      "modelId": "slg118_0000",
+      "gameIds": ["slg118_0000"],
+      "displayNames": ["【杰洛特】服装关联投射器"]
     },
     {
       "modelPath": "wp/slg/slg119_0000",

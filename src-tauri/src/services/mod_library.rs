@@ -34,8 +34,8 @@ use super::model_recognition::{
 use super::model_remap::{
     build_effective_remap_files, build_effective_remap_files_with_armor_dat,
     build_model_remap_groups, is_armor_epv_deploy_path, rewrite_evam_slinger_id,
-    rewrite_mrl3_texture_paths, EffectiveRemapFile, EvamSlingerIdRewrite, ModelRemapGroup,
-    ModelRemapSelection,
+    rewrite_mrl3_texture_paths, special_character_armor_target_warning, EffectiveRemapFile,
+    EvamSlingerIdRewrite, ModelRemapGroup, ModelRemapSelection,
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
@@ -5460,6 +5460,11 @@ fn preview_mod_remap_from(
         warnings.push(format!(
             "恢复后会重新部署 {current_automatic_exclusion_count} 个原始 armor.am_dat，使 MOD 回到导入时的来源防具映射。"
         ));
+    }
+    if let Some(target_id) = normalized_target_id.as_deref() {
+        if let Some(warning) = special_character_armor_target_warning(target_id) {
+            warnings.push(warning);
+        }
     }
     let target_label = normalized_target_id
         .as_deref()

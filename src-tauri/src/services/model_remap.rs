@@ -24,6 +24,28 @@ const ARMOR_DAT_MAGIC: u16 = 0x005F;
 const ARMOR_DAT_HEADER_SIZE: usize = 10;
 const ARMOR_DAT_ENTRY_SIZE: usize = 60;
 
+/// 这两套外观由剧情角色专用资源链加载，不能沿用普通防具的“输入性别即目标性别”规则。
+const SPECIAL_CHARACTER_ARMOR_TARGETS: [SpecialCharacterArmorTarget; 2] = [
+    SpecialCharacterArmorTarget {
+        model_id: "pl118_0000",
+        character_name: "杰洛特",
+        resource_gender: "male",
+        slinger_model_id: "slg118_0000",
+        face_path: "nativePC/pl/m_face/face004",
+        hair_path: "nativePC/pl/hair/hair403",
+        voice_path: Some("nativePC/sound/wwise/Windows/pl_act_vo_c_03_m.nbnk"),
+    },
+    SpecialCharacterArmorTarget {
+        model_id: "pl119_0000",
+        character_name: "希里",
+        resource_gender: "female",
+        slinger_model_id: "slg119_0000",
+        face_path: "nativePC/pl/f_face/face003",
+        hair_path: "nativePC/pl/hair/hair404",
+        voice_path: None,
+    },
+];
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRemapSelection {
@@ -168,6 +190,11 @@ enum FileNameRemapRule {
         source_set_id: String,
         target_set_id: String,
     },
+    /// 杰洛特、希里等角色套装的实际资源根固定为单一性别；根目录变化时同步修正文件前缀。
+    ArmorFileGenderPrefix {
+        source_gender: String,
+        target_gender: String,
+    },
 }
 
 struct PairedSlingerInference {
@@ -180,8 +207,20 @@ struct PairedSlingerInference {
 struct ArmorDatNormalizationRule {
     source_model_id: String,
     target_model_id: String,
-    /// 部位到原 MOD 实际使用的三位主模型编号。只记录需要额外改名的跨槽位部位。
+    /// 特殊角色目标的文件名前缀必须使用其实际资源性别，而不是来源 MOD 的性别。
+    target_file_gender: Option<&'static str>,
+    /// 部位到原 MOD 实际使用的三位主模型编号。记录 DAT 跨槽位编号，或被 DAT 别名指向的资源目录编号。
     part_model_ids: BTreeMap<String, String>,
+}
+
+struct SpecialCharacterArmorTarget {
+    model_id: &'static str,
+    character_name: &'static str,
+    resource_gender: &'static str,
+    slinger_model_id: &'static str,
+    face_path: &'static str,
+    hair_path: &'static str,
+    voice_path: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -190,6 +229,45 @@ struct ArmorDatEntry {
     equip_slot: u8,
     mdl_main_id: u16,
     set_group: u16,
+}
+
+fn special_character_armor_target(model_id: &str) -> Option<&'static SpecialCharacterArmorTarget> {
+    SPECIAL_CHARACTER_ARMOR_TARGETS
+        .iter()
+        .find(|target| target.model_id.eq_ignore_ascii_case(model_id))
+}
+
+fn armor_equip_directory(gender: &str) -> &'static str {
+    match gender {
+        "female" => "f_equip",
+        "male" => "m_equip",
+        _ => unreachable!("防具资源性别只能是 female 或 male"),
+    }
+}
+
+fn armor_file_gender(gender: &str) -> &'static str {
+    match gender {
+        "female" => "f",
+        "male" => "m",
+        _ => unreachable!("防具资源性别只能是 female 或 male"),
+    }
+}
+
+/// 返回特殊角色套装的预览提示；只说明实际资源边界，不自动改写未知脸、头发或语音文件。
+pub fn special_character_armor_target_warning(target_id: &str) -> Option<String> {
+    let model_id = target_id.strip_prefix("armor:").unwrap_or(target_id);
+    let target = special_character_armor_target(model_id)?;
+    let mut resources = vec![target.face_path, target.hair_path];
+    if let Some(voice_path) = target.voice_path {
+        resources.push(voice_path);
+    }
+    Some(format!(
+        "{}为专用{}角色资源链：防具会部署到 {} 并同步文件名前缀；配套投射器使用该角色的原版绑定。不会自动替换脸、头发或语音资源（{}），请仅在 MOD 明确提供兼容资源时另行处理。",
+        target.character_name,
+        gender_label(target.resource_gender),
+        armor_equip_directory(target.resource_gender),
+        resources.join("、")
+    ))
 }
 
 pub fn build_model_remap_groups(
@@ -256,9 +334,10 @@ pub fn build_effective_remap_files(
 
 /// 根据已验证的 `armor.am_dat` 生成 DAT 型防具的标准化部署路径。
 ///
-/// 普通防具只需要从来源槽位移动到目标槽位。DAT 型 MOD 可能让来源槽位
-/// 加载另一组三位模型编号；此处仅在表记录和实际核心文件同时吻合时，把该
-/// 编号也改为目标编号，并排除全局 DAT，避免来源槽位被继续影响。
+/// 普通防具只需要从来源槽位移动到目标槽位。DAT 型 MOD 既可能让来源槽位
+/// 加载另一组三位模型编号，也可能把多个来源槽位别名到 MOD 自己的目录编号；
+/// 此处仅在表记录和实际核心文件同时吻合时，把该编号标准化为目标编号，并排除
+/// 全局 DAT，避免原来源槽位继续被影响。
 pub fn build_effective_remap_files_with_armor_dat(
     deploy_relative_paths: &[String],
     replacements: &[ModelReplacement],
@@ -415,19 +494,37 @@ fn build_armor_dat_normalization_rules(
                 ));
             }
             let model_id = format!("{:03}", model_ids.into_iter().next().unwrap());
-            if model_id == source_set_id {
-                continue;
-            }
-            if has_armor_core_file(deploy_relative_paths, source_model_id, part, &model_id) {
+            if model_id != source_set_id
+                && has_armor_core_file(deploy_relative_paths, source_model_id, part, &model_id)
+            {
                 mapped_models.insert(part.to_string(), model_id);
+            }
+
+            // 一些 MOD 的资源目录本身就是 DAT 的目标模型号。例如绮梦花嫁把
+            // 冰狼和浴场都映射到 pl106，目录和 DAT 主模型号因此同为 106。
+            // 这里必须识别“其它装备槽位 -> 当前资源目录”的别名，否则改绑后
+            // 会继续部署全局 DAT，令原槽位仍加载同一套 MOD。
+            let has_foreign_alias = entries.iter().any(|entry| {
+                armor_dat_part_name(entry.equip_slot) == Some(part)
+                    && format!("{:03}", entry.mdl_main_id) == source_set_id
+                    && !(source_game_ids.contains(&entry.set_group)
+                        && source_variant_ids.contains(&entry.set_id))
+            });
+            if has_foreign_alias
+                && has_armor_core_file(deploy_relative_paths, source_model_id, part, &source_set_id)
+            {
+                mapped_models.insert(part.to_string(), source_set_id.clone());
             }
         }
 
-        // 只有 DAT 的跨槽位编号确实命中本地核心资源时，才删除全局表并标准化。
+        // 只有 DAT 跨槽位资源或外部槽位别名确实命中本地核心资源时，才删除全局表。
         if !mapped_models.is_empty() {
+            let target_file_gender = special_character_armor_target(&target.model_id)
+                .map(|target| armor_file_gender(target.resource_gender));
             rules.push(ArmorDatNormalizationRule {
                 source_model_id: source_model_id.to_string(),
                 target_model_id: target.model_id,
+                target_file_gender,
                 part_model_ids: mapped_models,
             });
         }
@@ -551,12 +648,20 @@ fn apply_armor_dat_normalization_rule(
     let Some(target_set_id) = armor_set_base_id(&rule.target_model_id) else {
         return effective_path.to_string();
     };
-    let Some(file_name) = file_name_from_deploy_path(effective_path) else {
+    // 通用路径规则可能已把 f_body106_0000 暂时改成 f_body066_0010。
+    // DAT 的三位主模型号仍应以库内原文件名判定，最后统一写成目标套装号。
+    let Some(file_name) = file_name_from_deploy_path(original_path) else {
         return effective_path.to_string();
     };
-    let Some(rewritten_file_name) =
-        rewrite_armor_core_file_name(&file_name, gender, part, source_model_id, &target_set_id)
-    else {
+    let target_gender = rule.target_file_gender.unwrap_or(gender);
+    let Some(rewritten_file_name) = rewrite_armor_core_file_name(
+        &file_name,
+        gender,
+        target_gender,
+        part,
+        source_model_id,
+        &target_set_id,
+    ) else {
         return effective_path.to_string();
     };
 
@@ -601,17 +706,18 @@ fn file_name_from_deploy_path(path: &str) -> Option<String> {
 }
 
 fn armor_core_file_name_matches(file_name: &str, gender: &str, part: &str, model_id: &str) -> bool {
-    rewrite_armor_core_file_name(file_name, gender, part, model_id, model_id).is_some()
+    rewrite_armor_core_file_name(file_name, gender, gender, part, model_id, model_id).is_some()
 }
 
 fn rewrite_armor_core_file_name(
     file_name: &str,
-    gender: &str,
+    source_gender: &str,
+    target_gender: &str,
     part: &str,
     source_model_id: &str,
     target_model_id: &str,
 ) -> Option<String> {
-    let prefix = format!("{gender}_{part}{source_model_id}");
+    let prefix = format!("{source_gender}_{part}{source_model_id}");
     if !file_name
         .get(..prefix.len())
         .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
@@ -627,7 +733,7 @@ fn rewrite_armor_core_file_name(
     {
         return None;
     }
-    Some(format!("{gender}_{part}{target_model_id}{suffix}"))
+    Some(format!("{target_gender}_{part}{target_model_id}{suffix}"))
 }
 
 pub fn rewrite_evam_slinger_id(
@@ -1052,11 +1158,21 @@ fn add_slinger_groups(
     warnings.extend(inference.warnings);
     warnings.extend(inference.blocking_errors.iter().cloned());
     let inferred_targets = inference.targets;
-    let base_targets = index
+    let mut base_targets = index
         .slinger_remap_targets
         .iter()
         .map(simple_target)
         .collect::<Vec<_>>();
+    for target in SPECIAL_CHARACTER_ARMOR_TARGETS {
+        let special_target = special_character_slinger_target(&target);
+        if !base_targets
+            .iter()
+            .any(|candidate| candidate.target_id == special_target.target_id)
+        {
+            base_targets.push(special_target);
+        }
+    }
+    base_targets.sort_by(|left, right| left.target_id.cmp(&right.target_id));
 
     for replacement in replacements
         .iter()
@@ -1152,7 +1268,7 @@ fn infer_paired_slinger_targets(
                 continue;
             }
 
-            let Some(source_binding) = armor_slinger_binding(index, &source_armor_id, gender)
+            let Some(source_slinger_id) = armor_slinger_model_id(index, &source_armor_id, gender)
             else {
                 inference.warnings.push(format!(
                     "原版 EVAM 表缺少 {} 的{}绑定，无法自动判断配套飞翔爪。",
@@ -1161,7 +1277,7 @@ fn infer_paired_slinger_targets(
                 ));
                 continue;
             };
-            let Some(source_slinger_id) = source_binding.slinger_model_id.as_deref() else {
+            let Some(source_slinger_id) = source_slinger_id else {
                 continue;
             };
             let paired_slingers = slinger_replacements
@@ -1178,20 +1294,27 @@ fn infer_paired_slinger_targets(
                 continue;
             }
 
-            let Some(target_binding) = armor_slinger_binding(index, target_armor_id, gender) else {
+            // 杰洛特、希里的装备目录只由固定性别加载。即使来源 MOD 是另一性别，
+            // 配套飞翔爪也必须使用角色实际 EVAM 的目标绑定。
+            let target_gender = special_character_armor_target(target_armor_id)
+                .map(|target| target.resource_gender)
+                .unwrap_or(gender);
+            let Some(target_slinger_id) =
+                armor_slinger_model_id(index, target_armor_id, target_gender)
+            else {
                 inference.warnings.push(format!(
                     "原版 EVAM 表缺少目标防具 {} 的{}绑定，配套飞翔爪 {} 不会自动改绑。",
                     target_armor_id,
-                    gender_label(gender),
+                    gender_label(target_gender),
                     source_slinger_id
                 ));
                 continue;
             };
-            let Some(target_slinger_id) = target_binding.slinger_model_id.as_deref() else {
+            let Some(target_slinger_id) = target_slinger_id else {
                 inference.warnings.push(format!(
                     "目标防具 {} 的{}原版 EVAM 明确没有飞翔爪，{} 将保持原路径且不会被该防具调用。",
                     target_armor_id,
-                    gender_label(gender),
+                    gender_label(target_gender),
                     source_slinger_id
                 ));
                 continue;
@@ -1280,6 +1403,21 @@ fn armor_slinger_binding<'a>(
     })
 }
 
+/// 从生成索引取得原版绑定；索引尚未重建时，回退到两套已核实的特殊角色绑定。
+/// 外层 None 表示没有可确认记录，内层 None 表示原版明确不绑定投射器。
+fn armor_slinger_model_id<'a>(
+    index: &'a RemapIndex,
+    armor_model_id: &str,
+    gender: &str,
+) -> Option<Option<&'a str>> {
+    if let Some(binding) = armor_slinger_binding(index, armor_model_id, gender) {
+        return Some(binding.slinger_model_id.as_deref());
+    }
+    special_character_armor_target(armor_model_id)
+        .filter(|target| target.resource_gender == gender)
+        .map(|target| Some(target.slinger_model_id))
+}
+
 fn armor_path_gender(path: &str, armor_model_id: &str) -> Option<&'static str> {
     let normalized = normalize_deploy_path(path).to_ascii_lowercase();
     let components = normalized.split('/').collect::<Vec<_>>();
@@ -1358,6 +1496,17 @@ fn simple_target(entry: &SimpleRemapTargetEntry) -> ModelRemapTarget {
     }
 }
 
+fn special_character_slinger_target(target: &SpecialCharacterArmorTarget) -> ModelRemapTarget {
+    ModelRemapTarget {
+        target_id: format!("slinger:{}", target.slinger_model_id),
+        model_id: target.slinger_model_id.to_string(),
+        model_paths: vec![format!("wp/slg/{}", target.slinger_model_id)],
+        game_ids: vec![target.slinger_model_id.to_string()],
+        display_names: vec![format!("【{}】服装关联投射器", target.character_name)],
+        affected_parts: Vec::new(),
+    }
+}
+
 fn manual_slinger_target(target_id: &str) -> Result<ModelRemapTarget, String> {
     let model_id = target_id
         .strip_prefix("slinger:")
@@ -1429,22 +1578,31 @@ fn path_rules_for_group(
                 .ok_or_else(|| format!("防具模型 ID 不符合 plNNN_NNNN 格式：{source_id}"))?;
             let target_set_id = armor_set_base_id(target_id)
                 .ok_or_else(|| format!("防具目标模型 ID 不符合 plNNN_NNNN 格式：{target_id}"))?;
-            let file_name_rules = vec![
-                FileNameRemapRule::ModelToken {
-                    rename_outside_root: false,
-                },
-                FileNameRemapRule::ArmorEpvBaseId {
-                    source_set_id,
-                    target_set_id,
-                },
-            ];
-            Ok(["pl/f_equip", "pl/m_equip"]
+            let forced_target_gender =
+                special_character_armor_target(target_id).map(|target| target.resource_gender);
+            Ok(["female", "male"]
                 .into_iter()
-                .map(|root| {
+                .map(|source_gender| {
+                    let target_gender = forced_target_gender.unwrap_or(source_gender);
+                    let mut file_name_rules = vec![
+                        FileNameRemapRule::ModelToken {
+                            rename_outside_root: false,
+                        },
+                        FileNameRemapRule::ArmorEpvBaseId {
+                            source_set_id: source_set_id.clone(),
+                            target_set_id: target_set_id.clone(),
+                        },
+                    ];
+                    if source_gender != target_gender {
+                        file_name_rules.push(FileNameRemapRule::ArmorFileGenderPrefix {
+                            source_gender: armor_file_gender(source_gender).to_string(),
+                            target_gender: armor_file_gender(target_gender).to_string(),
+                        });
+                    }
                     path_rule(
-                        &format!("{root}/{source_id}"),
-                        &format!("{root}/{target_id}"),
-                        file_name_rules.clone(),
+                        &format!("pl/{}/{}", armor_equip_directory(source_gender), source_id),
+                        &format!("pl/{}/{}", armor_equip_directory(target_gender), target_id),
+                        file_name_rules,
                     )
                 })
                 .collect())
@@ -1560,6 +1718,14 @@ fn apply_path_rule(path: &str, rule: &PathRemapRule) -> String {
                         components[file_name_index] = file_name;
                     }
                 }
+                FileNameRemapRule::ArmorFileGenderPrefix {
+                    source_gender,
+                    target_gender,
+                } if root_was_replaced => {
+                    let file_name = &mut components[file_name_index];
+                    *file_name =
+                        rewrite_armor_file_gender_prefix(file_name, source_gender, target_gender);
+                }
                 _ => {}
             }
         }
@@ -1590,6 +1756,22 @@ fn replace_ascii_case_insensitive(value: &str, from: &str, to: &str) -> String {
     }
     result.push_str(&value[cursor..]);
     result
+}
+
+fn rewrite_armor_file_gender_prefix(
+    file_name: &str,
+    source_gender: &str,
+    target_gender: &str,
+) -> String {
+    let source_prefix = format!("{source_gender}_");
+    if file_name
+        .get(..source_prefix.len())
+        .is_some_and(|value| value.eq_ignore_ascii_case(&source_prefix))
+    {
+        format!("{target_gender}_{}", &file_name[source_prefix.len()..])
+    } else {
+        file_name.to_string()
+    }
 }
 
 fn replace_numeric_model_token(value: &str, from: &str, to: &str) -> String {
@@ -1864,6 +2046,14 @@ mod tests {
         armor
     }
 
+    fn dat_alias_armor_replacement() -> ModelReplacement {
+        let mut armor = replacement("armor", "防具套装", "set", "pl106_0000");
+        // 浴场自身的来源槽位为游戏 512、外观 462；冰狼会被 DAT 额外别名到 106。
+        armor.game_ids = vec!["512".to_string()];
+        armor.variant_ids = vec!["462".to_string()];
+        armor
+    }
+
     fn armor_dat_bytes(entries: &[(u16, u16, u8, u16)]) -> Vec<u8> {
         let mut bytes = vec![0; ARMOR_DAT_HEADER_SIZE + entries.len() * ARMOR_DAT_ENTRY_SIZE];
         bytes[4..6].copy_from_slice(&ARMOR_DAT_MAGIC.to_le_bytes());
@@ -1990,6 +2180,114 @@ mod tests {
     }
 
     #[test]
+    fn dat_alias_remap_excludes_dat_and_normalizes_same_number_resource_root() {
+        let replacements = vec![dat_alias_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl106_0000/head/mod/f_head106_0000.mod3",
+            "nativePC/pl/f_equip/pl106_0000/body/mod/f_body106_0000.mod3",
+            "nativePC/pl/f_equip/pl106_0000/arm/mod/f_arm106_0000.mod3",
+            "nativePC/pl/f_equip/pl106_0000/wst/mod/f_wst106_0000.mod3",
+            "nativePC/pl/f_equip/pl106_0000/leg/mod/f_leg106_0000.mod3",
+            "nativePC/common/equip/armor.am_dat",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let dat = armor_dat_bytes(&[
+            // 浴场自己的表项，主模型号与目录同为 106。
+            (462, 512, 0, 106),
+            (462, 512, 1, 106),
+            (462, 512, 2, 106),
+            (462, 512, 3, 106),
+            (462, 512, 4, 106),
+            // 冰狼额外被映射到同一份 pl106 资源。
+            (250, 300, 0, 106),
+            (250, 300, 1, 106),
+            (250, 300, 2, 106),
+            (250, 300, 3, 106),
+            (250, 300, 4, 106),
+        ]);
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl106_0000".to_string(),
+            target_id: "armor:pl066_0010".to_string(),
+        }];
+
+        let effective = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&dat),
+        )
+        .unwrap();
+
+        for (file, part) in effective.iter().zip(["head", "body", "arm", "wst", "leg"]) {
+            assert_eq!(
+                file.deploy_relative_path,
+                format!("nativePC/pl/f_equip/pl066_0010/{part}/mod/f_{part}066_0000.mod3")
+            );
+        }
+        assert!(effective[5].automatic_exclusion_reason.is_some());
+    }
+
+    #[test]
+    fn dat_alias_remap_uses_special_character_resource_gender() {
+        let replacements = vec![dat_alias_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl106_0000/body/mod/f_body106_0000.mod3",
+            "nativePC/common/equip/armor.am_dat",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let dat = armor_dat_bytes(&[(462, 512, 1, 106), (250, 300, 1, 106)]);
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl106_0000".to_string(),
+            target_id: "armor:pl118_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&dat),
+        )
+        .unwrap();
+
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/m_equip/pl118_0000/body/mod/m_body118_0000.mod3"
+        );
+        assert!(effective[1].automatic_exclusion_reason.is_some());
+    }
+
+    #[test]
+    fn dat_self_mapping_without_foreign_alias_keeps_dat() {
+        let replacements = vec![dat_alias_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl106_0000/body/mod/f_body106_0000.mod3",
+            "nativePC/common/equip/armor.am_dat",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let dat = armor_dat_bytes(&[(462, 512, 1, 106)]);
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl106_0000".to_string(),
+            target_id: "armor:pl067_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&dat),
+        )
+        .unwrap();
+
+        assert!(effective[1].automatic_exclusion_reason.is_none());
+    }
+
+    #[test]
     fn dat_armor_remap_only_normalizes_parts_with_verified_core_files() {
         let replacements = vec![dat_armor_replacement()];
         let files = [
@@ -2106,6 +2404,93 @@ mod tests {
         for (file, expected_path) in effective.iter().zip(expected) {
             assert_eq!(file.deploy_relative_path, expected_path);
         }
+    }
+
+    #[test]
+    fn special_character_targets_force_their_resource_gender_and_file_prefix() {
+        let female_source = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3";
+        let male_source = "nativePC/pl/m_equip/pl105_0000/body/epv/m_body105.epv3";
+        let replacements = vec![replacement("armor", "防具套装", "set", "pl105_0000")];
+
+        let geralt = build_effective_remap_files(
+            &[female_source.to_string()],
+            &replacements,
+            &[ModelRemapSelection {
+                group_key: "armor:pl105_0000".to_string(),
+                target_id: "armor:pl118_0000".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            geralt[0].deploy_relative_path,
+            "nativePC/pl/m_equip/pl118_0000/body/mod/m_body118_0000.mod3"
+        );
+
+        let ciri = build_effective_remap_files(
+            &[male_source.to_string()],
+            &replacements,
+            &[ModelRemapSelection {
+                group_key: "armor:pl105_0000".to_string(),
+                target_id: "armor:pl119_0000".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            ciri[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl119_0000/body/epv/f_body119.epv3"
+        );
+    }
+
+    #[test]
+    fn special_character_target_infers_fixed_slinger_binding_when_index_is_stale() {
+        let armor_path = "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3".to_string();
+        let slinger_path = "nativePC/wp/slg/slg000_0000/mod/slg000_0000.mod3".to_string();
+        let mut armor = replacement("armor", "防具套装", "set", "pl105_0000");
+        armor.matched_files = vec![armor_path.clone()];
+        let mut slinger = replacement("slinger", "投射器", "model", "slg000_0000");
+        slinger.matched_files = vec![slinger_path.clone()];
+        let replacements = vec![armor, slinger];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl118_0000".to_string(),
+        }];
+
+        let (groups, warnings) = build_model_remap_groups(&replacements, &selections).unwrap();
+        let slinger_group = groups
+            .iter()
+            .find(|group| group.group_key == "slinger:slg000_0000")
+            .unwrap();
+        assert_eq!(
+            slinger_group.selected_target_id.as_deref(),
+            Some("slinger:slg118_0000")
+        );
+        assert!(slinger_group
+            .targets
+            .iter()
+            .any(|target| target.target_id == "slinger:slg118_0000"));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("slg000_0000 -> slg118_0000")));
+
+        let effective =
+            build_effective_remap_files(&[armor_path, slinger_path], &replacements, &selections)
+                .unwrap();
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/m_equip/pl118_0000/body/mod/m_body118_0000.mod3"
+        );
+        assert_eq!(
+            effective[1].deploy_relative_path,
+            "nativePC/wp/slg/slg118_0000/mod/slg118_0000.mod3"
+        );
+    }
+
+    #[test]
+    fn special_character_target_warning_does_not_promise_face_hair_or_voice_moves() {
+        let warning = special_character_armor_target_warning("armor:pl118_0000").unwrap();
+        assert!(warning.contains("不会自动替换脸、头发或语音"));
+        assert!(warning.contains("m_face/face004"));
+        assert!(special_character_armor_target_warning("armor:pl105_0000").is_none());
     }
 
     #[test]

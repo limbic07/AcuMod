@@ -14,10 +14,10 @@
                    "licenseNote":  "Only derived IDs and virtual source paths are stored. Original EVAM files are not redistributed."
                },
     "statistics":  {
-                       "bindingCount":  462,
-                       "armorModelCount":  234,
-                       "femaleBindingCount":  231,
-                       "maleBindingCount":  231,
+                       "bindingCount":  464,
+                       "armorModelCount":  236,
+                       "femaleBindingCount":  232,
+                       "maleBindingCount":  232,
                        "noSlingerBindingCount":  14,
                        "nonMatchingBaseIdCount":  98,
                        "genderMismatchArmorModelCount":  5
@@ -3478,6 +3478,22 @@
                          "slingerModelId":  "slg019_0000",
                          "matchesArmorBaseId":  false,
                          "sourcePath":  "pl/m_equip/pl117_0000/arm/mod/m_arm117_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl118_0000",
+                         "gender":  "male",
+                         "slingerId":  118,
+                         "slingerModelId":  "slg118_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/m_equip/pl118_0000/arm/mod/m_arm118_0000.evam"
+                     },
+                     {
+                         "armorModelId":  "pl119_0000",
+                         "gender":  "female",
+                         "slingerId":  119,
+                         "slingerModelId":  "slg119_0000",
+                         "matchesArmorBaseId":  true,
+                         "sourcePath":  "pl/f_equip/pl119_0000/arm/mod/f_arm119_0000.evam"
                      },
                      {
                          "armorModelId":  "pl120_0000",

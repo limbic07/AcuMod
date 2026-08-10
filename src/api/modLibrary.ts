@@ -749,20 +749,24 @@ export function previewModImport(
 export function installModFromFolder(
   path: string,
   allowGameRoot: boolean,
+  preferredName: string | null = null,
 ): Promise<ModInstallResult> {
   return invoke<ModInstallResult>("install_mod_from_folder", {
     path,
     allowGameRoot,
+    preferredName,
   });
 }
 
 export function installModFromArchive(
   path: string,
   allowGameRoot: boolean,
+  preferredName: string | null = null,
 ): Promise<ModArchiveImportOutcome> {
   return invoke<ModArchiveImportOutcome>("install_mod_from_archive", {
     path,
     allowGameRoot,
+    preferredName,
   });
 }
 

@@ -95,6 +95,7 @@ pub async fn install_mod_from_folder(
     app: tauri::AppHandle,
     path: String,
     allow_game_root: bool,
+    preferred_name: Option<String>,
 ) -> Result<ModInstallResult, String> {
     let worker_app = app.clone();
     run_blocking_operation(app, "importFolder", "正在导入 MOD", move |progress| {
@@ -102,6 +103,7 @@ pub async fn install_mod_from_folder(
             &worker_app,
             path,
             allow_game_root,
+            preferred_name,
             &progress,
         )
     })
@@ -113,6 +115,7 @@ pub async fn install_mod_from_archive(
     app: tauri::AppHandle,
     path: String,
     allow_game_root: bool,
+    preferred_name: Option<String>,
 ) -> Result<ModArchiveImportOutcome, String> {
     let worker_app = app.clone();
     run_blocking_operation(
@@ -124,6 +127,7 @@ pub async fn install_mod_from_archive(
                 &worker_app,
                 path,
                 allow_game_root,
+                preferred_name,
                 &progress,
             )
         },

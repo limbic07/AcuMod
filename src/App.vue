@@ -116,6 +116,13 @@ interface ConfirmationRequest {
   tone?: ConfirmationTone;
 }
 
+type DuplicateImportKind = "folder" | "archive";
+
+interface DuplicateImportRequest {
+  kind: DuplicateImportKind;
+  existingName: string;
+}
+
 const appInfo = ref<AppInfo | null>(null);
 const gameStatus = ref<GameDirectoryStatus | null>(null);
 const gameTextLanguage = ref<GameTextLanguage>("simplifiedChinese");
@@ -123,6 +130,9 @@ const modLibraryStatus = ref<ModLibraryStatus | null>(null);
 const installedModList = ref<InstalledModList | null>(null);
 const importPreview = ref<ModImportPreview | null>(null);
 const installResult = ref<ModInstallResult | null>(null);
+const duplicateImportRequest = ref<DuplicateImportRequest | null>(null);
+const duplicateImportName = ref("");
+const duplicateImportError = ref("");
 const conflictReport = ref<ModConflictReport | null>(null);
 const modCategories = ref<ModCategory[]>([]);
 const modBranchGroups = ref<ModBranchGroup[]>([]);
@@ -1579,7 +1589,40 @@ function confirmGameRootPreview() {
   void previewImportPath(true);
 }
 
-async function installPreviewedMod() {
+function requestDuplicateName(kind: DuplicateImportKind, existing: ModInstallResult) {
+  duplicateImportRequest.value = { kind, existingName: existing.name };
+  duplicateImportName.value = `${existing.name}（副本）`;
+  duplicateImportError.value = "";
+}
+
+function closeDuplicateImportDialog(force = false) {
+  if ((isInstallingMod.value || isInstallingArchive.value) && !force) return;
+  duplicateImportRequest.value = null;
+  duplicateImportName.value = "";
+  duplicateImportError.value = "";
+}
+
+async function confirmDuplicateImport() {
+  const request = duplicateImportRequest.value;
+  const name = duplicateImportName.value.trim();
+  if (!request) return;
+  if (!name) {
+    duplicateImportError.value = "请输入新的 MOD 名称。";
+    return;
+  }
+  if (name === request.existingName) {
+    duplicateImportError.value = "新名称不能与已导入 MOD 相同。";
+    return;
+  }
+  duplicateImportError.value = "";
+  if (request.kind === "folder") {
+    await installPreviewedMod(name);
+  } else {
+    await installArchive(name);
+  }
+}
+
+async function installPreviewedMod(preferredName: string | null = null) {
   if (!importPreview.value || importPreview.value.status !== "ready") {
     return;
   }
@@ -1588,7 +1631,12 @@ async function installPreviewedMod() {
 
   try {
     const allowGameRoot = importPreview.value.deployRoot === "gameRoot";
-    installResult.value = await installModFromFolder(importPath.value, allowGameRoot);
+    installResult.value = await installModFromFolder(importPath.value, allowGameRoot, preferredName);
+    if (installResult.value.alreadyInstalled && !preferredName) {
+      requestDuplicateName("folder", installResult.value);
+      return;
+    }
+    if (preferredName) closeDuplicateImportDialog(true);
     importError.value = "";
     await loadModLibraryStatus();
     await loadModViewsFromSnapshot();
@@ -1599,17 +1647,31 @@ async function installPreviewedMod() {
   }
 }
 
-async function installArchive() {
+function submitPreviewedMod() {
+  void installPreviewedMod();
+}
+
+async function installArchive(preferredName: string | null = null) {
   isInstallingArchive.value = true;
 
   try {
-    const outcome = await installModFromArchive(archivePath.value, false);
+    const outcome = await installModFromArchive(archivePath.value, false, preferredName);
+    if (outcome.installResult?.alreadyInstalled && !preferredName) {
+      installResult.value = outcome.installResult;
+      requestDuplicateName("archive", outcome.installResult);
+      return;
+    }
+    if (preferredName) closeDuplicateImportDialog(true);
     await applyArchiveImportOutcome(outcome);
   } catch (error) {
     archiveError.value = userFacingError(error);
   } finally {
     isInstallingArchive.value = false;
   }
+}
+
+function submitArchiveImport() {
+  void installArchive();
 }
 
 async function applyArchiveImportOutcome(outcome: ModArchiveImportOutcome) {
@@ -2656,7 +2718,7 @@ onBeforeUnmount(() => {
         </div>
       </form>
 
-      <form class="path-form" @submit.prevent="installArchive">
+      <form class="path-form" @submit.prevent="submitArchiveImport">
         <label for="archive-path">本地 MOD 压缩包</label>
         <div class="path-row">
           <input
@@ -2894,7 +2956,7 @@ onBeforeUnmount(() => {
 
       <div v-if="importPreview?.status === 'ready'" class="notice success-notice">
         <p>识别完成，可以导入 Acumod 本地 MOD 库；此时不会写入 MHW 游戏目录。</p>
-        <button type="button" :disabled="isInstallingMod" @click="installPreviewedMod">
+        <button type="button" :disabled="isInstallingMod" @click="submitPreviewedMod">
           {{ isInstallingMod ? "导入中" : "导入到 MOD 库" }}
         </button>
       </div>
@@ -3469,6 +3531,32 @@ onBeforeUnmount(() => {
         <div class="section-actions"><button type="button" class="secondary-button" :disabled="isApplyingEffectRemap" @click="closeEffectRemapManager()">取消</button><button type="button" :disabled="isApplyingEffectRemap || effectRemapDetails.enabled" @click="applySelectedEffectRemap">{{ isApplyingEffectRemap ? "保存中" : "保存修改" }}</button></div>
       </template>
       <p v-else class="hint">未检测到可安全改绑的独立武器特效。请使用“分析文件作用”查看全局、会心或未知特效的作用范围。</p>
+    </section>
+  </div>
+
+  <div v-if="duplicateImportRequest" class="dialog-backdrop" role="presentation">
+    <section class="confirm-dialog action-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="duplicate-import-title">
+      <h2 id="duplicate-import-title">发现同名 MOD</h2>
+      <p class="confirmation-message">
+        “{{ duplicateImportRequest.existingName }}”已在本地 MOD 库中。是否使用新名称作为独立 MOD 导入？
+      </p>
+      <label class="duplicate-import-name-field">
+        <span>新的 MOD 名称</span>
+        <input
+          v-model="duplicateImportName"
+          type="text"
+          maxlength="120"
+          :disabled="isInstallingMod || isInstallingArchive"
+          @keydown.enter.prevent="confirmDuplicateImport"
+        />
+      </label>
+      <p v-if="duplicateImportError" class="error">{{ duplicateImportError }}</p>
+      <div class="section-actions">
+        <button type="button" class="secondary-button" :disabled="isInstallingMod || isInstallingArchive" @click="closeDuplicateImportDialog()">取消</button>
+        <button type="button" :disabled="isInstallingMod || isInstallingArchive" @click="confirmDuplicateImport">
+          {{ isInstallingMod || isInstallingArchive ? "导入中" : "改名导入" }}
+        </button>
+      </div>
     </section>
   </div>
 
@@ -4465,6 +4553,24 @@ dd {
 
 .confirmation-message {
   white-space: pre-line;
+}
+
+.duplicate-import-name-field {
+  display: grid;
+  gap: 6px;
+  color: #334b44;
+  font-weight: 700;
+}
+
+.duplicate-import-name-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #b9ccc5;
+  border-radius: 5px;
+  color: #17211f;
+  background: #ffffff;
+  font: inherit;
 }
 
 .confirmation-details {

@@ -1101,6 +1101,7 @@ pub fn install_mod_from_folder_with_progress(
     app: &tauri::AppHandle,
     raw_path: String,
     allow_game_root: bool,
+    preferred_name: Option<String>,
     progress: &OperationReporter,
 ) -> Result<ModInstallResult, String> {
     let paths = library_paths(app)?;
@@ -1109,7 +1110,7 @@ pub fn install_mod_from_folder_with_progress(
         raw_path,
         allow_game_root,
         &paths.installed_path,
-        None,
+        preferred_name,
         None,
         progress,
     )?;
@@ -1124,6 +1125,7 @@ pub fn install_mod_from_archive_with_progress(
     app: &tauri::AppHandle,
     raw_path: String,
     allow_game_root: bool,
+    preferred_name: Option<String>,
     progress: &OperationReporter,
 ) -> Result<ModArchiveImportOutcome, String> {
     let paths = library_paths(app)?;
@@ -1170,7 +1172,7 @@ pub fn install_mod_from_archive_with_progress(
         path_to_string(&staging_path),
         allow_game_root,
         &paths.installed_path,
-        Some(archive_name),
+        Some(preferred_name.unwrap_or(archive_name)),
         Some(path_to_string(&archive_path)),
         progress,
     );
@@ -3887,7 +3889,10 @@ fn install_mod_from_folder_into_with_duplicate_name_check(
     }
 
     let source_path = PathBuf::from(&preview.source_path);
-    let mod_name = preferred_name.unwrap_or_else(|| derive_mod_name(&source_path));
+    let mod_name = preferred_name
+        .map(|name| validate_import_mod_name(&name))
+        .transpose()?
+        .unwrap_or_else(|| derive_mod_name(&source_path));
 
     if check_name_duplicate {
         if let Some(existing) = find_installed_mod_by_name(installed_root, &mod_name)? {
@@ -9432,6 +9437,15 @@ fn validate_mod_display_name(display_name: &str) -> Result<String, String> {
     Ok(display_name.to_string())
 }
 
+/// 导入名称会成为 manifest 的原始名称，空值不能像显示名一样回退为空字符串。
+fn validate_import_mod_name(name: &str) -> Result<String, String> {
+    let name = validate_mod_display_name(name)?;
+    if name.is_empty() {
+        return Err("MOD 导入名称不能为空。".to_string());
+    }
+    Ok(name)
+}
+
 fn validate_mod_note(note: &str) -> Result<String, String> {
     let note = note.trim();
     if note.chars().count() > 800 {
@@ -10417,7 +10431,8 @@ mod tests {
         clear_import_staging, collect_nested_archives, copy_import_source_directory,
         create_mod_branch_group_from, disable_mod_from, effective_installed_files_for_context,
         enable_mod_from, find_installed_mod_by_content_with_options, get_mod_conflict_report_from,
-        install_mod_from_candidate_into, install_mod_from_folder_into, installed_mod_content_path,
+        install_mod_from_candidate_into, install_mod_from_folder_into,
+        install_mod_from_folder_into_with_options_and_progress, installed_mod_content_path,
         installed_mod_list_from_contexts, list_installed_mods_from, load_all_installed_manifests,
         load_installed_manifest, load_normalized_mod_branch_groups,
         load_or_initialize_mod_category_store_for_installed_root,
@@ -11052,6 +11067,34 @@ mod tests {
         assert!(duplicate.already_installed);
         assert_eq!(duplicate.mod_id, first.mod_id);
         assert_eq!(list.mods.len(), 1);
+
+        cleanup(root);
+        cleanup(installed_root);
+    }
+
+    #[test]
+    fn same_name_mod_can_be_imported_with_a_user_supplied_new_name() {
+        let root = temp_root("duplicate_renamed_source");
+        let installed_root = temp_root("duplicate_renamed_target");
+        write_file(&root.join("nativePC").join("weapon").join("sword.mod3"));
+
+        let first =
+            install_mod_from_folder_into(root_to_string(&root), false, &installed_root).unwrap();
+        let renamed = install_mod_from_folder_into_with_options_and_progress(
+            root_to_string(&root),
+            false,
+            &installed_root,
+            Some("同名 MOD（副本）".to_string()),
+            None,
+            &OperationReporter::default(),
+        )
+        .unwrap();
+        let list = list_installed_mods_from(&installed_root).unwrap();
+
+        assert!(!renamed.already_installed);
+        assert_ne!(renamed.mod_id, first.mod_id);
+        assert_eq!(renamed.name, "同名 MOD（副本）");
+        assert_eq!(list.mods.len(), 2);
 
         cleanup(root);
         cleanup(installed_root);

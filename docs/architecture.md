@@ -374,7 +374,7 @@ MOD 文件列表
 
 繁体游戏名称使用独立的 `game-text-zh-hant.json`，由 `scripts/build-mhwi-traditional-game-text.mjs` 按 MHW-Editor 成对简体/繁体游戏文本键生成。manifest 和工作区快照继续保存稳定识别 ID 与现有名称；前端 `gameText` 解析层只在展示时替换名称，因此切换 `config.json.gameTextLanguage` 不需要扫描 MOD、迁移 manifest 或重新计算冲突。未收录名称必须回退原文，不能自动逐字转换。
 
-新导入 MOD 使用 manifest schema 17 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]`、状态同步元数据和 `deploymentExclusions[]`。模型识别规则版本独立保持为 16。旧 manifest 会在读取时按迁移规则保留现有元数据并重新识别缺失或过期的模型结果。模型 ID 和装备部位只从目录组件识别；人物语音与武器语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。武器语音只接受 `wp_<代码>_(cmn|epvsp)` 或 `wpNN_<代码>_(cmn|epvsp)`，并映射到 14 种武器；无法确定武器的公共音频包不猜测分类。`nativePC/plugins` 下的内容统一识别为“插件”。
+新导入 MOD 使用 manifest schema 18 持久化 `modelReplacements`、`modelRemaps`、显示名称、备注、`categoryIds[]`、状态同步元数据和 `deploymentExclusions[]`。模型识别规则版本独立保持为 16。旧 manifest 会在读取时按迁移规则保留现有元数据并重新识别缺失或过期的模型结果。模型 ID 和装备部位只从目录组件识别；人物语音与武器语音因资源格式没有独立 ID 目录，仅在 `sound/wwise/Windows` 下精确匹配完整 `.nbnk` 文件名。武器语音只接受 `wp_<代码>_(cmn|epvsp)` 或 `wpNN_<代码>_(cmn|epvsp)`，并映射到 14 种武器；无法确定武器的公共音频包不猜测分类。`nativePC/plugins` 下的内容统一识别为“插件”。
 
 投射器/飞翔爪接受 `wp/slg/slgNNN_NNNN` 和旧 `slgNNN` 目录。已核对条目来自原始 MOD 页面；其它规范目录只返回 `pathPattern` 底层 ID，不按防具同号猜测。普通文件名不参与投射器识别，也不识别 `Assets/gm/gm000` 下的投射器弹药。
 
@@ -391,7 +391,7 @@ Vue 改绑对话框
   -> preview_enable_mod / enable_mod / conflict service 复用有效文件表
 ```
 
-目录改名使用按模型类别生成的受限路径规则，而不是全局替换数字：武器、随从防具、发型和飞翔爪只处理各自已验证的资源根与文件名 token；防具另外识别规范 `epv/{f,m}_<部位>NNN.epv3` 文件名，仅将三位套装号替换为目标套装号，不使用目标变体号。`vfx`、自定义资源目录和未知命名保持原路径。部分 `.mrl3` 材质文件内保存贴图资源路径，部署器只解析已验证的 MRL3 头和贴图表，对恰好对应已移动 `.tex` 文件的路径做精确替换；飞翔爪改绑还会在部署副本中同步修改已关联 `.evam` 的偏移 `0x10` 编号。字符串越界、EVAM 源 ID 不一致、格式异常或目标路径碰撞都会阻止保存或部署，本地 MOD 库原件始终不变。人物语音不进入该链路。
+目录改名使用按模型类别生成的受限路径规则，而不是全局替换数字：武器、随从防具、发型和飞翔爪只处理各自已验证的资源根与文件名 token；防具另外识别规范 `epv/{f,m}_<部位>NNN.epv3` 文件名，仅将三位套装号替换为目标套装号，不使用目标变体号。DAT 型防具在用户改绑后才读取 `armor.am_dat`：仅当来源游戏/外观 ID、部位记录和库内 `f/m_<部位>NNN` 核心文件三者一致时，才把该部位的 DAT 主模型号标准化为目标套装号，并从有效部署计划排除该全局 DAT；未命中的部位维持原本的普通路径改绑，原始 DAT 始终保留在本地库。`vfx`、自定义资源目录和未知命名保持原路径。部分 `.mrl3` 材质文件内保存贴图资源路径，部署器只解析已验证的 MRL3 头和贴图表，对恰好对应已移动 `.tex` 文件的路径做精确替换；飞翔爪改绑还会在部署副本中同步修改已关联 `.evam` 的偏移 `0x10` 编号。字符串越界、EVAM 源 ID 不一致、DAT 格式异常、部位主模型号冲突或目标路径碰撞都会阻止保存或部署，本地 MOD 库原件始终不变。人物语音不进入该链路。
 
 
 ## ID 表后续用途

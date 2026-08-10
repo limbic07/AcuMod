@@ -19,6 +19,10 @@ const MRL3_TEXTURE_ENTRY_SIZE: usize = 272;
 const MRL3_TEXTURE_PATH_OFFSET: usize = 16;
 const MRL3_TEXTURE_PATH_CAPACITY: usize = 256;
 const ARMOR_PARTS: [&str; 5] = ["head", "body", "arm", "wst", "leg"];
+const ARMOR_DAT_DEPLOY_PATH: &str = "nativePC/common/equip/armor.am_dat";
+const ARMOR_DAT_MAGIC: u16 = 0x005F;
+const ARMOR_DAT_HEADER_SIZE: usize = 10;
+const ARMOR_DAT_ENTRY_SIZE: usize = 60;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +64,8 @@ pub struct EffectiveRemapFile {
     pub deploy_relative_path: String,
     pub texture_path_rewrites: BTreeMap<String, String>,
     pub evam_slinger_rewrite: Option<EvamSlingerIdRewrite>,
+    /// DAT 型防具已被标准化后，不再部署其全局防具表，避免改写来源槽位。
+    pub automatic_exclusion_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -170,6 +176,22 @@ struct PairedSlingerInference {
     blocking_errors: Vec<String>,
 }
 
+#[derive(Clone)]
+struct ArmorDatNormalizationRule {
+    source_model_id: String,
+    target_model_id: String,
+    /// 部位到原 MOD 实际使用的三位主模型编号。只记录需要额外改名的跨槽位部位。
+    part_model_ids: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy)]
+struct ArmorDatEntry {
+    set_id: u16,
+    equip_slot: u8,
+    mdl_main_id: u16,
+    set_group: u16,
+}
+
 pub fn build_model_remap_groups(
     replacements: &[ModelReplacement],
     selections: &[ModelRemapSelection],
@@ -224,6 +246,25 @@ pub fn build_effective_remap_files(
     replacements: &[ModelReplacement],
     selections: &[ModelRemapSelection],
 ) -> Result<Vec<EffectiveRemapFile>, String> {
+    build_effective_remap_files_with_armor_dat(
+        deploy_relative_paths,
+        replacements,
+        selections,
+        None,
+    )
+}
+
+/// 根据已验证的 `armor.am_dat` 生成 DAT 型防具的标准化部署路径。
+///
+/// 普通防具只需要从来源槽位移动到目标槽位。DAT 型 MOD 可能让来源槽位
+/// 加载另一组三位模型编号；此处仅在表记录和实际核心文件同时吻合时，把该
+/// 编号也改为目标编号，并排除全局 DAT，避免来源槽位被继续影响。
+pub fn build_effective_remap_files_with_armor_dat(
+    deploy_relative_paths: &[String],
+    replacements: &[ModelReplacement],
+    selections: &[ModelRemapSelection],
+    armor_dat_bytes: Option<&[u8]>,
+) -> Result<Vec<EffectiveRemapFile>, String> {
     let (groups, warnings) = build_model_remap_groups(replacements, selections)?;
     if !warnings.is_empty()
         && selections.iter().any(|selection| {
@@ -242,6 +283,13 @@ pub fn build_effective_remap_files(
         return Err(paired_slinger_inference.blocking_errors.join(" "));
     }
 
+    let armor_dat_rules = build_armor_dat_normalization_rules(
+        armor_dat_bytes,
+        deploy_relative_paths,
+        replacements,
+        &groups,
+    )?;
+
     let mut rules = Vec::new();
     for group in &groups {
         let Some(selected_target_id) = group.selected_target_id.as_deref() else {
@@ -258,6 +306,10 @@ pub fn build_effective_remap_files(
         let mut effective_path = normalize_deploy_path(original_path);
         for rule in &rules {
             effective_path = apply_path_rule(&effective_path, rule);
+        }
+        for rule in &armor_dat_rules {
+            effective_path =
+                apply_armor_dat_normalization_rule(original_path, &effective_path, rule);
         }
 
         let key = effective_path.to_lowercase();
@@ -284,8 +336,298 @@ pub fn build_effective_remap_files(
             evam_slinger_rewrite: evam_slinger_rewrites
                 .get(&normalize_deploy_path(&deploy_relative_paths[file_index]).to_lowercase())
                 .cloned(),
+            automatic_exclusion_reason: (!armor_dat_rules.is_empty()
+                && normalize_deploy_path(&deploy_relative_paths[file_index])
+                    .eq_ignore_ascii_case(ARMOR_DAT_DEPLOY_PATH))
+            .then(|| {
+                "已标准化 DAT 型防具资源；不部署 armor.am_dat，避免影响来源防具槽位。".to_string()
+            }),
         })
         .collect())
+}
+
+fn build_armor_dat_normalization_rules(
+    armor_dat_bytes: Option<&[u8]>,
+    deploy_relative_paths: &[String],
+    replacements: &[ModelReplacement],
+    groups: &[ModelRemapGroup],
+) -> Result<Vec<ArmorDatNormalizationRule>, String> {
+    let selected_armor_groups = groups
+        .iter()
+        .filter(|group| {
+            group.model_kind == "armor"
+                && group
+                    .selected_target_id
+                    .as_deref()
+                    .is_some_and(|target_id| group.original_target_id.as_deref() != Some(target_id))
+        })
+        .collect::<Vec<_>>();
+    if selected_armor_groups.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some(armor_dat_bytes) = armor_dat_bytes else {
+        return Ok(Vec::new());
+    };
+    let entries = parse_armor_dat_entries(armor_dat_bytes)?;
+    let mut rules = Vec::new();
+
+    for group in selected_armor_groups {
+        let source_model_id = single_source_model_id(group)?;
+        let source_set_id = armor_set_base_id(source_model_id).ok_or_else(|| {
+            format!("DAT 型防具来源模型 ID 不符合 plNNN_NNNN 格式：{source_model_id}")
+        })?;
+        let target = resolve_group_target(
+            group,
+            group
+                .selected_target_id
+                .as_deref()
+                .expect("selected armor target"),
+        )?;
+        let source_game_ids = parse_armor_dat_ids(&group.source_game_ids, "游戏")?;
+        let source_variant_ids = source_armor_variant_ids(replacements, source_model_id)?;
+        if source_game_ids.is_empty() || source_variant_ids.is_empty() {
+            return Err(format!(
+                "无法从防具索引确定 {source_model_id} 的 DAT 槽位，已拒绝自动标准化。"
+            ));
+        }
+
+        let mut mapped_models = BTreeMap::<String, String>::new();
+        for part in ARMOR_PARTS {
+            let matching_entries = entries
+                .iter()
+                .filter(|entry| {
+                    armor_dat_part_name(entry.equip_slot) == Some(part)
+                        && source_game_ids.contains(&entry.set_group)
+                        && source_variant_ids.contains(&entry.set_id)
+                })
+                .collect::<Vec<_>>();
+            if matching_entries.is_empty() {
+                continue;
+            }
+            let model_ids = matching_entries
+                .iter()
+                .map(|entry| entry.mdl_main_id)
+                .collect::<HashSet<_>>();
+            if model_ids.len() != 1 {
+                return Err(format!(
+                    "DAT 型防具 {source_model_id} 的 {part} 部位存在多个主模型编号，无法安全自动标准化。"
+                ));
+            }
+            let model_id = format!("{:03}", model_ids.into_iter().next().unwrap());
+            if model_id == source_set_id {
+                continue;
+            }
+            if has_armor_core_file(deploy_relative_paths, source_model_id, part, &model_id) {
+                mapped_models.insert(part.to_string(), model_id);
+            }
+        }
+
+        // 只有 DAT 的跨槽位编号确实命中本地核心资源时，才删除全局表并标准化。
+        if !mapped_models.is_empty() {
+            rules.push(ArmorDatNormalizationRule {
+                source_model_id: source_model_id.to_string(),
+                target_model_id: target.model_id,
+                part_model_ids: mapped_models,
+            });
+        }
+    }
+
+    Ok(rules)
+}
+
+fn parse_armor_dat_entries(bytes: &[u8]) -> Result<Vec<ArmorDatEntry>, String> {
+    if bytes.len() < ARMOR_DAT_HEADER_SIZE {
+        return Err("armor.am_dat 文件过短，无法验证 DAT 型防具改绑。".to_string());
+    }
+    let magic = read_u16(bytes, 4)?;
+    if magic != ARMOR_DAT_MAGIC {
+        return Err(format!(
+            "armor.am_dat 文件头无效：期望 {ARMOR_DAT_MAGIC:04X}，实际 {magic:04X}。"
+        ));
+    }
+    let entry_count = read_u32(bytes, 6)? as usize;
+    let entries_size = entry_count
+        .checked_mul(ARMOR_DAT_ENTRY_SIZE)
+        .ok_or_else(|| "armor.am_dat 记录数量溢出。".to_string())?;
+    let expected_size = ARMOR_DAT_HEADER_SIZE
+        .checked_add(entries_size)
+        .ok_or_else(|| "armor.am_dat 文件大小溢出。".to_string())?;
+    if bytes.len() != expected_size {
+        return Err(format!(
+            "armor.am_dat 文件大小不匹配：期望 {expected_size} 字节，实际 {} 字节。",
+            bytes.len()
+        ));
+    }
+
+    let mut entries = Vec::with_capacity(entry_count);
+    for index in 0..entry_count {
+        let offset = ARMOR_DAT_HEADER_SIZE + index * ARMOR_DAT_ENTRY_SIZE;
+        entries.push(ArmorDatEntry {
+            set_id: read_u16(bytes, offset + 7)?,
+            equip_slot: bytes[offset + 10],
+            mdl_main_id: read_u16(bytes, offset + 13)?,
+            set_group: read_u16(bytes, offset + 53)?,
+        });
+    }
+    Ok(entries)
+}
+
+fn source_armor_variant_ids(
+    replacements: &[ModelReplacement],
+    source_model_id: &str,
+) -> Result<HashSet<u16>, String> {
+    let raw_ids = replacements
+        .iter()
+        .filter(|replacement| {
+            replacement.model_kind == "armor"
+                && replacement.model_id.eq_ignore_ascii_case(source_model_id)
+        })
+        .flat_map(|replacement| replacement.variant_ids.iter().cloned())
+        .collect::<Vec<_>>();
+    parse_armor_dat_ids(&raw_ids, "外观")
+}
+
+fn parse_armor_dat_ids(values: &[String], label: &str) -> Result<HashSet<u16>, String> {
+    values
+        .iter()
+        .map(|value| {
+            value
+                .parse::<u16>()
+                .map_err(|_| format!("防具索引中的{label} ID 不是有效的无符号整数：{value}"))
+        })
+        .collect()
+}
+
+fn armor_dat_part_name(equip_slot: u8) -> Option<&'static str> {
+    match equip_slot {
+        0 => Some("head"),
+        1 => Some("body"),
+        2 => Some("arm"),
+        3 => Some("wst"),
+        4 => Some("leg"),
+        _ => None,
+    }
+}
+
+fn has_armor_core_file(
+    deploy_relative_paths: &[String],
+    source_model_id: &str,
+    part: &str,
+    model_id: &str,
+) -> bool {
+    deploy_relative_paths.iter().any(|path| {
+        armor_dat_file_context(path, source_model_id).is_some_and(|(gender, actual_part)| {
+            let Some(file_name) = file_name_from_deploy_path(path) else {
+                return false;
+            };
+            actual_part == part
+                && is_armor_core_resource_file(&file_name)
+                && armor_core_file_name_matches(&file_name, gender, part, model_id)
+        })
+    })
+}
+
+fn is_armor_core_resource_file(file_name: &str) -> bool {
+    file_name.rsplit_once('.').is_some_and(|(_, extension)| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "mod3" | "mrl3" | "tex" | "mdf2" | "evam" | "epv3"
+        )
+    })
+}
+
+fn apply_armor_dat_normalization_rule(
+    original_path: &str,
+    effective_path: &str,
+    rule: &ArmorDatNormalizationRule,
+) -> String {
+    let Some((gender, part)) = armor_dat_file_context(original_path, &rule.source_model_id) else {
+        return effective_path.to_string();
+    };
+    let Some(source_model_id) = rule.part_model_ids.get(part) else {
+        return effective_path.to_string();
+    };
+    let Some(target_set_id) = armor_set_base_id(&rule.target_model_id) else {
+        return effective_path.to_string();
+    };
+    let Some(file_name) = file_name_from_deploy_path(effective_path) else {
+        return effective_path.to_string();
+    };
+    let Some(rewritten_file_name) =
+        rewrite_armor_core_file_name(&file_name, gender, part, source_model_id, &target_set_id)
+    else {
+        return effective_path.to_string();
+    };
+
+    let mut components = normalize_deploy_path(effective_path)
+        .split('/')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if let Some(file_name_index) = components.len().checked_sub(1) {
+        components[file_name_index] = rewritten_file_name;
+    }
+    components.join("/")
+}
+
+fn armor_dat_file_context(
+    path: &str,
+    source_model_id: &str,
+) -> Option<(&'static str, &'static str)> {
+    let normalized = normalize_deploy_path(path).to_ascii_lowercase();
+    let source_model_id = source_model_id.to_ascii_lowercase();
+    let components = normalized.split('/').collect::<Vec<_>>();
+    components.windows(4).find_map(|window| {
+        if window[0] != "pl" || window[2] != source_model_id {
+            return None;
+        }
+        let gender = match window[1] {
+            "f_equip" => "f",
+            "m_equip" => "m",
+            _ => return None,
+        };
+        ARMOR_PARTS
+            .iter()
+            .find(|part| **part == window[3])
+            .map(|part| (gender, *part))
+    })
+}
+
+fn file_name_from_deploy_path(path: &str) -> Option<String> {
+    normalize_deploy_path(path)
+        .rsplit('/')
+        .next()
+        .map(str::to_string)
+}
+
+fn armor_core_file_name_matches(file_name: &str, gender: &str, part: &str, model_id: &str) -> bool {
+    rewrite_armor_core_file_name(file_name, gender, part, model_id, model_id).is_some()
+}
+
+fn rewrite_armor_core_file_name(
+    file_name: &str,
+    gender: &str,
+    part: &str,
+    source_model_id: &str,
+    target_model_id: &str,
+) -> Option<String> {
+    let prefix = format!("{gender}_{part}{source_model_id}");
+    if !file_name
+        .get(..prefix.len())
+        .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
+    {
+        return None;
+    }
+    let suffix = &file_name[prefix.len()..];
+    // 防止把 f_body1060 或自定义长编号误识别为 f_body106。
+    if suffix
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("{gender}_{part}{target_model_id}{suffix}"))
 }
 
 pub fn rewrite_evam_slinger_id(
@@ -1399,6 +1741,13 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
     Ok(u32::from_le_bytes(value.try_into().unwrap()))
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
+    let value = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(|| "armor.am_dat 文件内容不完整。".to_string())?;
+    Ok(u16::from_le_bytes(value.try_into().unwrap()))
+}
+
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, String> {
     let value = bytes
         .get(offset..offset + 8)
@@ -1507,6 +1856,28 @@ mod tests {
         bytes
     }
 
+    fn dat_armor_replacement() -> ModelReplacement {
+        let mut armor = replacement("armor", "防具套装", "set", "pl105_0000");
+        // 与实际模型索引一致：冰狼来源槽位为游戏 300、外观 250。
+        armor.game_ids = vec!["300".to_string()];
+        armor.variant_ids = vec!["250".to_string()];
+        armor
+    }
+
+    fn armor_dat_bytes(entries: &[(u16, u16, u8, u16)]) -> Vec<u8> {
+        let mut bytes = vec![0; ARMOR_DAT_HEADER_SIZE + entries.len() * ARMOR_DAT_ENTRY_SIZE];
+        bytes[4..6].copy_from_slice(&ARMOR_DAT_MAGIC.to_le_bytes());
+        bytes[6..10].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (index, (set_id, set_group, equip_slot, model_id)) in entries.iter().enumerate() {
+            let offset = ARMOR_DAT_HEADER_SIZE + index * ARMOR_DAT_ENTRY_SIZE;
+            bytes[offset + 7..offset + 9].copy_from_slice(&set_id.to_le_bytes());
+            bytes[offset + 10] = *equip_slot;
+            bytes[offset + 13..offset + 15].copy_from_slice(&model_id.to_le_bytes());
+            bytes[offset + 53..offset + 55].copy_from_slice(&set_group.to_le_bytes());
+        }
+        bytes
+    }
+
     #[test]
     fn voice_recognition_never_creates_a_remap_group() {
         let replacements = vec![replacement(
@@ -1573,6 +1944,134 @@ mod tests {
             "nativePC/pl/f_equip/pl001_0000/body/mod/f_body001_0000.mod3"
         );
         assert_eq!(effective[1].deploy_relative_path, files[1]);
+    }
+
+    #[test]
+    fn dat_armor_remap_standardizes_verified_core_files_and_excludes_dat() {
+        let replacements = vec![dat_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl105_0000/head/mod/f_head106_0000.mod3",
+            "nativePC/pl/f_equip/pl105_0000/body/mod/f_body106_0000.mod3",
+            "nativePC/pl/f_equip/pl105_0000/arm/mod/f_arm106_0000.mod3",
+            "nativePC/pl/f_equip/pl105_0000/wst/mod/f_wst106_0000.mod3",
+            "nativePC/pl/f_equip/pl105_0000/leg/mod/f_leg106_0000.mod3",
+            "nativePC/common/equip/armor.am_dat",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let dat = armor_dat_bytes(&[
+            (250, 300, 0, 106),
+            (250, 300, 1, 106),
+            (250, 300, 2, 106),
+            (250, 300, 3, 106),
+            (250, 300, 4, 106),
+        ]);
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl067_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&dat),
+        )
+        .unwrap();
+
+        for (file, part) in effective.iter().zip(["head", "body", "arm", "wst", "leg"]) {
+            assert_eq!(
+                file.deploy_relative_path,
+                format!("nativePC/pl/f_equip/pl067_0000/{part}/mod/f_{part}067_0000.mod3")
+            );
+        }
+        assert!(effective[5].automatic_exclusion_reason.is_some());
+    }
+
+    #[test]
+    fn dat_armor_remap_only_normalizes_parts_with_verified_core_files() {
+        let replacements = vec![dat_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl105_0000/head/mod/f_head106_0000.mod3",
+            "nativePC/pl/f_equip/pl105_0000/body/mod/f_body105_0000.mod3",
+            "nativePC/common/equip/armor.am_dat",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let dat = armor_dat_bytes(&[(250, 300, 0, 106), (250, 300, 1, 106)]);
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl067_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&dat),
+        )
+        .unwrap();
+
+        assert_eq!(
+            effective[0].deploy_relative_path,
+            "nativePC/pl/f_equip/pl067_0000/head/mod/f_head067_0000.mod3"
+        );
+        assert_eq!(
+            effective[1].deploy_relative_path,
+            "nativePC/pl/f_equip/pl067_0000/body/mod/f_body067_0000.mod3"
+        );
+        assert!(effective[2].automatic_exclusion_reason.is_some());
+    }
+
+    #[test]
+    fn dat_armor_remap_keeps_dat_when_no_cross_slot_core_file_is_verified() {
+        let replacements = vec![dat_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl105_0000/body/mod/custom_body.mod3",
+            "nativePC/common/equip/armor.am_dat",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let dat = armor_dat_bytes(&[(250, 300, 1, 106)]);
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl067_0000".to_string(),
+        }];
+
+        let effective = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&dat),
+        )
+        .unwrap();
+
+        assert!(effective[1].automatic_exclusion_reason.is_none());
+    }
+
+    #[test]
+    fn dat_armor_remap_rejects_invalid_dat_before_changing_paths() {
+        let replacements = vec![dat_armor_replacement()];
+        let files = [
+            "nativePC/pl/f_equip/pl105_0000/body/mod/f_body106_0000.mod3".to_string(),
+            "nativePC/common/equip/armor.am_dat".to_string(),
+        ];
+        let selections = vec![ModelRemapSelection {
+            group_key: "armor:pl105_0000".to_string(),
+            target_id: "armor:pl067_0000".to_string(),
+        }];
+
+        let error = build_effective_remap_files_with_armor_dat(
+            &files,
+            &replacements,
+            &selections,
+            Some(&[0; ARMOR_DAT_HEADER_SIZE]),
+        )
+        .unwrap_err();
+        assert!(error.contains("文件头无效"));
     }
 
     #[test]

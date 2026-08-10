@@ -32,9 +32,10 @@ use super::model_recognition::{
     ModelReplacement,
 };
 use super::model_remap::{
-    build_effective_remap_files, build_model_remap_groups, is_armor_epv_deploy_path,
-    rewrite_evam_slinger_id, rewrite_mrl3_texture_paths, EffectiveRemapFile, EvamSlingerIdRewrite,
-    ModelRemapGroup, ModelRemapSelection,
+    build_effective_remap_files, build_effective_remap_files_with_armor_dat,
+    build_model_remap_groups, is_armor_epv_deploy_path, rewrite_evam_slinger_id,
+    rewrite_mrl3_texture_paths, EffectiveRemapFile, EvamSlingerIdRewrite, ModelRemapGroup,
+    ModelRemapSelection,
 };
 
 const PREVIEW_FILE_LIMIT: usize = 200;
@@ -45,6 +46,7 @@ const MOD_CATEGORY_STORE_SCHEMA_VERSION: u32 = 3;
 const MOD_LIBRARY_ORDER_STORE_SCHEMA_VERSION: u32 = 2;
 const MOD_BRANCH_GROUP_STORE_SCHEMA_VERSION: u32 = 1;
 const MOD_BRANCH_GROUP_NAME_LIMIT: usize = 120;
+const MAX_ARMOR_DAT_SIZE_BYTES: u64 = 4 * 1024 * 1024;
 const NESTED_ARCHIVE_MAX_DEPTH: usize = 2;
 const NESTED_ARCHIVE_MAX_COUNT: usize = 32;
 const MOD_CATEGORY_NAME_LIMIT: usize = 40;
@@ -2368,10 +2370,16 @@ pub(crate) fn load_mod_analysis_input_from(
     let context = load_installed_manifest(installed_root, mod_id.trim())?;
     let original_replacements =
         model_replacements_for_manifest(&context.manifest, &context.content_path)?;
-    let model_replacements =
-        effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?;
-    let effective_files =
-        effective_remap_files_for_manifest(&context.manifest, &original_replacements)?;
+    let model_replacements = effective_model_replacements_for_context(
+        &context,
+        &context.manifest,
+        &original_replacements,
+    )?;
+    let effective_files = effective_remap_files_for_context_with_manifest(
+        &context,
+        &context.manifest,
+        &original_replacements,
+    )?;
     if effective_files.len() != context.manifest.files.len() {
         return Err("模型改绑后的文件索引与 MOD 清单不一致。".to_string());
     }
@@ -2394,7 +2402,8 @@ pub(crate) fn load_mod_analysis_input_from(
             effective_deploy_relative_path: effective_files[index].deploy_relative_path.clone(),
             size_bytes,
             excluded_from_deployment: excluded_paths
-                .contains(&conflict_path_key(&installed_file.library_relative_path)),
+                .contains(&conflict_path_key(&installed_file.library_relative_path))
+                || effective_files[index].automatic_exclusion_reason.is_some(),
         });
     }
     files.sort_by(|left, right| {
@@ -2720,8 +2729,11 @@ fn workspace_mod_index_entry(
         .collect();
     let original_replacements =
         model_replacements_for_manifest(&context.manifest, &context.content_path)?;
-    let model_replacements =
-        effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?;
+    let model_replacements = effective_model_replacements_for_context(
+        context,
+        &context.manifest,
+        &original_replacements,
+    )?;
 
     Ok(WorkspaceModIndexEntry {
         mod_id: context.manifest.id.clone(),
@@ -4734,6 +4746,12 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
             })?;
 
         let content_path = mod_path.join("content");
+        let manifest_context = InstalledManifestContext {
+            mod_path: mod_path.clone(),
+            content_path: content_path.clone(),
+            manifest_path: manifest_path.clone(),
+            manifest: manifest.clone(),
+        };
         let original_model_replacements =
             match model_replacements_for_manifest(&manifest, &content_path) {
                 Ok(model_replacements) => model_replacements,
@@ -4745,7 +4763,8 @@ fn list_installed_mods_from(installed_root: &Path) -> Result<InstalledModList, S
                     Vec::new()
                 }
             };
-        let model_replacements = match effective_model_replacements_for_manifest(
+        let model_replacements = match effective_model_replacements_for_context(
+            &manifest_context,
             &manifest,
             &original_model_replacements,
         ) {
@@ -4842,18 +4861,20 @@ fn installed_mod_list_from_contexts(
                     Vec::new()
                 }
             };
-        let model_replacements =
-            match effective_model_replacements_for_manifest(manifest, &original_model_replacements)
-            {
-                Ok(model_replacements) => model_replacements,
-                Err(_error) => {
-                    warnings.push(format!(
-                        "无法应用 {} 已保存的模型修改，请重新设置替换模型。",
-                        manifest.name
-                    ));
-                    original_model_replacements.clone()
-                }
-            };
+        let model_replacements = match effective_model_replacements_for_context(
+            context,
+            manifest,
+            &original_model_replacements,
+        ) {
+            Ok(model_replacements) => model_replacements,
+            Err(_error) => {
+                warnings.push(format!(
+                    "无法应用 {} 已保存的模型修改，请重新设置替换模型。",
+                    manifest.name
+                ));
+                original_model_replacements.clone()
+            }
+        };
         let categories = resolve_mod_categories(category_store, &manifest.category_ids);
         let category_ids = categories
             .iter()
@@ -4998,11 +5019,13 @@ fn recognize_model_replacements_for_library_files(
     recognize_model_replacements_with_evam(&deploy_relative_paths, &evam_files)
 }
 
-fn effective_model_replacements_for_manifest(
+fn effective_model_replacements_for_context(
+    context: &InstalledManifestContext,
     manifest: &InstalledModManifest,
     original_replacements: &[ModelReplacement],
 ) -> Result<Vec<ModelReplacement>, String> {
-    let effective_files = effective_remap_files_for_manifest(manifest, original_replacements)?;
+    let effective_files =
+        effective_remap_files_for_context_with_manifest(context, manifest, original_replacements)?;
     let paths = effective_files
         .iter()
         .map(|file| file.deploy_relative_path.clone())
@@ -5331,17 +5354,64 @@ fn preview_mod_remap_from(
 
     let mut preview_manifest = context.manifest.clone();
     preview_manifest.model_remaps = selections;
-    let current_effective_files =
-        effective_installed_files_for_manifest(&context.manifest, &replacements)?;
-    let effective_files = effective_installed_files_for_manifest(&preview_manifest, &replacements)?;
+    let current_remap_files = effective_remap_files_for_context_with_manifest(
+        &context,
+        &context.manifest,
+        &replacements,
+    )?;
+    let preview_remap_files = effective_remap_files_for_context_with_manifest(
+        &context,
+        &preview_manifest,
+        &replacements,
+    )?;
+    if current_remap_files.len() != context.manifest.files.len()
+        || preview_remap_files.len() != preview_manifest.files.len()
+    {
+        return Err("模型改绑后的文件索引与 MOD 清单不一致。".to_string());
+    }
+    let current_excluded_paths = context
+        .manifest
+        .deployment_exclusions
+        .iter()
+        .map(|exclusion| conflict_path_key(&exclusion.library_relative_path))
+        .collect::<HashSet<_>>();
+    let preview_excluded_paths = preview_manifest
+        .deployment_exclusions
+        .iter()
+        .map(|exclusion| conflict_path_key(&exclusion.library_relative_path))
+        .collect::<HashSet<_>>();
     let mut files = Vec::new();
     let mut total_mrl3_rewrite_count = 0;
     let mut total_evam_rewrite_count = 0;
     let mut changed_armor_epv_file_count = 0;
+    let current_automatic_exclusion_count = current_remap_files
+        .iter()
+        .filter(|file| file.automatic_exclusion_reason.is_some())
+        .count();
+    let automatic_exclusion_count = preview_remap_files
+        .iter()
+        .filter(|file| file.automatic_exclusion_reason.is_some())
+        .count();
 
-    for (current_effective_file, effective_file) in
-        current_effective_files.iter().zip(&effective_files)
-    {
+    for index in 0..preview_remap_files.len() {
+        let current_effective_file = effective_installed_file_from_remap(
+            &context.manifest,
+            &current_excluded_paths,
+            current_remap_files[index].clone(),
+        )
+        .transpose()?;
+        let effective_file = effective_installed_file_from_remap(
+            &preview_manifest,
+            &preview_excluded_paths,
+            preview_remap_files[index].clone(),
+        )
+        .transpose()?;
+        let (Some(current_effective_file), Some(effective_file)) =
+            (current_effective_file, effective_file)
+        else {
+            // 用户手动排除和 DAT 自动排除均不产生可部署文件，无须检查二进制改写。
+            continue;
+        };
         if !current_effective_file
             .deploy_relative_path
             .eq_ignore_ascii_case(&effective_file.deploy_relative_path)
@@ -5352,8 +5422,8 @@ fn preview_mod_remap_from(
         }
 
         let source_path = source_path_for_installed_file(&context, &effective_file.installed_file)?;
-        let mrl3_rewrite_count = preview_mrl3_rewrite_count(&source_path, effective_file)?;
-        let evam_rewrite_count = preview_evam_rewrite_count(&source_path, effective_file)?;
+        let mrl3_rewrite_count = preview_mrl3_rewrite_count(&source_path, &effective_file)?;
+        let evam_rewrite_count = preview_evam_rewrite_count(&source_path, &effective_file)?;
         let path_changed = !effective_file
             .installed_file
             .deploy_relative_path
@@ -5380,6 +5450,15 @@ fn preview_mod_remap_from(
     if changed_armor_epv_file_count > 0 {
         warnings.push(format!(
             "检测到 {changed_armor_epv_file_count} 个防具特效触发文件。改绑后会同步调整其部署位置；启用后请在游戏中确认装备特效是否正常。"
+        ));
+    }
+    if automatic_exclusion_count > 0 {
+        warnings.push(format!(
+            "已验证 DAT 型防具资源：部署时将自动排除 {automatic_exclusion_count} 个 armor.am_dat，并按命中的部位标准化核心文件名。MOD 库原文件不会被修改。"
+        ));
+    } else if current_automatic_exclusion_count > 0 {
+        warnings.push(format!(
+            "恢复后会重新部署 {current_automatic_exclusion_count} 个原始 armor.am_dat，使 MOD 回到导入时的来源防具映射。"
         ));
     }
     let target_label = normalized_target_id
@@ -6335,16 +6414,26 @@ fn restore_mod_cleanup_exclusions_from_with_progress(
     })
 }
 
-fn effective_remap_files_for_manifest(
+/// 计算部署路径时可带入已安装的 DAT 内容；DAT 只影响本次有效部署，绝不改写库内文件。
+fn effective_remap_files_for_manifest_with_armor_dat(
     manifest: &InstalledModManifest,
     replacements: &[ModelReplacement],
+    armor_dat_bytes: Option<&[u8]>,
 ) -> Result<Vec<EffectiveRemapFile>, String> {
     let paths = manifest
         .files
         .iter()
         .map(|file| file.deploy_relative_path.clone())
         .collect::<Vec<_>>();
-    let mut effective = build_effective_remap_files(&paths, replacements, &manifest.model_remaps)?;
+    let mut effective = match armor_dat_bytes {
+        Some(bytes) => build_effective_remap_files_with_armor_dat(
+            &paths,
+            replacements,
+            &manifest.model_remaps,
+            Some(bytes),
+        )?,
+        None => build_effective_remap_files(&paths, replacements, &manifest.model_remaps)?,
+    };
     let effect_paths = build_effective_effect_remap_paths(&paths, &manifest.effect_remaps)?;
     for (file, effect_path) in effective.iter_mut().zip(effect_paths) {
         // 特效规则只在版本化兼容索引命中本地槽位时覆盖部署路径。
@@ -6355,7 +6444,88 @@ fn effective_remap_files_for_manifest(
     Ok(effective)
 }
 
-fn effective_installed_files_for_manifest(
+fn armor_dat_bytes_for_context(
+    context: &InstalledManifestContext,
+    manifest: &InstalledModManifest,
+) -> Result<Option<Vec<u8>>, String> {
+    // 未选择防具改绑时不读取二进制 DAT，避免无关 MOD 的异常文件阻断其它操作。
+    if !manifest
+        .model_remaps
+        .iter()
+        .any(|selection| selection.group_key.starts_with("armor:"))
+    {
+        return Ok(None);
+    }
+
+    let armor_dat_files = manifest
+        .files
+        .iter()
+        .filter(|file| {
+            file.deploy_relative_path
+                .replace('\\', "/")
+                .eq_ignore_ascii_case("nativePC/common/equip/armor.am_dat")
+        })
+        .collect::<Vec<_>>();
+    let Some(armor_dat_file) = armor_dat_files.first() else {
+        return Ok(None);
+    };
+    if armor_dat_files.len() > 1 {
+        return Err("MOD 清单中存在多个 armor.am_dat，无法安全进行 DAT 型防具改绑。".to_string());
+    }
+
+    let source_path = source_path_for_installed_file(context, armor_dat_file)?;
+    let size = fs::metadata(&source_path)
+        .map_err(|error| format!("无法读取 armor.am_dat 文件信息：{error}"))?
+        .len();
+    if size > MAX_ARMOR_DAT_SIZE_BYTES {
+        return Err(format!(
+            "armor.am_dat 过大（{size} 字节），超过安全解析上限 {MAX_ARMOR_DAT_SIZE_BYTES} 字节。"
+        ));
+    }
+    fs::read(&source_path)
+        .map(Some)
+        .map_err(|error| format!("无法读取 armor.am_dat：{error}"))
+}
+
+fn effective_remap_files_for_context_with_manifest(
+    context: &InstalledManifestContext,
+    manifest: &InstalledModManifest,
+    replacements: &[ModelReplacement],
+) -> Result<Vec<EffectiveRemapFile>, String> {
+    let armor_dat_bytes = armor_dat_bytes_for_context(context, manifest)?;
+    effective_remap_files_for_manifest_with_armor_dat(
+        manifest,
+        replacements,
+        armor_dat_bytes.as_deref(),
+    )
+}
+
+fn effective_installed_file_from_remap(
+    manifest: &InstalledModManifest,
+    excluded_library_paths: &HashSet<String>,
+    effective: EffectiveRemapFile,
+) -> Option<Result<EffectiveInstalledModFile, String>> {
+    // 自动排除仅存在于有效部署视图；原始 DAT 仍完整保存在 MOD 库中。
+    if effective.automatic_exclusion_reason.is_some() {
+        return None;
+    }
+    let installed_file = manifest.files.get(effective.file_index).cloned();
+    let Some(installed_file) = installed_file else {
+        return Some(Err("有效部署文件索引超出范围。".to_string()));
+    };
+    if excluded_library_paths.contains(&conflict_path_key(&installed_file.library_relative_path)) {
+        return None;
+    }
+    Some(Ok(EffectiveInstalledModFile {
+        installed_file,
+        deploy_relative_path: effective.deploy_relative_path,
+        texture_path_rewrites: effective.texture_path_rewrites,
+        evam_slinger_rewrite: effective.evam_slinger_rewrite,
+    }))
+}
+
+fn effective_installed_files_for_context_with_manifest(
+    context: &InstalledManifestContext,
     manifest: &InstalledModManifest,
     replacements: &[ModelReplacement],
 ) -> Result<Vec<EffectiveInstalledModFile>, String> {
@@ -6364,24 +6534,10 @@ fn effective_installed_files_for_manifest(
         .iter()
         .map(|exclusion| conflict_path_key(&exclusion.library_relative_path))
         .collect::<HashSet<_>>();
-    effective_remap_files_for_manifest(manifest, replacements)?
+    effective_remap_files_for_context_with_manifest(context, manifest, replacements)?
         .into_iter()
         .filter_map(|effective| {
-            let installed_file = manifest.files.get(effective.file_index).cloned();
-            let Some(installed_file) = installed_file else {
-                return Some(Err("有效部署文件索引超出范围。".to_string()));
-            };
-            if excluded_library_paths
-                .contains(&conflict_path_key(&installed_file.library_relative_path))
-            {
-                return None;
-            }
-            Some(Ok(EffectiveInstalledModFile {
-                installed_file,
-                deploy_relative_path: effective.deploy_relative_path,
-                texture_path_rewrites: effective.texture_path_rewrites,
-                evam_slinger_rewrite: effective.evam_slinger_rewrite,
-            }))
+            effective_installed_file_from_remap(manifest, &excluded_library_paths, effective)
         })
         .collect()
 }
@@ -6390,7 +6546,7 @@ fn effective_installed_files_for_context(
     context: &InstalledManifestContext,
 ) -> Result<Vec<EffectiveInstalledModFile>, String> {
     let replacements = model_replacements_for_manifest(&context.manifest, &context.content_path)?;
-    effective_installed_files_for_manifest(&context.manifest, &replacements)
+    effective_installed_files_for_context_with_manifest(context, &context.manifest, &replacements)
 }
 
 fn preview_mrl3_rewrite_count(
@@ -7866,9 +8022,11 @@ fn shared_model_targets_for_group(
     {
         let original_replacements =
             model_replacements_for_manifest(&context.manifest, &context.content_path)?;
-        for replacement in
-            effective_model_replacements_for_manifest(&context.manifest, &original_replacements)?
-        {
+        for replacement in effective_model_replacements_for_context(
+            context,
+            &context.manifest,
+            &original_replacements,
+        )? {
             let key = (replacement.model_kind.clone(), replacement.model_id.clone());
             let target = targets
                 .entry(key)
@@ -12420,6 +12578,76 @@ mod tests {
     }
 
     #[test]
+    fn dat_armor_remap_deploys_standardized_core_file_without_global_dat() {
+        let source_root = temp_root("dat_armor_remap_source");
+        let installed_root = temp_root("dat_armor_remap_installed");
+        let game_root = temp_root("dat_armor_remap_game");
+        let source_model =
+            source_root.join("nativePC/pl/f_equip/pl105_0000/body/mod/f_body106_0000.mod3");
+        let source_dat = source_root.join("nativePC/common/equip/armor.am_dat");
+        write_file_with_contents(&source_model, "dat armor model");
+        write_bytes(&source_dat, &armor_dat_bytes(&[(250, 300, 1, 106)]));
+        write_file(&game_root.join("MonsterHunterWorld.exe"));
+
+        let installed =
+            install_mod_from_folder_into(root_to_string(&source_root), false, &installed_root)
+                .unwrap();
+        let plan = preview_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl067_0000".to_string()),
+        )
+        .unwrap();
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("自动排除") && warning.contains("armor.am_dat")));
+        assert!(plan.files.iter().any(|file| {
+            file.effective_deploy_relative_path
+                == "nativePC/pl/f_equip/pl067_0000/body/mod/f_body067_0000.mod3"
+        }));
+
+        apply_mod_remap_from(
+            &installed_root,
+            &installed.mod_id,
+            "armor:pl105_0000",
+            Some("armor:pl067_0000".to_string()),
+        )
+        .unwrap();
+        let restore_plan =
+            preview_mod_remap_from(&installed_root, &installed.mod_id, "armor:pl105_0000", None)
+                .unwrap();
+        assert!(restore_plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("重新部署") && warning.contains("armor.am_dat")));
+        enable_mod_from(&installed_root, &game_root, &installed.mod_id, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(
+                game_root.join("nativePC/pl/f_equip/pl067_0000/body/mod/f_body067_0000.mod3"),
+            )
+            .unwrap(),
+            "dat armor model"
+        );
+        assert!(!game_root
+            .join("nativePC/common/equip/armor.am_dat")
+            .exists());
+        assert_eq!(
+            fs::read(
+                PathBuf::from(&installed.content_path).join("nativePC/common/equip/armor.am_dat"),
+            )
+            .unwrap(),
+            armor_dat_bytes(&[(250, 300, 1, 106)])
+        );
+
+        cleanup(source_root);
+        cleanup(installed_root);
+        cleanup(game_root);
+    }
+
+    #[test]
     fn warns_when_armor_remap_moves_epv_effect_triggers() {
         let source_root = temp_root("armor_epv_remap_warning_source");
         let installed_root = temp_root("armor_epv_remap_warning_installed");
@@ -12697,6 +12925,22 @@ mod tests {
         bytes[12..16].fill(0xff);
         bytes[16..20].copy_from_slice(&slinger_id.to_le_bytes());
         bytes[24..26].copy_from_slice(&[0x01, 0x01]);
+        bytes
+    }
+
+    fn armor_dat_bytes(entries: &[(u16, u16, u8, u16)]) -> Vec<u8> {
+        const HEADER_SIZE: usize = 10;
+        const ENTRY_SIZE: usize = 60;
+        let mut bytes = vec![0; HEADER_SIZE + entries.len() * ENTRY_SIZE];
+        bytes[4..6].copy_from_slice(&0x005F_u16.to_le_bytes());
+        bytes[6..10].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (index, (set_id, set_group, equip_slot, model_id)) in entries.iter().enumerate() {
+            let offset = HEADER_SIZE + index * ENTRY_SIZE;
+            bytes[offset + 7..offset + 9].copy_from_slice(&set_id.to_le_bytes());
+            bytes[offset + 10] = *equip_slot;
+            bytes[offset + 13..offset + 15].copy_from_slice(&model_id.to_le_bytes());
+            bytes[offset + 53..offset + 55].copy_from_slice(&set_group.to_le_bytes());
+        }
         bytes
     }
 

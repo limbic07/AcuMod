@@ -436,10 +436,10 @@ Vue UI
 例如“修改模型替换目标”：
 
 1. Vue 调用 `get_mod_remap_details`，只显示后端判定为可改绑的五类分组和同类型目标。
-2. 用户选择目标并点击保存后，Vue 在内部调用 `preview_mod_remap`；Rust 校验原路径、有效路径、MRL3 修正、EVAM 绑定和碰撞，不写 manifest。前端只显示必要警告，不展示技术统计。
+2. 用户选择目标并点击保存后，Vue 在内部调用 `preview_mod_remap`；Rust 校验原路径、有效路径、MRL3 修正、EVAM 绑定、DAT 型防具的逐部位映射和碰撞，不写 manifest。DAT 的来源/外观 ID、部位主模型号和核心文件均吻合时，预览会提示有效部署将排除 `armor.am_dat`；前端只显示必要警告，不展示技术统计。
 3. 校验通过后调用 `apply_mod_remap`；Rust 再次校验 MOD 未启用、目标类型和路径碰撞，然后把选择写入当前 schema 16 manifest。
 4. `preview_enable_mod`、`enable_mod`、冲突检测和冲突顺序应用不再直接使用原始 `files[].deployRelativePath`，而是统一调用有效部署文件生成器。
-5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；飞翔爪改绑只修改已关联 `.evam` 的绑定字段；本地库原文件保持不变。
+5. 部署 `.mrl3` 时只重写精确命中的已移动贴图资源路径；飞翔爪改绑只修改已关联 `.evam` 的绑定字段；DAT 型防具只改写有效部署路径并自动跳过全局 DAT；本地库原文件保持不变。
 
 例如“外部来源页面与本地导入”：
 

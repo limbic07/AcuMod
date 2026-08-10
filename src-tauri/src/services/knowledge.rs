@@ -2930,7 +2930,7 @@ mod tests {
 
     #[test]
     #[ignore = "需要先运行 npm.cmd run knowledge:build-modding-dev，使用真实 MOD 技术包验证安装与检索链路"]
-    fn generated_modding_pack_installs_and_answers_effect_scope_questions() {
+    fn generated_modding_pack_installs_and_answers_real_technical_questions() {
         let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("src-tauri 必须位于项目根目录下");
@@ -2956,6 +2956,35 @@ mod tests {
             (
                 "本地 EPV、全局 EPV 与 EVWP 如何区分",
                 "modding-weapon-epv-scope",
+            ),
+            (
+                "armor.am_dat 为什么会让其它防具槽位也显示同一套外观？",
+                "modding-armor-am-dat",
+            ),
+            (
+                "DAT 型防具改绑后为什么不能继续部署 armor.am_dat？",
+                "modding-dat-armor-remap-boundary",
+            ),
+            (
+                "Lua Framework 文件可以当作普通 MOD 图片清理吗？",
+                "modding-runtime-framework-boundary",
+            ),
+            (
+                "eq_crt 和 deco 文件能直接说明修改了哪些数值吗？",
+                "modding-gameplay-data-tables",
+            ),
+            ("WWBK 和 WWCT 是实际音频文件吗？", "modding-wwise-metadata"),
+            (
+                "EPVSP 能确定会播放哪一段声音吗？",
+                "modding-epvsp-effect-sound",
+            ),
+            (
+                "SPL 的 C# 插件应放在哪里，为什么放进 CSharp/Loader 不会加载？",
+                "modding-sharp-plugin-loader-csharp-plugin",
+            ),
+            (
+                "winmm.dll 和 loader-config.json 能否确认已配置 SharpPluginLoader？",
+                "modding-sharp-plugin-loader-layout",
             ),
         ] {
             let response = search_from(&knowledge_root, query, Some(&domains), 20).unwrap();

@@ -432,13 +432,38 @@ function verifyModding() {
       scalar(database, "SELECT kind FROM pack_manifest") === "mhw-modding",
       "MOD 技术包类型错误。",
     );
-    expect(scalar(database, "SELECT COUNT(*) FROM documents") >= 18, "MOD 技术文档数量异常。");
-    for (const id of ["modding-mod3", "modding-mrl3", "modding-evam-slinger", "modding-sobj-list", "modding-evwp"]) {
+    expect(scalar(database, "SELECT COUNT(*) FROM documents") >= 30, "MOD 技术文档数量异常。");
+    expect(
+      scalar(database, "SELECT version FROM pack_manifest") === "0.3.0-dev",
+      "MOD 技术包版本未升级。",
+    );
+    for (const id of ["modding-mod3", "modding-mrl3", "modding-evam-slinger", "modding-sobj-list", "modding-evwp", "modding-armor-am-dat", "modding-dat-armor-remap-boundary", "modding-runtime-framework-boundary", "modding-epvsp-effect-sound", "modding-ui-camera-scheduler", "modding-shell-parameter", "modding-sharp-plugin-loader-layout", "modding-sharp-plugin-loader-csharp-plugin"]) {
       expect(
         scalar(database, "SELECT COUNT(*) FROM documents WHERE id = ?", [id]) === 1,
         `缺少 ${id} 文档。`,
       );
     }
+    expect(
+      scalar(
+        database,
+        "SELECT s.url FROM documents d JOIN sources s ON s.id = d.source_id WHERE d.id = 'modding-armor-am-dat'",
+      ) === "https://github.com/fre-sch/mhw_armor_edit",
+      "armor.am_dat 文档必须保留可追溯的解析器来源。",
+    );
+    expect(
+      scalar(
+        database,
+        "SELECT s.url FROM documents d JOIN sources s ON s.id = d.source_id WHERE d.id = 'modding-sharp-plugin-loader-csharp-plugin'",
+      ) === "https://github.com/Fexty12573/SharpPluginLoader",
+      "SPL 文档必须保留可追溯的作者来源。",
+    );
+    expect(
+      scalar(
+        database,
+        "SELECT COUNT(*) FROM knowledge_fts WHERE knowledge_fts MATCH 'armor' AND result_id = 'modding-armor-am-dat'",
+      ) === 1,
+      "armor.am_dat 技术文档未进入全文索引。",
+    );
   } finally {
     database.close();
   }

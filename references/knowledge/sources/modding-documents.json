@@ -173,6 +173,78 @@
       "sourceId": "mhw-modding-atlas"
     },
     {
+      "id": "modding-armor-am-dat",
+      "domain": "mod-armor",
+      "title": "armor.am_dat 全局防具映射表",
+      "body": "规范路径 common/equip/armor.am_dat 对应 MHW 的防具数据表，而不是某一件防具的模型文件。公开解析器显示它由固定长度记录组成，记录包含装备/外观 ID、部位、主模型编号和套装组等字段；因此一份 DAT 可以同时影响多个防具槽位。AcuMOD 只在头部、记录数量和固定长度都通过校验时读取与模型改绑有关的字段，不把数字直接猜成某个本地资源路径。",
+      "gameVersion": "15.23",
+      "confidence": 0.98,
+      "sourceId": "mhw-armor-editor"
+    },
+    {
+      "id": "modding-dat-armor-remap-boundary",
+      "domain": "mod-armor",
+      "title": "DAT 型防具的安全改绑边界",
+      "body": "DAT 型防具改绑不是删除文件或全局替换编号：AcuMOD 只在用户选择新防具目标、来源游戏/外观 ID、DAT 部位记录和同一来源目录的核心 f/m_<部位>NNN 文件全部吻合时，才把该部位的主模型编号标准化为目标套装号并排除全局 armor.am_dat。DAT 将其它来源槽位别名到当前资源目录时也按同一证据链处理，避免原来源槽位继续加载同一套资源。任何未命中的部位保留普通路径改绑，格式异常、主模型号冲突或路径碰撞会拒绝计划；MOD 库原件不改写。",
+      "gameVersion": "15.23",
+      "confidence": 1.0,
+      "sourceId": "acumod-validated-modding"
+    },
+    {
+      "id": "modding-gameplay-data-tables",
+      "domain": "mod-gameplay",
+      "title": "装备、技能、装饰珠与商店数据表",
+      "body": "MHW 扩展名表可将 eq_crt、cat_skill、deco、dglt、diot、cus_otr、dtt_rsz、rod_inse、slt 等识别为装备生成、随从技能、装饰珠、怪物随机尺寸、猎虫或商店等游戏数据类别。这个对应关系只能证明资源类名；AcuMOD 当前不解析它们的字段、数值、互相引用或游戏效果。因此分析报告会标记为“游戏数据表”而非“未知”，但 AcuAI 必须明确说明实际效果未被本地验证。",
+      "gameVersion": "15.23",
+      "confidence": 0.9,
+      "sourceId": "mhw-extension-registry"
+    },
+    {
+      "id": "modding-runtime-framework-boundary",
+      "domain": "mod-plugin",
+      "title": "原生插件与 Lua Framework 运行依赖",
+      "body": "nativePC/plugins 下的 DLL 由插件加载器处理；Lua Framework 还可能带有游戏根目录的 lua_framework.dll 及 lua_framework/ 下的脚本、扩展、字体或配置。这些文件是运行依赖，不能按普通 nativePC 模型路径补齐、改绑或清理。AcuMOD 只按已验证路径归类并在分析中保留它们，既不执行脚本，也不根据文件名推断 DLL 或脚本的具体功能。",
+      "gameVersion": "15.23",
+      "confidence": 0.95,
+      "sourceId": "acumod-validated-modding"
+    },
+    {
+      "id": "modding-wwise-metadata",
+      "domain": "mod-audio",
+      "title": "Wwise 列表与容器元数据",
+      "body": "除 NBNK 和 NPCK 外，WWBK 是 Wwise Bank List，WWCT 是 Wwise Container。它们可以帮助游戏组织音频资源，但并不等同于实际声音媒体，也不能只靠文件名推断事件、语音或音效内容。AcuMOD 将其归类为音频元数据；没有专用解析器和声音 ID 对照时，不建立虚假的声音引用边。",
+      "gameVersion": "15.23",
+      "confidence": 0.9,
+      "sourceId": "mhw-extension-registry"
+    },
+    {
+      "id": "modding-epvsp-effect-sound",
+      "domain": "mod-audio",
+      "title": "EPVSP 特效声音参数",
+      "body": "EPVSP 在 MHW 资源扩展表中注册为 rEpvSoundParam，即特效声音参数资源。它与 EFX、EPV3 或 Wwise 容器可能同属一个特效 MOD，但扩展名本身不能证明哪项动作会播放哪段声音，也不能证明它引用了同目录的 NBNK/NPCK。AcuMOD 只按类别识别 EPVSP，不解析事件、声音 ID 或触发链。",
+      "gameVersion": "15.23",
+      "confidence": 0.9,
+      "sourceId": "mhw-extension-registry"
+    },
+    {
+      "id": "modding-ui-camera-scheduler",
+      "domain": "mod-format",
+      "title": "镜头、界面与调度资源（CMS、GUI、SDL）",
+      "body": "MHW 资源扩展表将 CMS、GUI、SDL 分别登记为镜头设置、界面资源和调度资源。这只能可靠区分大类：CMS 不能被当作模型或特效，GUI 不能被当作普通预览图片，SDL 也不能凭名称推断某个任务或事件一定会执行。AcuMOD 保留这些文件并显示类别，但当前不解析控件、镜头数值、调度条件或运行时引用。",
+      "gameVersion": "15.23",
+      "confidence": 0.9,
+      "sourceId": "mhw-extension-registry"
+    },
+    {
+      "id": "modding-shell-parameter",
+      "domain": "mod-gameplay",
+      "title": "SHLP 弹药/炮弹参数资源",
+      "body": "SHLP 在 MHW 资源扩展表中登记为 rShellParam。它表明该 MOD 包含弹药或炮弹参数类别的游戏数据，而非模型或贴图；仅凭该文件不能安全列出攻击、装填、爆炸、动作或适用武器。AcuMOD 将其标记为参数资源并保留，除非以后加入经验证的专用解析器，否则 AcuAI 不会把效果猜成确定结论。",
+      "gameVersion": "15.23",
+      "confidence": 0.9,
+      "sourceId": "mhw-extension-registry"
+    },
+    {
       "id": "modding-component-evidence",
       "domain": "mod-analysis",
       "title": "MOD 组件与依赖证据等级",
@@ -180,6 +252,24 @@
       "gameVersion": "15.23",
       "confidence": 1.0,
       "sourceId": "acumod-validated-modding"
+    },
+    {
+      "id": "modding-sharp-plugin-loader-layout",
+      "domain": "mod-plugin",
+      "title": "SharpPluginLoader（SPL）安装布局",
+      "body": "SharpPluginLoader（SPL）是 MHW 的 .NET 8 C# 插件加载器。其 Windows 安装布局包含游戏根目录的 winmm.dll 启动代理、自动生成的 loader-config.json，以及 nativePC/plugins/CSharp 下的托管程序集。根目录同名文件本身仍可能与其它加载器冲突；AcuMOD 只把它们标为 SPL 候选或配置，不以文件名单独断定运行状态。",
+      "gameVersion": "15.23",
+      "confidence": 0.96,
+      "sourceId": "sharp-plugin-loader"
+    },
+    {
+      "id": "modding-sharp-plugin-loader-csharp-plugin",
+      "domain": "mod-plugin",
+      "title": "SPL C# 插件目录与只读验证",
+      "body": "SPL 会从 nativePC/plugins/CSharp 及其普通子目录枚举 C# 插件 DLL；nativePC/plugins/CSharp/Loader 用于加载器自身组件，普通插件放入该目录不会被枚举加载。AcuMOD 只读检查候选 DLL 的 PE 头、CLR 运行时目录与 CLR 元数据 #Strings 堆；发现 SharpPluginLoader.Core 标识时，报告为声明了 SPL 框架依赖。此检查不加载、不执行、不反编译程序集，也不能替代实际游戏启动验证。",
+      "gameVersion": "15.23",
+      "confidence": 0.96,
+      "sourceId": "sharp-plugin-loader"
     }
   ]
 }

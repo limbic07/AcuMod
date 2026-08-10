@@ -16,15 +16,16 @@ use super::{
     knowledge,
     mod_library::{self, ModAnalysisInput, ModAnalysisInputFile},
     model_recognition::{read_evam_slinger_id, ModelReplacement},
-    model_remap::read_mrl3_texture_paths,
+    model_remap::{read_armor_dat_summary, read_mrl3_texture_paths},
 };
 
 const ANALYSIS_SCHEMA_VERSION: u32 = 1;
-const ANALYZER_VERSION: u32 = 2;
+const ANALYZER_VERSION: u32 = 4;
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_PARSER_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RESOURCE_EDGES: usize = 20_000;
 const MAX_KNOWLEDGE_QUERIES: usize = 12;
+const SHARP_PLUGIN_LOADER_CORE_NAME: &[u8] = b"SharpPluginLoader.Core";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,6 +164,16 @@ struct RoleRule {
     detail: &'static str,
     confidence: f64,
     knowledge_query: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SharpPluginLoaderAssemblyLocation {
+    PluginCandidate,
+    LoaderComponent,
+}
+
+struct DotnetAssemblySummary {
+    has_sharp_plugin_loader_core_metadata_name: bool,
 }
 
 #[derive(Clone)]
@@ -556,6 +567,77 @@ fn replacement_labels(replacements: &[&ModelReplacement]) -> Vec<String> {
 
 fn classify_role(path: &str) -> RoleRule {
     let extension = file_extension(path);
+    let normalized = normalize_path(path);
+    if normalized == "winmm.dll" {
+        return role(
+            "sharpPluginLoaderProxyCandidate",
+            "SPL 启动代理候选",
+            "游戏根目录的 winmm.dll 是 SharpPluginLoader 的启动代理位置；仅凭同名文件不能确认不存在其它加载器冲突。",
+            0.88,
+            Some("SharpPluginLoader"),
+        );
+    }
+    if normalized == "loader-config.json" {
+        return role(
+            "sharpPluginLoaderConfiguration",
+            "SPL 配置",
+            "loader-config.json 是 SharpPluginLoader 在游戏根目录自动生成的配置文件。",
+            0.98,
+            Some("SharpPluginLoader"),
+        );
+    }
+    if extension == "dll" {
+        if let Some(location) = sharp_plugin_loader_assembly_location(&normalized) {
+            return match location {
+                SharpPluginLoaderAssemblyLocation::PluginCandidate => role(
+                    "sharpPluginLoaderPluginCandidate",
+                    "SPL C# 插件候选",
+                    "DLL 位于 nativePC/plugins/CSharp；SPL 会枚举此目录及其普通子目录中的 C# 插件。分析器将只读验证其是否为 .NET 程序集并查找 SPL Core 引用。",
+                    0.92,
+                    Some("SharpPluginLoader"),
+                ),
+                SharpPluginLoaderAssemblyLocation::LoaderComponent => role(
+                    "sharpPluginLoaderLoaderComponent",
+                    "SPL 加载器组件",
+                    "DLL 位于 nativePC/plugins/CSharp/Loader；该目录用于加载器自身组件，普通 C# 插件放在这里不会被 SPL 枚举加载。",
+                    0.96,
+                    Some("SharpPluginLoader"),
+                ),
+            };
+        }
+    }
+    if normalized == "lua_framework.dll" || normalized.starts_with("lua_framework/") {
+        return match extension.as_str() {
+            "dll" => role(
+                "luaRuntime",
+                "Lua 运行框架",
+                "文件属于 Lua Framework 的加载器或原生扩展；它是运行时依赖，不是 nativePC 模型资源。",
+                0.95,
+                Some("Lua Framework"),
+            ),
+            "lua" => role(
+                "luaScript",
+                "Lua Framework 脚本",
+                "文件位于 Lua Framework 目录，由该运行框架按其自身规则加载；当前不会解析脚本行为。",
+                0.95,
+                Some("Lua Framework"),
+            ),
+            "ini" | "cfg" | "json" => role(
+                "luaRuntimeConfiguration",
+                "Lua Framework 配置",
+                "文件位于 Lua Framework 目录，属于运行框架或其脚本的配置/数据。",
+                0.9,
+                Some("Lua Framework"),
+            ),
+            _ => role(
+                "luaRuntimeResource",
+                "Lua Framework 资源",
+                "文件位于 Lua Framework 目录，可能是运行框架的脚本、字体或扩展资源；当前不解析其内部用途。",
+                0.75,
+                Some("Lua Framework"),
+            ),
+        };
+    }
     if path_components(path).iter().any(|part| *part == "plugins") {
         return match extension.as_str() {
             "dll" => role(
@@ -594,6 +676,20 @@ fn classify_role(path: &str) -> RoleRule {
         }
     }
     match extension.as_str() {
+        "am_dat" if normalized.ends_with("common/equip/armor.am_dat") => role(
+            "armorMappingTable",
+            "全局防具映射表",
+            "armor.am_dat 是全局防具数据表；它可把装备记录关联到主模型编号，不能作为普通单套防具文件随意改名部署。",
+            0.98,
+            Some("armor.am_dat"),
+        ),
+        "am_dat" => role(
+            "armorDataTable",
+            "防具数据表",
+            "AM_DAT 是防具数据资源；只有规范 armor.am_dat 路径才会使用已验证的防具映射解析器。",
+            0.85,
+            Some("armor.am_dat"),
+        ),
         "mod3" => role(
             "model",
             "模型",
@@ -727,6 +823,84 @@ fn classify_role(path: &str) -> RoleRule {
             0.95,
             Some("GMD"),
         ),
+        "eq_crt" | "cat_skill" | "deco" | "dglt" | "diot" | "cus_otr" | "dtt_rsz"
+        | "rod_inse" | "slt" => role(
+            "gameDataTable",
+            "游戏数据表",
+            "该扩展名在 MHW 资源表中对应装备、技能、装饰珠、怪物或商店等数据类别；当前只确认类别，不读取字段或推断游戏效果。",
+            0.9,
+            Some("MHW 游戏数据表"),
+        ),
+        "wwbk" | "wwct" => role(
+            "audioMetadata",
+            "Wwise 音频元数据",
+            "该文件是 Wwise 的列表或容器配置，不等同于 NBNK/NPCK 音频内容；当前不解析事件或声音 ID。",
+            0.88,
+            Some("Wwise 音频元数据"),
+        ),
+        "epvsp" => role(
+            "effectSoundParameter",
+            "特效声音参数",
+            "EPVSP 在 MHW 资源表中对应特效声音参数；当前只确认其类别，不能据此推断会播放的声音或触发条件。",
+            0.9,
+            Some("EPVSP 特效声音参数"),
+        ),
+        "cms" => role(
+            "cameraParameter",
+            "镜头设置",
+            "CMS 在 MHW 资源表中对应镜头设置；当前不会解析镜头数值、调用时机或影响范围。",
+            0.9,
+            Some("MHW 镜头与界面资源"),
+        ),
+        "gui" => role(
+            "interfaceResource",
+            "界面资源",
+            "GUI 是游戏界面资源类别；当前只确认文件类别，不解析控件、文本或调用关系。",
+            0.9,
+            Some("MHW 镜头与界面资源"),
+        ),
+        "sdl" => role(
+            "schedulerData",
+            "调度数据",
+            "SDL 在 MHW 资源表中对应调度资源；当前不解析调度事件、条件或运行效果。",
+            0.85,
+            Some("MHW 镜头与界面资源"),
+        ),
+        "shlp" => role(
+            "shellParameter",
+            "弹药/炮弹参数",
+            "SHLP 在 MHW 资源表中对应 Shell 参数；当前不读取弹药数值、攻击或动作字段。",
+            0.9,
+            Some("SHLP 弹药参数"),
+        ),
+        "otf" => role(
+            "fontAsset",
+            "字体资源",
+            "OTF 是字体文件，可能为插件或界面资源提供字形；不是 MHW 原生模型或贴图。",
+            0.9,
+            None,
+        ),
+        "bak" | "old" => role(
+            "backupArtifact",
+            "备份文件",
+            "文件扩展名表明它是备份副本；除非已有插件运行证据，不能当作 MHW 原生运行资源。",
+            0.9,
+            None,
+        ),
+        "bat" => role(
+            "utilityScript",
+            "附带脚本",
+            "批处理脚本通常用于安装、转换或维护；AcuMOD 不会执行它，也不把它当作游戏资源。",
+            0.95,
+            None,
+        ),
+        "lib" => role(
+            "developmentArtifact",
+            "开发库文件",
+            "LIB 通常是开发或链接产物，不是 MHW 原生运行资源；当前不会根据文件名判断其是否被某个工具使用。",
+            0.8,
+            None,
+        ),
         "ini" | "cfg" | "json" | "xml" | "toml" | "yaml" | "yml" => role(
             "configuration",
             "配置或数据",
@@ -770,6 +944,28 @@ fn classify_role(path: &str) -> RoleRule {
             None,
         ),
     }
+}
+
+/// 判断路径是否属于 SPL 约定的 C# 程序集目录。
+///
+/// Loader 子目录并非普通插件枚举目录，必须单独保留这一层语义，避免把加载器
+/// 自身组件或安装位置错误的插件都报告成“会自动加载”。
+fn sharp_plugin_loader_assembly_location(
+    normalized_path: &str,
+) -> Option<SharpPluginLoaderAssemblyLocation> {
+    if !normalized_path.ends_with(".dll") {
+        return None;
+    }
+    let parts = path_components(normalized_path);
+    let stripped = parts
+        .strip_prefix(&["nativepc"])
+        .unwrap_or(parts.as_slice());
+    let tail = stripped.strip_prefix(&["plugins", "csharp"])?;
+    Some(if tail.first() == Some(&"loader") {
+        SharpPluginLoaderAssemblyLocation::LoaderComponent
+    } else {
+        SharpPluginLoaderAssemblyLocation::PluginCandidate
+    })
 }
 
 /// 特效路径决定影响范围；不能仅按扩展名把全局 EPV 当作单武器资源。
@@ -869,6 +1065,7 @@ fn component_for_path(path: &str, replacements: &[&ModelReplacement]) -> Compone
     let stripped = parts
         .strip_prefix(&["nativepc"])
         .unwrap_or(parts.as_slice());
+    let normalized = normalize_path(path);
     let from_replacement = || {
         replacements.first().map(|replacement| ComponentDescriptor {
             key: format!("target:{}:{}", replacement.model_kind, replacement.model_id),
@@ -877,6 +1074,33 @@ fn component_for_path(path: &str, replacements: &[&ModelReplacement]) -> Compone
             confidence: 1.0,
         })
     };
+    if normalized == "winmm.dll"
+        || normalized == "loader-config.json"
+        || sharp_plugin_loader_assembly_location(&normalized).is_some()
+    {
+        return ComponentDescriptor {
+            key: "runtime:sharp-plugin-loader".to_string(),
+            kind: "sharpPluginLoader".to_string(),
+            label: "SharpPluginLoader（SPL）运行环境".to_string(),
+            confidence: 0.95,
+        };
+    }
+    if normalized.ends_with("common/equip/armor.am_dat") {
+        return ComponentDescriptor {
+            key: "global:armor-data".to_string(),
+            kind: "globalArmorMapping".to_string(),
+            label: "全局防具映射".to_string(),
+            confidence: 1.0,
+        };
+    }
+    if normalized == "lua_framework.dll" || normalized.starts_with("lua_framework/") {
+        return ComponentDescriptor {
+            key: "runtime:lua-framework".to_string(),
+            kind: "luaRuntime".to_string(),
+            label: "Lua Framework 运行环境".to_string(),
+            confidence: 0.95,
+        };
+    }
     if stripped.len() >= 3 && stripped[0] == "pl" && matches!(stripped[1], "f_equip" | "m_equip") {
         return ComponentDescriptor {
             key: format!("armor:{}", stripped[2]),
@@ -1118,6 +1342,142 @@ fn build_resource_edges(
                     files[file_index_value].effective_deploy_relative_path
                 )),
             }
+        } else if role == "armorMappingTable" {
+            match read_parser_file(&input_file.source_path, input_file.size_bytes)
+                .and_then(|bytes| read_armor_dat_summary(&bytes))
+            {
+                Ok(summary) => {
+                    let references = summary
+                        .slots
+                        .iter()
+                        .map(|slot| {
+                            let part = slot
+                                .part
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("未知部位({})", slot.equip_slot));
+                            format!(
+                                "{part}：{} 条记录，{} 个主模型编号",
+                                slot.entry_count, slot.unique_model_id_count
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    files[file_index_value].references = references.clone();
+                    files[file_index_value].evidence.push(ModAnalysisEvidence {
+                        kind: "binaryParser".to_string(),
+                        detail: format!(
+                            "armor.am_dat 已通过头部和固定记录长度校验，共 {} 条防具映射记录、{} 个部位。",
+                            summary.entry_count,
+                            summary.slots.len()
+                        ),
+                        confidence: 1.0,
+                    });
+                    for (slot, reference) in summary.slots.iter().zip(references) {
+                        let part = slot
+                            .part
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("未知部位({})", slot.equip_slot));
+                        push_edge(
+                            &mut edges,
+                            &mut seen,
+                            ModResourceEdge {
+                                from_file_id: files[file_index_value].file_id.clone(),
+                                to_file_id: None,
+                                target_reference: reference,
+                                relation: "mapsArmorSlot".to_string(),
+                                relation_label: "影响防具部位映射".to_string(),
+                                evidence: format!(
+                                    "armor.am_dat 二进制记录表；{part} 部位包含 {} 条记录。",
+                                    slot.entry_count
+                                ),
+                                confidence: 1.0,
+                            },
+                        );
+                    }
+                }
+                Err(error) => warnings.push(format!(
+                    "无法解析 {} 的全局防具映射：{error}",
+                    files[file_index_value].effective_deploy_relative_path
+                )),
+            }
+        } else if matches!(
+            role.as_str(),
+            "sharpPluginLoaderPluginCandidate" | "sharpPluginLoaderLoaderComponent"
+        ) {
+            match read_parser_file(&input_file.source_path, input_file.size_bytes)
+                .and_then(|bytes| read_dotnet_assembly_summary(&bytes))
+            {
+                Ok(summary) => {
+                    files[file_index_value]
+                        .references
+                        .push(".NET CLI 程序集".to_string());
+                    files[file_index_value].evidence.push(ModAnalysisEvidence {
+                        kind: "binaryParser".to_string(),
+                        detail: "PE 头与 CLR 数据目录有效，已确认是 .NET CLI 程序集。".to_string(),
+                        confidence: 1.0,
+                    });
+                    if summary.has_sharp_plugin_loader_core_metadata_name {
+                        files[file_index_value]
+                            .references
+                            .push("SharpPluginLoader.Core".to_string());
+                        files[file_index_value].evidence.push(ModAnalysisEvidence {
+                            kind: "assemblyMetadata".to_string(),
+                            detail:
+                                "程序集元数据的 #Strings 堆包含 SharpPluginLoader.Core 标识符。"
+                                    .to_string(),
+                            confidence: 0.94,
+                        });
+                        let target_file_id = files
+                            .iter()
+                            .find(|candidate| {
+                                normalize_path(&candidate.effective_deploy_relative_path)
+                                    .ends_with("/sharppluginloader.core.dll")
+                            })
+                            .map(|candidate| candidate.file_id.clone());
+                        push_edge(
+                            &mut edges,
+                            &mut seen,
+                            ModResourceEdge {
+                                from_file_id: files[file_index_value].file_id.clone(),
+                                to_file_id: target_file_id,
+                                target_reference: "SharpPluginLoader.Core".to_string(),
+                                relation: "declaresPluginFrameworkDependency".to_string(),
+                                relation_label: "声明 SPL 框架依赖".to_string(),
+                                evidence: "已验证 .NET 程序集元数据 #Strings 堆中的 SharpPluginLoader.Core 标识符。"
+                                    .to_string(),
+                                confidence: 0.94,
+                            },
+                        );
+                    }
+                    if role == "sharpPluginLoaderPluginCandidate" {
+                        let target_file_id = files
+                            .iter()
+                            .find(|candidate| {
+                                let path =
+                                    normalize_path(&candidate.effective_deploy_relative_path);
+                                path == "loader-config.json" || path == "winmm.dll"
+                            })
+                            .map(|candidate| candidate.file_id.clone());
+                        push_edge(
+                            &mut edges,
+                            &mut seen,
+                            ModResourceEdge {
+                                from_file_id: files[file_index_value].file_id.clone(),
+                                to_file_id: target_file_id,
+                                target_reference: "SharpPluginLoader 运行环境".to_string(),
+                                relation: "requiresPluginLoader".to_string(),
+                                relation_label: "依赖 SPL 加载器".to_string(),
+                                evidence: "C# 程序集位于 SPL 约定的 nativePC/plugins/CSharp 目录。"
+                                    .to_string(),
+                                confidence: 0.95,
+                            },
+                        );
+                    }
+                }
+                Err(error) => warnings.push(format!(
+                    "无法验证 {} 是否为 SPL 可加载的 .NET 程序集：{error}",
+                    files[file_index_value].effective_deploy_relative_path
+                )),
+            }
         }
     }
 
@@ -1226,6 +1586,249 @@ fn read_sobjl_object_paths(bytes: &[u8]) -> Result<Vec<String>, String> {
     } else {
         Ok(paths.into_iter().collect())
     }
+}
+
+/// 只验证 PE/.NET CLI 头，并在程序集元数据 `#Strings` 堆中查找 SPL Core 标识符。
+///
+/// 这不是反编译器：不读取类型、方法、代码或用户数据，也不执行程序集。目的仅是
+/// 区分 CSharp 目录中可由 SPL 处理的托管程序集与误放入的原生 DLL。
+fn read_dotnet_assembly_summary(bytes: &[u8]) -> Result<DotnetAssemblySummary, String> {
+    if bytes.len() < 0x40 || bytes.get(0..2) != Some(b"MZ") {
+        return Err("缺少 PE 的 MZ 文件头".to_string());
+    }
+    let pe_offset =
+        usize::try_from(read_u32_at(bytes, 0x3c)?).map_err(|_| "PE 偏移超出支持范围。")?;
+    let coff_header_offset = pe_offset
+        .checked_add(4)
+        .ok_or_else(|| "PE 偏移溢出。".to_string())?;
+    if bytes.get(pe_offset..coff_header_offset) != Some(b"PE\0\0") {
+        return Err("缺少 PE 文件签名".to_string());
+    }
+    let optional_header_offset = coff_header_offset
+        .checked_add(20)
+        .ok_or_else(|| "PE 可选头偏移溢出。".to_string())?;
+    let optional_header_size_offset = coff_header_offset
+        .checked_add(16)
+        .ok_or_else(|| "PE 可选头大小字段偏移溢出。".to_string())?;
+    let optional_header_size = usize::from(read_u16_at(bytes, optional_header_size_offset)?);
+    let optional_header_end = optional_header_offset
+        .checked_add(optional_header_size)
+        .ok_or_else(|| "PE 可选头大小溢出。".to_string())?;
+    if optional_header_end > bytes.len() {
+        return Err("PE 可选头长度超出文件范围".to_string());
+    }
+    let data_directory_offset = match read_u16_at(bytes, optional_header_offset)? {
+        0x10b => 96usize,
+        0x20b => 112usize,
+        magic => return Err(format!("不支持的 PE 可选头魔数 {magic:04X}")),
+    };
+    let cli_directory_offset = optional_header_offset
+        .checked_add(data_directory_offset)
+        .and_then(|offset| offset.checked_add(14 * 8))
+        .ok_or_else(|| "CLR 数据目录偏移溢出。".to_string())?;
+    let cli_directory_end = cli_directory_offset
+        .checked_add(8)
+        .ok_or_else(|| "CLR 数据目录大小溢出。".to_string())?;
+    if cli_directory_end > optional_header_end {
+        return Err("PE 可选头没有 CLR 数据目录".to_string());
+    }
+    let cli_rva = read_u32_at(bytes, cli_directory_offset)?;
+    let cli_size_offset = cli_directory_offset
+        .checked_add(4)
+        .ok_or_else(|| "CLR 数据目录大小字段偏移溢出。".to_string())?;
+    if cli_rva == 0 || read_u32_at(bytes, cli_size_offset)? == 0 {
+        return Err("PE 未声明 CLR 运行时数据目录".to_string());
+    }
+    let section_count = usize::from(read_u16_at(
+        bytes,
+        coff_header_offset
+            .checked_sub(2)
+            .ok_or_else(|| "PE COFF 头偏移无效。".to_string())?,
+    )?);
+    let section_table_offset = optional_header_end;
+    let cli_offset = pe_rva_to_file_offset(bytes, section_table_offset, section_count, cli_rva)?;
+    let metadata_rva = read_u32_at(
+        bytes,
+        cli_offset
+            .checked_add(8)
+            .ok_or_else(|| "CLR 元数据 RVA 字段偏移溢出。".to_string())?,
+    )?;
+    let metadata_size = usize::try_from(read_u32_at(
+        bytes,
+        cli_offset
+            .checked_add(12)
+            .ok_or_else(|| "CLR 元数据大小字段偏移溢出。".to_string())?,
+    )?)
+    .map_err(|_| "CLR 元数据大小超出支持范围。".to_string())?;
+    if metadata_rva == 0 || metadata_size == 0 {
+        return Err("CLR 头未声明程序集元数据。".to_string());
+    }
+    let metadata_offset =
+        pe_rva_to_file_offset(bytes, section_table_offset, section_count, metadata_rva)?;
+    let metadata_end = metadata_offset
+        .checked_add(metadata_size)
+        .ok_or_else(|| "程序集元数据大小溢出。".to_string())?;
+    if metadata_end > bytes.len() {
+        return Err("程序集元数据超出文件范围。".to_string());
+    }
+    Ok(DotnetAssemblySummary {
+        has_sharp_plugin_loader_core_metadata_name: dotnet_metadata_strings(
+            bytes,
+            metadata_offset,
+            metadata_end,
+        )?
+        .windows(SHARP_PLUGIN_LOADER_CORE_NAME.len())
+        .any(|window| window == SHARP_PLUGIN_LOADER_CORE_NAME),
+    })
+}
+
+/// 将 PE 的 RVA 映射到文件偏移。托管程序集的 CLR 头和元数据均按此映射定位，
+/// 避免把任意 DLL 字节串误当作 .NET 元数据。
+fn pe_rva_to_file_offset(
+    bytes: &[u8],
+    section_table_offset: usize,
+    section_count: usize,
+    rva: u32,
+) -> Result<usize, String> {
+    for index in 0..section_count {
+        let section_offset = section_table_offset
+            .checked_add(
+                index
+                    .checked_mul(40)
+                    .ok_or_else(|| "PE 节区索引溢出。".to_string())?,
+            )
+            .ok_or_else(|| "PE 节区偏移溢出。".to_string())?;
+        let section_end = section_offset
+            .checked_add(40)
+            .ok_or_else(|| "PE 节区大小溢出。".to_string())?;
+        if section_end > bytes.len() {
+            return Err("PE 节区表超出文件范围。".to_string());
+        }
+        let virtual_size = read_u32_at(bytes, section_offset + 8)?;
+        let virtual_address = read_u32_at(bytes, section_offset + 12)?;
+        let raw_size = read_u32_at(bytes, section_offset + 16)?;
+        let raw_offset = read_u32_at(bytes, section_offset + 20)?;
+        let section_span = virtual_size.max(raw_size);
+        let section_end_rva = virtual_address
+            .checked_add(section_span)
+            .ok_or_else(|| "PE 节区 RVA 范围溢出。".to_string())?;
+        if rva < virtual_address || rva >= section_end_rva {
+            continue;
+        }
+        let relative = rva - virtual_address;
+        if relative >= raw_size {
+            return Err("PE RVA 指向节区中没有文件数据的区域。".to_string());
+        }
+        let file_offset = usize::try_from(raw_offset)
+            .map_err(|_| "PE 节区文件偏移超出支持范围。".to_string())?
+            .checked_add(usize::try_from(relative).map_err(|_| "PE RVA 超出支持范围。")?)
+            .ok_or_else(|| "PE 文件偏移溢出。".to_string())?;
+        if file_offset >= bytes.len() {
+            return Err("PE RVA 映射超出文件范围。".to_string());
+        }
+        return Ok(file_offset);
+    }
+    Err("PE 节区表中找不到 RVA 对应的数据。".to_string())
+}
+
+/// 读取 CLR 元数据根和 `#Strings` 堆；只读取元数据目录，不解析或执行程序集代码。
+fn dotnet_metadata_strings<'a>(
+    bytes: &'a [u8],
+    metadata_offset: usize,
+    metadata_end: usize,
+) -> Result<&'a [u8], String> {
+    if read_u32_at(bytes, metadata_offset)? != 0x424a_5342 {
+        return Err("CLR 元数据缺少 BSJB 签名。".to_string());
+    }
+    let version_length = usize::try_from(read_u32_at(bytes, metadata_offset + 12)?)
+        .map_err(|_| "CLR 元数据版本长度超出支持范围。".to_string())?;
+    let stream_count_offset = align_to_four(
+        metadata_offset
+            .checked_add(16)
+            .and_then(|offset| offset.checked_add(version_length))
+            .ok_or_else(|| "CLR 元数据版本字段溢出。".to_string())?,
+    )?;
+    let stream_headers_offset = stream_count_offset
+        .checked_add(4)
+        .ok_or_else(|| "CLR 元数据流头偏移溢出。".to_string())?;
+    if stream_headers_offset > metadata_end {
+        return Err("CLR 元数据流头超出范围。".to_string());
+    }
+    let stream_count = usize::from(read_u16_at(
+        bytes,
+        stream_count_offset
+            .checked_add(2)
+            .ok_or_else(|| "CLR 元数据流数量字段偏移溢出。".to_string())?,
+    )?);
+    let mut header_offset = stream_headers_offset;
+    for _ in 0..stream_count {
+        let name_offset = header_offset
+            .checked_add(8)
+            .ok_or_else(|| "CLR 元数据流名称偏移溢出。".to_string())?;
+        if name_offset >= metadata_end {
+            return Err("CLR 元数据流名称超出范围。".to_string());
+        }
+        let name_end = bytes[name_offset..metadata_end]
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|offset| name_offset + offset)
+            .ok_or_else(|| "CLR 元数据流名称未终止。".to_string())?;
+        let name = std::str::from_utf8(&bytes[name_offset..name_end])
+            .map_err(|_| "CLR 元数据流名称不是 UTF-8。".to_string())?;
+        let next_header_offset = align_to_four(
+            name_end
+                .checked_add(1)
+                .ok_or_else(|| "CLR 元数据流名称长度溢出。".to_string())?,
+        )?;
+        if next_header_offset > metadata_end {
+            return Err("CLR 元数据流头填充超出范围。".to_string());
+        }
+        if name == "#Strings" {
+            let stream_relative_offset = usize::try_from(read_u32_at(bytes, header_offset)?)
+                .map_err(|_| "CLR 字符串堆偏移超出支持范围。".to_string())?;
+            let stream_size = usize::try_from(read_u32_at(bytes, header_offset + 4)?)
+                .map_err(|_| "CLR 字符串堆大小超出支持范围。".to_string())?;
+            let stream_start = metadata_offset
+                .checked_add(stream_relative_offset)
+                .ok_or_else(|| "CLR 字符串堆偏移溢出。".to_string())?;
+            let stream_end = stream_start
+                .checked_add(stream_size)
+                .ok_or_else(|| "CLR 字符串堆大小溢出。".to_string())?;
+            return bytes
+                .get(stream_start..stream_end)
+                .filter(|_| stream_end <= metadata_end)
+                .ok_or_else(|| "CLR 字符串堆超出元数据范围。".to_string());
+        }
+        header_offset = next_header_offset;
+    }
+    Err("CLR 元数据中未找到 #Strings 堆。".to_string())
+}
+
+fn align_to_four(value: usize) -> Result<usize, String> {
+    value
+        .checked_add(3)
+        .map(|value| value & !3)
+        .ok_or_else(|| "四字节对齐偏移溢出。".to_string())
+}
+
+fn read_u16_at(bytes: &[u8], offset: usize) -> Result<u16, String> {
+    let end = offset
+        .checked_add(2)
+        .ok_or_else(|| "PE 字段偏移溢出。".to_string())?;
+    let value = bytes
+        .get(offset..end)
+        .ok_or_else(|| "PE 字段越过文件末尾".to_string())?;
+    Ok(u16::from_le_bytes([value[0], value[1]]))
+}
+
+fn read_u32_at(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| "PE 字段偏移溢出。".to_string())?;
+    let value = bytes
+        .get(offset..end)
+        .ok_or_else(|| "PE 字段越过文件末尾".to_string())?;
+    Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
 fn collect_knowledge_evidence(
@@ -1421,6 +2024,73 @@ mod tests {
         bytes
     }
 
+    /// 仅写入已由模型改绑模块验证的字段偏移，用于确认分析器不会把 DAT 当普通文件。
+    fn armor_dat_bytes(entries: &[(u16, u16, u8, u16)]) -> Vec<u8> {
+        let mut bytes = vec![0; 10 + entries.len() * 60];
+        bytes[4..6].copy_from_slice(&0x005Fu16.to_le_bytes());
+        bytes[6..10].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (index, (set_id, main_model_id, equip_slot, set_group)) in entries.iter().enumerate() {
+            let offset = 10 + index * 60;
+            bytes[offset + 7..offset + 9].copy_from_slice(&set_id.to_le_bytes());
+            bytes[offset + 10] = *equip_slot;
+            bytes[offset + 13..offset + 15].copy_from_slice(&main_model_id.to_le_bytes());
+            bytes[offset + 53..offset + 55].copy_from_slice(&set_group.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// 仅构造读取 PE/CLR 头和元数据字符串堆所需的最小程序集，不含任何可执行代码。
+    fn dotnet_assembly_bytes(has_spl_core_name: bool) -> Vec<u8> {
+        const PE_OFFSET: usize = 0x80;
+        const COFF_OFFSET: usize = PE_OFFSET + 4;
+        const OPTIONAL_OFFSET: usize = COFF_OFFSET + 20;
+        const OPTIONAL_SIZE: usize = 0xf0;
+        const SECTION_OFFSET: usize = OPTIONAL_OFFSET + OPTIONAL_SIZE;
+        const RAW_OFFSET: usize = 0x200;
+        const METADATA_OFFSET: usize = 0x280;
+        const STRINGS_OFFSET: usize = 0x2c0;
+
+        let mut bytes = vec![0u8; 0x400];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&(PE_OFFSET as u32).to_le_bytes());
+        bytes[PE_OFFSET..PE_OFFSET + 4].copy_from_slice(b"PE\0\0");
+        bytes[COFF_OFFSET + 2..COFF_OFFSET + 4].copy_from_slice(&1u16.to_le_bytes());
+        bytes[COFF_OFFSET + 16..COFF_OFFSET + 18]
+            .copy_from_slice(&(OPTIONAL_SIZE as u16).to_le_bytes());
+        bytes[OPTIONAL_OFFSET..OPTIONAL_OFFSET + 2].copy_from_slice(&0x20bu16.to_le_bytes());
+        let cli_directory_offset = OPTIONAL_OFFSET + 112 + 14 * 8;
+        bytes[cli_directory_offset..cli_directory_offset + 4]
+            .copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[cli_directory_offset + 4..cli_directory_offset + 8]
+            .copy_from_slice(&0x48u32.to_le_bytes());
+
+        bytes[SECTION_OFFSET + 8..SECTION_OFFSET + 12].copy_from_slice(&0x400u32.to_le_bytes());
+        bytes[SECTION_OFFSET + 12..SECTION_OFFSET + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[SECTION_OFFSET + 16..SECTION_OFFSET + 20].copy_from_slice(&0x400u32.to_le_bytes());
+        bytes[SECTION_OFFSET + 20..SECTION_OFFSET + 24]
+            .copy_from_slice(&(RAW_OFFSET as u32).to_le_bytes());
+
+        bytes[RAW_OFFSET..RAW_OFFSET + 4].copy_from_slice(&0x48u32.to_le_bytes());
+        bytes[RAW_OFFSET + 8..RAW_OFFSET + 12].copy_from_slice(&0x1080u32.to_le_bytes());
+        bytes[RAW_OFFSET + 12..RAW_OFFSET + 16].copy_from_slice(&0x80u32.to_le_bytes());
+
+        bytes[METADATA_OFFSET..METADATA_OFFSET + 4].copy_from_slice(&0x424a_5342u32.to_le_bytes());
+        bytes[METADATA_OFFSET + 12..METADATA_OFFSET + 16].copy_from_slice(&4u32.to_le_bytes());
+        bytes[METADATA_OFFSET + 16..METADATA_OFFSET + 20].copy_from_slice(b"v4\0\0");
+        bytes[METADATA_OFFSET + 22..METADATA_OFFSET + 24].copy_from_slice(&1u16.to_le_bytes());
+        bytes[METADATA_OFFSET + 24..METADATA_OFFSET + 28].copy_from_slice(&0x40u32.to_le_bytes());
+        let string_bytes = if has_spl_core_name {
+            b"\0SharpPluginLoader.Core\0".as_slice()
+        } else {
+            b"\0Example.Plugin\0".as_slice()
+        };
+        bytes[METADATA_OFFSET + 28..METADATA_OFFSET + 32]
+            .copy_from_slice(&(string_bytes.len() as u32).to_le_bytes());
+        bytes[METADATA_OFFSET + 32..METADATA_OFFSET + 41].copy_from_slice(b"#Strings\0");
+        bytes[STRINGS_OFFSET..STRINGS_OFFSET + string_bytes.len()].copy_from_slice(string_bytes);
+        bytes
+    }
+
     #[test]
     fn extracts_sobjl_paths_without_claiming_object_contents() {
         let bytes = b"rSetObject\0quest/test_object.sobj\0";
@@ -1429,6 +2099,81 @@ mod tests {
             ["quest/test_object.sobj"]
         );
         assert!(read_sobjl_object_paths(b"quest/test_object.sobj\0").is_err());
+    }
+
+    #[test]
+    fn verifies_spl_assembly_layout_and_metadata_without_executing_plugin_code() {
+        let root = unique_test_root();
+        fs::create_dir_all(&root).unwrap();
+        let proxy = root.join("winmm.dll");
+        let config = root.join("loader-config.json");
+        let plugin = root.join("example-plugin.dll");
+        let core = root.join("SharpPluginLoader.Core.dll");
+        fs::write(&proxy, b"SPL proxy candidate").unwrap();
+        fs::write(&config, b"{}").unwrap();
+        fs::write(&plugin, dotnet_assembly_bytes(true)).unwrap();
+        fs::write(&core, dotnet_assembly_bytes(false)).unwrap();
+        let file = |source_path: PathBuf, deploy: &str| ModAnalysisInputFile {
+            size_bytes: fs::metadata(&source_path).unwrap().len(),
+            source_path,
+            library_relative_path: format!("content/{deploy}"),
+            source_deploy_relative_path: deploy.to_string(),
+            effective_deploy_relative_path: deploy.to_string(),
+            excluded_from_deployment: false,
+        };
+        let input = ModAnalysisInput {
+            mod_id: "spl-test".to_string(),
+            name: "SPL 解析测试".to_string(),
+            files: vec![
+                file(proxy, "winmm.dll"),
+                file(config, "loader-config.json"),
+                file(plugin, "nativePC/plugins/CSharp/Example/ExamplePlugin.dll"),
+                file(
+                    core,
+                    "nativePC/plugins/CSharp/Loader/SharpPluginLoader.Core.dll",
+                ),
+            ],
+            model_replacements: Vec::new(),
+        };
+
+        let local = analyze_local_files(&input, &OperationReporter::default()).unwrap();
+        let plugin = local
+            .files
+            .iter()
+            .find(|file| file.role == "sharpPluginLoaderPluginCandidate")
+            .unwrap();
+        assert_eq!(
+            classify_role("winmm.dll").role,
+            "sharpPluginLoaderProxyCandidate"
+        );
+        assert_eq!(
+            classify_role("loader-config.json").role,
+            "sharpPluginLoaderConfiguration"
+        );
+        assert_eq!(
+            classify_role("nativePC/plugins/CSharp/Loader/Example.dll").role,
+            "sharpPluginLoaderLoaderComponent"
+        );
+        assert!(plugin
+            .references
+            .iter()
+            .any(|value| value == ".NET CLI 程序集"));
+        assert!(plugin
+            .references
+            .iter()
+            .any(|value| value == "SharpPluginLoader.Core"));
+        assert_eq!(plugin.component_label, "SharpPluginLoader（SPL）运行环境");
+        assert!(local.edges.iter().any(|edge| {
+            edge.from_file_id == plugin.file_id
+                && edge.relation == "declaresPluginFrameworkDependency"
+                && edge.to_file_id.is_some()
+        }));
+        assert!(local.edges.iter().any(|edge| {
+            edge.from_file_id == plugin.file_id
+                && edge.relation == "requiresPluginLoader"
+                && edge.to_file_id.is_some()
+        }));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn find_real_sample_id(installed_root: &Path, name_fragment: &str) -> String {
@@ -1454,7 +2199,78 @@ mod tests {
         assert_eq!(classify_role("nativepc/a.mrl3").role, "material");
         assert_eq!(classify_role("nativepc/a.dds").role, "textureSource");
         assert_eq!(classify_role("nativepc/plugins/a.dll").role, "plugin");
+        assert_eq!(
+            classify_role("nativePC/plugins/CSharp/Example.dll").role,
+            "sharpPluginLoaderPluginCandidate"
+        );
+        assert_eq!(
+            classify_role("nativepc/common/equip/armor.am_dat").role,
+            "armorMappingTable"
+        );
+        assert_eq!(
+            classify_role("nativepc/common/equip/armor.eq_crt").role,
+            "gameDataTable"
+        );
+        assert_eq!(
+            classify_role("lua_framework/scripts/example.lua").role,
+            "luaScript"
+        );
+        assert_eq!(
+            classify_role("nativepc/sound/weapon.epvsp").role,
+            "effectSoundParameter"
+        );
+        assert_eq!(
+            classify_role("nativepc/ui/menu.gui").role,
+            "interfaceResource"
+        );
+        assert_eq!(
+            classify_role("nativepc/wp/two/shell.shlp").role,
+            "shellParameter"
+        );
         assert_eq!(classify_role("nativepc/a.custom").role, "unknown");
+    }
+
+    #[test]
+    fn reads_verified_armor_dat_as_global_slot_mappings() {
+        let root = unique_test_root();
+        fs::create_dir_all(&root).unwrap();
+        let dat = root.join("armor.am_dat");
+        fs::write(
+            &dat,
+            armor_dat_bytes(&[(250, 106, 0, 300), (251, 106, 0, 300), (250, 107, 1, 300)]),
+        )
+        .unwrap();
+        let input = ModAnalysisInput {
+            mod_id: "dat-test".to_string(),
+            name: "DAT 映射测试".to_string(),
+            files: vec![ModAnalysisInputFile {
+                size_bytes: fs::metadata(&dat).unwrap().len(),
+                source_path: dat,
+                library_relative_path: "content/nativePC/common/equip/armor.am_dat".to_string(),
+                source_deploy_relative_path: "nativePC/common/equip/armor.am_dat".to_string(),
+                effective_deploy_relative_path: "nativePC/common/equip/armor.am_dat".to_string(),
+                excluded_from_deployment: false,
+            }],
+            model_replacements: Vec::new(),
+        };
+        let local = analyze_local_files(&input, &OperationReporter::default()).unwrap();
+        let dat = &local.files[0];
+        assert_eq!(dat.role, "armorMappingTable");
+        assert_eq!(dat.component_label, "全局防具映射");
+        assert_eq!(dat.references.len(), 2);
+        assert!(dat
+            .references
+            .iter()
+            .any(|reference| reference.starts_with("head：2 条记录")));
+        assert!(dat
+            .references
+            .iter()
+            .any(|reference| reference.starts_with("body：1 条记录")));
+        assert_eq!(local.edges.len(), 2);
+        assert!(local.edges.iter().all(|edge| {
+            edge.relation == "mapsArmorSlot" && edge.to_file_id.is_none() && edge.confidence == 1.0
+        }));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

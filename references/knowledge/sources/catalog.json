@@ -407,6 +407,21 @@
       "licenseStatus": "notAudited"
     },
     {
+      "id": "mhw-armor-editor",
+      "title": "MHW Editor Suite 的 armor.am_dat 解析器",
+      "kind": "openSourceParser",
+      "gameVersion": "15.23",
+      "url": "https://github.com/fre-sch/mhw_armor_edit",
+      "usage": "formatVerification",
+      "redistribution": "Unlicense-link-and-original-summary",
+      "verificationStatus": "reviewedAgainstParser",
+      "notes": [
+        "其公开 parser 将 armor.am_dat 识别为 60 字节记录表，包含 set_id、equip_slot、mdl_main_id 与 set_group 等字段。",
+        "AcuMOD 只复核实现所需的头、记录长度和映射字段，不复制上游代码或游戏数据。"
+      ],
+      "licenseStatus": "Unlicense"
+    },
+    {
       "id": "wwiseutil",
       "title": "wwiseutil",
       "kind": "openSourceParser",
@@ -447,6 +462,21 @@
         "用于核对 nativePC 加载与 plugins DLL 的运行边界。"
       ],
       "licenseStatus": "notAudited"
+    },
+    {
+      "id": "sharp-plugin-loader",
+      "title": "SharpPluginLoader",
+      "kind": "toolAuthorDocumentation",
+      "gameVersion": "15.23",
+      "url": "https://github.com/Fexty12573/SharpPluginLoader",
+      "usage": "pluginRuntimeAndPathVerification",
+      "redistribution": "MIT-link-and-original-summary",
+      "verificationStatus": "reviewedAgainstOfficialInstallationDocs",
+      "notes": [
+        "官方安装说明定义了游戏根目录 winmm.dll、loader-config.json 与 nativePC/plugins/CSharp 的安装布局。",
+        "AcuMOD 仅据此实现只读路径和 PE/CLR 元数据验证，不复制插件代码、不执行程序集，也不重新分发作者发布文件。"
+      ],
+      "licenseStatus": "MIT"
     },
     {
       "id": "mhw-curated-special-quest-name-map",
@@ -606,7 +636,7 @@
       "redistribution": "projectOwnedSummary",
       "verificationStatus": "tested",
       "notes": [
-        "用于 EVAM、MRL3 只读解析和分析证据等级等项目内可重复验证结论。"
+        "用于 EVAM、MRL3、armor.am_dat 只读解析和分析证据等级等项目内可重复验证结论。"
       ],
       "licenseStatus": "projectOwned"
     },

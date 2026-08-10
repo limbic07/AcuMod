@@ -298,6 +298,27 @@ struct ArmorDatEntry {
     set_group: u16,
 }
 
+/// `armor.am_dat` 的只读部位汇总。
+///
+/// 分析器只需要知道全局防具表实际覆盖了哪些部位和记录规模，不能把表中的
+/// 数字直接猜成某个本地 MOD 文件路径，因此不暴露可编辑的完整记录。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArmorDatSlotSummary {
+    pub equip_slot: u8,
+    pub part: Option<&'static str>,
+    pub entry_count: usize,
+    pub unique_set_id_count: usize,
+    pub unique_model_id_count: usize,
+    pub unique_set_group_count: usize,
+}
+
+/// 已验证 `armor.am_dat` 的全局只读摘要。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArmorDatSummary {
+    pub entry_count: usize,
+    pub slots: Vec<ArmorDatSlotSummary>,
+}
+
 fn special_character_armor_target(model_id: &str) -> Option<&'static SpecialCharacterArmorTarget> {
     SPECIAL_CHARACTER_ARMOR_TARGETS
         .iter()
@@ -649,6 +670,44 @@ fn parse_armor_dat_entries(bytes: &[u8]) -> Result<Vec<ArmorDatEntry>, String> {
         });
     }
     Ok(entries)
+}
+
+/// 读取 `armor.am_dat` 的记录规模及各防具部位覆盖范围。
+///
+/// 该函数复用模型改绑已验证的魔数、固定记录长度和字段偏移，只用于解释本地
+/// MOD 的全局防具映射风险；不会写入、修复或推断任意游戏数据。
+pub fn read_armor_dat_summary(bytes: &[u8]) -> Result<ArmorDatSummary, String> {
+    let entries = parse_armor_dat_entries(bytes)?;
+    let mut slots = BTreeMap::<u8, Vec<ArmorDatEntry>>::new();
+    for entry in entries.iter().copied() {
+        slots.entry(entry.equip_slot).or_default().push(entry);
+    }
+    Ok(ArmorDatSummary {
+        entry_count: entries.len(),
+        slots: slots
+            .into_iter()
+            .map(|(equip_slot, entries)| ArmorDatSlotSummary {
+                equip_slot,
+                part: armor_dat_part_name(equip_slot),
+                entry_count: entries.len(),
+                unique_set_id_count: entries
+                    .iter()
+                    .map(|entry| entry.set_id)
+                    .collect::<HashSet<_>>()
+                    .len(),
+                unique_model_id_count: entries
+                    .iter()
+                    .map(|entry| entry.mdl_main_id)
+                    .collect::<HashSet<_>>()
+                    .len(),
+                unique_set_group_count: entries
+                    .iter()
+                    .map(|entry| entry.set_group)
+                    .collect::<HashSet<_>>()
+                    .len(),
+            })
+            .collect(),
+    })
 }
 
 fn source_armor_variant_ids(

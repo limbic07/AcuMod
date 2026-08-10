@@ -3057,7 +3057,7 @@ async function buildModdingOnlyPack(outputPath, sourceCatalog, technicalDocument
   database.exec("BEGIN IMMEDIATE");
   try {
     database.prepare("INSERT INTO pack_manifest VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
-      "acumod-dev-modding", "AcuAI MOD 技术开发包", "mhw-modding", "0.1.0-dev",
+      "acumod-dev-modding", "AcuAI MOD 技术开发包", "mhw-modding", "0.3.0-dev",
       targetGameVersion, "zh-Hans", "0.1.0",
       "项目已验证技术规则的本地开发包，仅包含 MOD 技术文档，不包含游戏事实数据。",
     );
@@ -3345,11 +3345,12 @@ function pruneDevelopmentPack(databasePath, kind, gameFactsBuildProfile = "local
       `);
     } else if (kind === "mhw-modding") {
       database
-        .prepare("UPDATE pack_manifest SET pack_id = ?, display_name = ?, kind = ?, game_version = ?, description = ?")
+        .prepare("UPDATE pack_manifest SET pack_id = ?, display_name = ?, kind = ?, version = ?, game_version = ?, description = ?")
         .run(
           "acumod-dev-modding",
           "AcuAI MOD 技术开发包",
           kind,
+          "0.3.0-dev",
           "15.23",
           "项目已验证技术规则的开发包，用于验证 MOD 文件知识检索链路。",
         );

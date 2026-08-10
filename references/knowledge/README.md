@@ -95,7 +95,7 @@ npm.cmd run knowledge:verify-e2e
 
 ### 2. MOD 技术包
 
-`mhw-modding` 记录 MOD 制作和运行机制，包括 `nativePC` 路径、MOD3/MRL3/TEX、CTC/CCL、EFX/EPV、EVAM、Wwise、插件目录、资源 ID、跨文件引用和已验证复杂案例。
+`mhw-modding` 记录 MOD 制作和运行机制，包括 `nativePC` 路径、MOD3/MRL3/TEX、CTC/CCL、EFX/EPV、EVAM、`armor.am_dat`、Wwise、原生插件/Lua Framework/SharpPluginLoader（SPL）目录、资源 ID、跨文件引用和已验证复杂案例。技术包目前有 30 条短摘要；它只保存项目原创说明和来源链接，不复制外部 Wiki、工具代码或游戏数据。
 
 我会先统计真实 MOD 库中的路径、扩展名和组件组合，再按覆盖率实现只读解析器。每条规则都保存来源、适用版本、证据等级和验证方式：二进制内部引用是确定证据，规范路径和 ID 是高可信证据，仅同目录共现是启发式证据。无法确认的格式保留为“未知”，不由模型猜测后写入知识包。
 

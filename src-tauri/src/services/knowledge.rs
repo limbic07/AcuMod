@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::operations::OperationReporter;
-use crate::services::mod_library::extract_archive_with_bundled_7zip;
+use crate::{
+    operations::OperationReporter,
+    services::{mhwdata, mod_library::extract_archive_with_bundled_7zip},
+};
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
 const PACK_SCHEMA_VERSION: u32 = 1;
@@ -226,7 +228,23 @@ pub fn get_status() -> Result<KnowledgeStatus, String> {
 
 fn get_status_from(root: &Path) -> Result<KnowledgeStatus, String> {
     let index = load_index(&root)?;
-    status_from_index(&root, &index)
+    let mut status = status_from_index(&root, &index)?;
+    if let Some(database) = mhwdata::status_summary(root)? {
+        status.packs.push(database);
+    }
+    status.packs.sort_by(|left, right| {
+        right
+            .active
+            .cmp(&left.active)
+            .then_with(|| left.display_name.cmp(&right.display_name))
+    });
+    status.active_pack_count = status
+        .packs
+        .iter()
+        .filter(|pack| pack.active && pack.healthy)
+        .count();
+    status.total_size_bytes = status.packs.iter().map(|pack| pack.size_bytes).sum();
+    Ok(status)
 }
 
 /// 从一个 ZIP 中发现、校验并安装完整知识包集合。
@@ -273,13 +291,16 @@ fn install_extracted_bundle(
     progress: &OperationReporter,
 ) -> Result<KnowledgeBundleInstallResult, String> {
     let mut package_paths = Vec::new();
-    collect_knowledge_packages(extraction_root, &mut package_paths)?;
+    let mut database_paths = Vec::new();
+    collect_knowledge_bundle_entries(extraction_root, &mut package_paths, &mut database_paths)?;
     package_paths.sort();
+    database_paths.sort();
 
-    if package_paths.len() != 4 {
+    if package_paths.len() != 3 || database_paths.len() != 1 {
         return Err(format!(
-            "知识包 ZIP 必须包含四个 `.acukb` 文件，当前找到 {} 个。",
-            package_paths.len()
+            "知识包 ZIP 必须包含三个文本 `.acukb` 文件和一个 `.acumhwdb` 数值数据库，当前找到 {} 个文本包和 {} 个数值数据库。",
+            package_paths.len(),
+            database_paths.len()
         ));
     }
 
@@ -297,10 +318,10 @@ fn install_extracted_bundle(
             .map_err(|error| format!("知识包 {} 校验失败：{error}", display_path(path)))?;
         if !matches!(
             validated.kind.as_str(),
-            "mhw-game-facts" | "mhw-modding" | "mhw-game-guides" | "acumod-help"
+            "mhw-modding" | "mhw-game-guides" | "acumod-help"
         ) {
             return Err(format!(
-                "知识包 {} 的类型 `{}` 不是完整知识包支持的四类之一。",
+                "知识包 {} 的类型 `{}` 不是固定数值数据库配套文本包支持的类型。",
                 display_path(path),
                 validated.kind
             ));
@@ -311,20 +332,14 @@ fn install_extracted_bundle(
         validated_packs.push((path.clone(), validated));
     }
 
-    let required_kinds = [
-        "mhw-game-facts",
-        "mhw-modding",
-        "mhw-game-guides",
-        "acumod-help",
-    ];
+    let required_kinds = ["mhw-modding", "mhw-game-guides", "acumod-help"];
     if required_kinds.iter().any(|kind| !kinds.contains(*kind)) {
-        return Err(
-            "知识包 ZIP 缺少完整知识库所需的游戏事实、MOD 技术、攻略或 Acumod 说明包。".to_string(),
-        );
+        return Err("知识包 ZIP 缺少 MOD 技术、攻略或 Acumod 说明文本包。".to_string());
     }
+    mhwdata::validate_bundle_database(&database_paths[0])
+        .map_err(|error| format!("MHWData 数值数据库校验失败：{error}"))?;
 
-    let total = validated_packs.len();
-    let mut status = None;
+    let total = validated_packs.len() + 1;
     for (index, (path, _)) in validated_packs.into_iter().enumerate() {
         progress.report(
             "正在安装整套知识包",
@@ -334,18 +349,38 @@ fn install_extracted_bundle(
                 .and_then(|name| name.to_str())
                 .map(str::to_string),
         );
-        let result = install_pack_into(root, path.to_string_lossy().into_owned(), progress)?;
-        status = Some(result.status);
+        install_pack_into(root, path.to_string_lossy().into_owned(), progress)?;
+    }
+    progress.report(
+        "正在安装整套知识包",
+        total - 1,
+        Some(total),
+        Some("MHWData 数值数据库".to_string()),
+    );
+    mhwdata::install_database_into(root, &database_paths[0], progress)?;
+    // 用户已明确迁移到新方案；新库成功启用后，旧的事实图谱不再保留为可误用的回退。
+    if load_index(root)?
+        .packs
+        .iter()
+        .any(|pack| pack.pack_id == "acumod-dev-game-facts" || pack.kind == "mhw-game-facts")
+    {
+        remove_legacy_game_facts(root, progress)?;
     }
 
     Ok(KnowledgeBundleInstallResult {
-        message: format!("已安装整套知识包，共 {} 个。", total),
-        status: status.ok_or_else(|| "没有可安装的知识包。".to_string())?,
+        message:
+            "已安装整套知识资料：MHWData 固定数值数据库，以及 MOD 技术、攻略和 Acumod 说明文本包。"
+                .to_string(),
+        status: get_status_from(root)?,
         installed_count: total,
     })
 }
 
-fn collect_knowledge_packages(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_knowledge_bundle_entries(
+    root: &Path,
+    packages: &mut Vec<PathBuf>,
+    databases: &mut Vec<PathBuf>,
+) -> Result<(), String> {
     for entry in fs::read_dir(root).map_err(|error| format!("无法读取知识包解包目录：{error}"))?
     {
         let path = entry
@@ -360,13 +395,19 @@ fn collect_knowledge_packages(root: &Path, output: &mut Vec<PathBuf>) -> Result<
             ));
         }
         if metadata.is_dir() {
-            collect_knowledge_packages(&path, output)?;
+            collect_knowledge_bundle_entries(&path, packages, databases)?;
         } else if path
             .extension()
             .and_then(|value| value.to_str())
             .is_some_and(|value| value.eq_ignore_ascii_case("acukb"))
         {
-            output.push(path);
+            packages.push(path);
+        } else if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("acumhwdb"))
+        {
+            databases.push(path);
         }
     }
     Ok(())
@@ -499,6 +540,10 @@ fn install_pack_into(
 /// 删除操作只接收经过校验的包 ID，所有目标路径都从受控索引恢复。
 pub fn delete_pack(pack_id: &str, progress: &OperationReporter) -> Result<KnowledgeStatus, String> {
     let root = knowledge_root()?;
+    if pack_id == "mhwdata" {
+        mhwdata::delete_database(&root, progress)?;
+        return get_status_from(&root);
+    }
     delete_pack_from(&root, pack_id, progress)
 }
 
@@ -560,7 +605,52 @@ fn delete_pack_from(
         let _ = fs::remove_dir(&pack_directory);
     }
     progress.report("知识包已删除", selected.len(), Some(selected.len()), None);
-    status_from_index(root, &index)
+    get_status_from(root)
+}
+
+fn remove_legacy_game_facts(root: &Path, progress: &OperationReporter) -> Result<(), String> {
+    let mut index = load_index(root)?;
+    let selected = index
+        .packs
+        .iter()
+        .filter(|pack| pack.kind == "mhw-game-facts")
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok(());
+    }
+    let delete_staging = root
+        .join("staging")
+        .join(format!("legacy-game-facts-{}", unix_nanos_now()?));
+    fs::create_dir_all(&delete_staging)
+        .map_err(|error| format!("无法创建旧游戏事实包删除暂存目录：{error}"))?;
+    let mut moved_files = Vec::new();
+    for (position, pack) in selected.iter().enumerate() {
+        let path = installed_pack_path(root, &pack.relative_path)?;
+        if path.exists() {
+            let backup_path = delete_staging.join(format!("{position}.acukb"));
+            if let Err(error) = fs::rename(&path, &backup_path) {
+                restore_moved_pack_files(&moved_files);
+                let _ = fs::remove_dir_all(&delete_staging);
+                return Err(format!("无法暂存旧游戏事实包：{error}"));
+            }
+            moved_files.push((path, backup_path));
+        }
+    }
+    index.packs.retain(|pack| pack.kind != "mhw-game-facts");
+    if let Err(error) = save_index(root, &index) {
+        restore_moved_pack_files(&moved_files);
+        let _ = fs::remove_dir_all(&delete_staging);
+        return Err(error);
+    }
+    let _ = fs::remove_dir_all(&delete_staging);
+    progress.report(
+        "已移除旧游戏事实图谱",
+        selected.len(),
+        Some(selected.len()),
+        None,
+    );
+    Ok(())
 }
 
 /// 泛用查询只接收文本、领域和数量，不暴露任意 SQL 能力。
@@ -594,7 +684,8 @@ fn search_from(
     let active_packs = index
         .packs
         .iter()
-        .filter(|pack| pack.active)
+        // 旧游戏事实包在迁移后不能继续作为全文 RAG 结果混入回答。
+        .filter(|pack| pack.active && pack.kind != "mhw-game-facts")
         .filter(|pack| {
             normalized_domains.is_empty() || normalized_domains.contains(pack.kind.as_str())
         })
@@ -637,16 +728,8 @@ fn search_from(
     })
 }
 
-/// 按名称、别名或稳定 ID 查询游戏实体，返回后续关系查询需要的精确实体 ID。
-pub fn lookup_game_entities(
-    query: &str,
-    kinds: Option<&[String]>,
-    limit: usize,
-) -> Result<KnowledgeEntityLookupResponse, String> {
-    let root = knowledge_root()?;
-    lookup_game_entities_from(&root, query, kinds, limit)
-}
-
+/// 旧 `.acukb` 游戏事实图谱的查询夹具，仅保留在测试构建中用于历史包校验。
+#[cfg(test)]
 fn lookup_game_entities_from(
     root: &Path,
     query: &str,
@@ -706,6 +789,7 @@ fn lookup_game_entities_from(
     })
 }
 
+#[cfg(test)]
 fn lookup_entity_pack(
     path: &Path,
     pack: &InstalledPackRecord,
@@ -813,17 +897,8 @@ fn lookup_entity_pack(
         .collect()
 }
 
-/// 查询一个精确游戏实体的入向、出向或双向关系；调用方不能提交 SQL。
-pub fn get_game_entity_relations(
-    entity_id: &str,
-    predicates: Option<&[String]>,
-    direction: &str,
-    limit: usize,
-) -> Result<KnowledgeRelationResponse, String> {
-    let root = knowledge_root()?;
-    get_game_entity_relations_from(&root, entity_id, predicates, direction, limit)
-}
-
+/// 旧 `.acukb` 游戏事实图谱的关系夹具，仅保留在测试构建中。
+#[cfg(test)]
 fn get_game_entity_relations_from(
     root: &Path,
     entity_id: &str,
@@ -877,6 +952,7 @@ fn get_game_entity_relations_from(
     })
 }
 
+#[cfg(test)]
 fn relation_pack(
     path: &Path,
     pack: &InstalledPackRecord,
@@ -1485,7 +1561,8 @@ fn save_index(root: &Path, index: &KnowledgeIndex) -> Result<(), String> {
     Ok(())
 }
 
-fn knowledge_root() -> Result<PathBuf, String> {
+/// 所有本地知识资产（文档包、固定数值库、分析缓存）的受控根目录。
+pub(crate) fn knowledge_root() -> Result<PathBuf, String> {
     let executable_path =
         env::current_exe().map_err(|error| format!("无法定位 Acumod 程序目录：{error}"))?;
     let executable_directory = executable_path
@@ -1569,6 +1646,7 @@ fn normalize_domains(domains: Option<&[String]>) -> Result<HashSet<&str>, String
     Ok(result)
 }
 
+#[cfg(test)]
 fn normalized_query(value: &str, label: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -1580,6 +1658,7 @@ fn normalized_query(value: &str, label: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+#[cfg(test)]
 fn entity_query_variants(query: &str) -> Vec<String> {
     let characters = query.chars().collect::<Vec<_>>();
     let mut compact = String::with_capacity(query.len());
@@ -1606,10 +1685,12 @@ fn entity_query_variants(query: &str) -> Vec<String> {
     }
 }
 
+#[cfg(test)]
 fn is_roman_numeral(value: char) -> bool {
     matches!(value, 'I' | 'V' | 'X')
 }
 
+#[cfg(test)]
 fn numeric_suffix_ends_at(characters: &[char], start: usize) -> bool {
     let mut index = start;
     while characters
@@ -1623,6 +1704,7 @@ fn numeric_suffix_ends_at(characters: &[char], start: usize) -> bool {
         .is_none_or(|value| !value.is_ascii_alphanumeric())
 }
 
+#[cfg(test)]
 fn normalize_fixed_values(
     values: Option<&[String]>,
     label: &str,
@@ -1656,6 +1738,7 @@ fn normalize_fixed_values(
 }
 
 /// 关系谓词沿用知识包中的 camelCase 命名；仍只允许受控 ASCII 标识符，不能成为 SQL 片段。
+#[cfg(test)]
 fn normalize_relation_predicates(values: Option<&[String]>) -> Result<String, String> {
     let mut normalized = Vec::new();
     for value in values.unwrap_or_default() {
@@ -1684,6 +1767,7 @@ fn normalize_relation_predicates(values: Option<&[String]>) -> Result<String, St
     }
 }
 
+#[cfg(test)]
 fn validate_entity_id(value: &str) -> Result<(), String> {
     if value.trim().is_empty()
         || value.chars().count() > 240
@@ -1694,6 +1778,7 @@ fn validate_entity_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn normalize_relation_direction(value: &str) -> Result<&'static str, String> {
     match value.trim() {
         "outgoing" => Ok("outgoing"),
@@ -1704,10 +1789,7 @@ fn normalize_relation_direction(value: &str) -> Result<&'static str, String> {
 }
 
 fn validate_pack_kind(value: &str) -> Result<(), String> {
-    if matches!(
-        value,
-        "mhw-modding" | "mhw-game-facts" | "mhw-game-guides" | "acumod-help"
-    ) {
+    if matches!(value, "mhw-modding" | "mhw-game-guides" | "acumod-help") {
         Ok(())
     } else {
         Err(format!("不支持的知识包类型：{value}"))

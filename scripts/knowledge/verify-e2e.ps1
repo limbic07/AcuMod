@@ -32,8 +32,8 @@ $env:RUSTFLAGS = ($rustFlagParts -join " ").Trim()
 
 try {
     & cargo test --manifest-path (Join-Path $projectRoot "src-tauri\Cargo.toml") `
-        services::knowledge::tests::generated_development_packs_install_and_answer_core_queries `
-        --lib -- --ignored
+        services::mhwdata::tests::installed_database_returns_raw_weapon_rows `
+        --lib -- --exact
     exit $LASTEXITCODE
 }
 finally {

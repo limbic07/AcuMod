@@ -4,6 +4,7 @@ use crate::{
         self, KnowledgeBundleInstallResult, KnowledgeEntityLookupResponse,
         KnowledgeRelationResponse, KnowledgeSearchResponse, KnowledgeStatus,
     },
+    services::mhwdata,
 };
 
 /// 读取已经安装的知识包及其健康状态。
@@ -65,7 +66,8 @@ pub async fn lookup_game_entities(
     limit: Option<usize>,
 ) -> Result<KnowledgeEntityLookupResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        knowledge::lookup_game_entities(&query, kinds.as_deref(), limit.unwrap_or(20))
+        let root = knowledge::knowledge_root()?;
+        mhwdata::lookup_game_entities(&root, &query, kinds.as_deref(), limit.unwrap_or(20))
     })
     .await
     .map_err(|error| format!("游戏实体查询任务失败：{error}"))?
@@ -80,7 +82,9 @@ pub async fn get_game_entity_relations(
     limit: Option<usize>,
 ) -> Result<KnowledgeRelationResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        knowledge::get_game_entity_relations(
+        let root = knowledge::knowledge_root()?;
+        mhwdata::get_game_entity_relations(
+            &root,
             &entity_id,
             predicates.as_deref(),
             direction.as_deref().unwrap_or("both"),

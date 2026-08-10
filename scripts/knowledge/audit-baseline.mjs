@@ -18,7 +18,7 @@ const defaultOutputRoot = path.join(projectRoot, "references/knowledge/audits");
 const questUnlockSnapshotPath = path.join(projectRoot, "references/knowledge/raw/game8-quest-unlocks/current.json");
 const curatedQuestNameMapPath = path.join(projectRoot, "references/knowledge/sources/quest-name-map.json");
 const deliveryUnlockSourcePath = path.join(projectRoot, "references/knowledge/sources/delivery-unlock-documents.json");
-const developmentGameFactsPath = path.join(projectRoot, "references/knowledge/build/acumod-dev-game-facts.acukb");
+const developmentMhwdataPath = path.join(projectRoot, "references/knowledge/build/acumod-mhwdata-15.10.acumhwdb");
 
 const coverageDefinitions = [
   {
@@ -362,7 +362,7 @@ async function auditMhworldDataFallbackInput() {
     columns: Array.isArray(table.rows) && table.rows[0] ? Object.keys(table.rows[0]) : [],
   }));
   return {
-    inputProfile: "mhworlddata-fallback",
+    inputProfile: "mhworlddata-direct",
     packageName: "MHWData fixed-commit local development snapshot",
     sourceFileName: path.basename(mhworldDataSnapshotPath),
     sourceSha256: null,
@@ -429,26 +429,8 @@ async function auditQuestUnlockCoverage() {
   const sourceEntryCount = snapshot.entries.length;
   const parsedSourceEntryCount = snapshot.entries.filter((entry) => entry.parseStatus === "parsed").length;
 
-  let developmentPack = null;
-  if (await pathExists(developmentGameFactsPath)) {
-    const database = new DatabaseSync(developmentGameFactsPath, { readOnly: true });
-    try {
-      const scalar = (sql) => Object.values(database.prepare(sql).get() ?? {})[0] ?? 0;
-      developmentPack = {
-        taskCountWithUnlockData: Number(scalar(
-          "SELECT COUNT(DISTINCT subject_id) FROM relations WHERE predicate = 'requiresCondition'",
-        )),
-        prerequisiteRelationCount: Number(scalar(
-          "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest'",
-        )),
-        unlockConditionCount: Number(scalar(
-          "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresCondition'",
-        )),
-      };
-    } finally {
-      database.close();
-    }
-  }
+  // MHWData 不承载任务解锁图谱；保留抓取统计作为后续字段补齐候选。
+  const developmentPack = null;
 
   return {
     available: true,
@@ -460,7 +442,7 @@ async function auditQuestUnlockCoverage() {
     developmentPack,
     message: developmentPack
       ? "开发知识包统计只计入通过稳定任务 ID 或人工逐项核对名称桥接的关系。"
-      : "尚未生成开发知识包；运行 knowledge:build-dev 后可统计最终导入的任务关系。",
+      : "固定 MHWData 当前不导入任务解锁链；该来源保留为后续字段补齐候选。",
   };
 }
 
@@ -479,24 +461,8 @@ async function auditDeliveryUnlockCoverage() {
   ) {
     throw new Error("交货委托解锁来源结构无效。");
   }
-  let developmentPack = null;
-  if (await pathExists(developmentGameFactsPath)) {
-    const database = new DatabaseSync(developmentGameFactsPath, { readOnly: true });
-    try {
-      const scalar = (sql) => Number(Object.values(database.prepare(sql).get() ?? {})[0] ?? 0);
-      const hasDelivery = database.prepare("SELECT 1 FROM entities WHERE id = ?");
-      const unresolvedDeliveryCount = source.entries.filter(
-        (entry) => !hasDelivery.get(`game-delivery:${entry.deliveryId}`),
-      ).length;
-      developmentPack = {
-        conditionCount: scalar("SELECT COUNT(*) FROM entities WHERE kind = 'deliveryUnlockCondition'"),
-        prerequisiteRelationCount: scalar("SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest' AND subject_id LIKE 'game-delivery:%'"),
-        unresolvedDeliveryCount,
-      };
-    } finally {
-      database.close();
-    }
-  }
+  // 固定 MHWData 只提供任务基础/目标/报酬行，交货委托前置关系不再写入数值库。
+  const developmentPack = null;
   return {
     available: true,
     sourceId: source.sourceId,
@@ -509,14 +475,14 @@ async function auditDeliveryUnlockCoverage() {
 }
 
 async function auditDevelopmentFacts() {
-  if (!(await pathExists(developmentGameFactsPath))) {
+  if (!(await pathExists(developmentMhwdataPath))) {
     return {
       available: false,
-      message: "尚未生成开发事实包；运行 knowledge:build-dev 后可统计最终实体和关系覆盖。",
+      message: "尚未生成 MHWData 开发数据库；运行 knowledge:build-dev 后可统计实体和原始行覆盖。",
     };
   }
 
-  const database = new DatabaseSync(developmentGameFactsPath, { readOnly: true });
+  const database = new DatabaseSync(developmentMhwdataPath, { readOnly: true });
   try {
     const scalar = (sql) => Number(Object.values(database.prepare(sql).get() ?? {})[0] ?? 0);
     const grouped = (sql, key) => database.prepare(sql).all().map((row) => ({
@@ -525,13 +491,13 @@ async function auditDevelopmentFacts() {
     }));
     return {
       available: true,
-      packKind: String(Object.values(database.prepare("SELECT kind FROM pack_manifest").get() ?? {})[0] ?? "unknown"),
-      gameVersion: String(Object.values(database.prepare("SELECT game_version FROM pack_manifest").get() ?? {})[0] ?? "unknown"),
+      packKind: "mhwdata",
+      gameVersion: String(Object.values(database.prepare("SELECT runtime_game_version FROM mhwdata_manifest").get() ?? {})[0] ?? "unknown"),
       entityCount: scalar("SELECT COUNT(*) FROM entities"),
-      relationCount: scalar("SELECT COUNT(*) FROM relations"),
-      unverifiedEntityCount: scalar("SELECT COUNT(*) FROM entities WHERE game_version = 'unverified'"),
+      relationCount: scalar("SELECT COUNT(*) FROM record_entities"),
+      unverifiedEntityCount: 0,
       entityKinds: grouped("SELECT kind, COUNT(*) AS count FROM entities GROUP BY kind ORDER BY count DESC", "kind"),
-      relationPredicates: grouped("SELECT predicate, COUNT(*) AS count FROM relations GROUP BY predicate ORDER BY count DESC", "predicate"),
+      relationPredicates: grouped("SELECT section AS predicate, COUNT(*) AS count FROM records GROUP BY section ORDER BY count DESC", "predicate"),
     };
   } finally {
     database.close();
@@ -680,11 +646,11 @@ function renderReport(baseline, modProfile) {
     "",
   ];
 
-  if (baseline.rawPackage.inputProfile === "mhworlddata-fallback") {
+  if (baseline.rawPackage.inputProfile === "mhworlddata-direct") {
     lines.splice(
       lines.indexOf("## 原始资料字段覆盖"),
       0,
-      `- 输入模式：\`mhworlddata-fallback\`。本机未提供授权受限的 15.10.00 原始表，构建器改用固定 commit 的 MHWData 本地快照。`,
+      `- 输入模式：\`mhworlddata-direct\`。构建器直接使用固定 commit 的 MHWData 本地快照。`,
       `- 数据表：${baseline.rawPackage.sheetCount} 张，共 ${baseline.rawPackage.totalDataRows} 行；快照 ${formatBytes(baseline.rawPackage.formats.snapshot.totalBytes)}。`,
       "- 该输入只用于本地开发验收；字段、中文名称覆盖和再分发许可均仍需发布审计。",
       "",
@@ -824,7 +790,7 @@ async function main() {
     ...definition,
     tablesPresent: definition.tables.filter((table) => availableTables.has(table)),
   }));
-  if (rawPackage.inputProfile === "mhworlddata-fallback") {
+  if (rawPackage.inputProfile === "mhworlddata-direct") {
     const byTopic = new Map(coverage.map((item) => [item.topic, item]));
     Object.assign(byTopic.get("weapons"), {
       status: "partial", available: "名称、类型、攻击、属性、孔位、升级关系与大部分制作素材",

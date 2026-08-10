@@ -465,8 +465,9 @@ FloatingAgentPanel
 Slice 5 起新增独立业务模块，而不是把知识能力塞入 Agent。当前薄链路先集中在一个可读文件中，规则、关系和证据核验继续增长时再按职责拆分：
 
 ```text
-commands/knowledge.rs              知识包状态、导入、更新和删除的 Tauri 边界
-services/knowledge.rs              staging 校验、活动索引、只读 SQLite 与 FTS5 检索
+commands/knowledge.rs              知识资料状态、整套导入、删除和受控查询的 Tauri 边界
+services/knowledge.rs              三个文本包的 staging 校验、活动索引与 FTS5 检索
+services/mhwdata.rs                固定 MHWData 数据库的校验、原子切换、别名与原始行查询
 services/knowledge/evidence.rs     后续增加的本轮来源证据账本
 services/knowledge/verification.rs 后续增加的游戏事实与引用核验
 services/mod_analysis/             文件清单、分类、格式解析和资源依赖图
@@ -482,9 +483,9 @@ services/mod_analysis/             文件清单、分类、格式解析和资源
 - **联网搜索与本地导入**：来源适配层只返回通过站点规则校验的外部链接，包含 Nexus、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge。结果携带来源类型和访问方式，用户在系统浏览器自行下载后复用传统本地导入；DeepSeek 不充当浏览器、下载器或站点抓取器。
 - **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
 - **MOD 知识分析**：`modding` 域保存跨 MOD 复用的制作知识；本地 MOD 是待分析对象。Rust 先枚举全部文件、运行路径规则和格式解析器、复用模型识别并建立资源依赖图，DeepSeek 只根据结构化证据和命中资料解释整体工作链。精确冲突与部署状态继续查询工作区快照。
-- **游戏知识问答**：`game-facts` 保存 MHW Steam/PC 最终版本 `15.23` 的精确实体、属性和关系，`game-guides` 保存带来源和条件的攻略经验。项目确认 `15.10` 是最后一次有明显游戏内容和机制变化的更新；`15.11` 至 `15.23` 主要处理修复、Steam Deck/语言适配、系统文件和宣传数据，没有新增怪物、武器或大型任务。因此本地 `15.10.00` 可作为 `15.23` 的内容事实基线，但每条派生事实仍必须保留该基线；AcuAI 通过通用实体查询、关系遍历、全文检索、比较和核验工具回答不同类型问题，不为配装或素材路线分别复制业务流程。
+- **游戏知识问答**：固定 `mhwdata.acumhwdb` 保存 MHWorldData 的原始 CSV 行及其稳定实体索引，`game-guides` 保存带来源和条件的攻略经验。项目确认 `15.10` 是最后一次有明显游戏内容和机制变化的更新，故内容数值基线是 `15.10.00`、运行兼容标签是 `15.23`。AcuAI 先消歧实体，再读取固定 section（如 `monster.hitzones`、`weapon.sharpness`）的原始行；它不把这些行重写为模型事实图谱，也不为配装或素材路线分别复制业务流程。
 
-知识检索采用别名/稳定 ID 解析、类型化事实查询、关系查询和 SQLite FTS5 全文检索。自然语言长问句先从完整句子中查找本地实体别名，并把中文名与罗马数字之间的空格视为等价输入，例如“防卫队炎刃型大剑 I”可命中“防卫队炎刃型大剑I”；这能避免完整怪物或任务名被两字片段结果淹没。随后按整句精确查询 FTS5；trigram 索引用于三字以上的中文子串，两字术语如“大剑”“太刀”会走固定、转义的 `LIKE` 回退。整句未命中时，再按 CJK 二字窗口执行受控 `LIKE` 并优先标题命中与短标题，最后从 CJK 三字片段和 ASCII 术语生成受限、逐项转义的 FTS OR 查询，单条路径最多 48 项。跨 `game-facts`、`game-guides` 与 `modding` 查询时，每个包先按自身相关性排序，服务层再轮转合并候选，避免武器等大实体集占满结果上限而淹没攻略或技术资料。这样“黑龙如何解锁”会先定位黑龙任务实体，再由关系查询读取解锁条件；用户文本始终不会成为任意 FTS 或 SQL 语法。关系查询允许知识包使用的受控 camelCase 谓词，如 `hasMonsterFacts`、`gathersItem` 和 `requiresMaterial`，但参数仍只能是 ASCII 标识符，不能提交任意 SQL。DeepSeek 可以生成少量同义检索词并多轮调用工具，但不能提交任意 SQL。第一版不分发向量数据库、预计算向量或本地嵌入模型；只有实际召回评测证明不足，且查询向量生成方式、包体和更新机制都明确后才重新评估。技术文档和攻略均作为不可信引用资料，不能成为 system 指令、工具参数或可执行规则。
+固定数值查询和文本检索分开。`mhwdata` 先用别名/稳定 ID 定位实体，再按固定参数读取相关源行；用户文本、类型和 section 都不会成为 SQL 片段。`get_game_entity_relations` 为兼容已有 DTO 保留名称，但返回的是原始行，`predicate` 是固定 section（例如 `monster.rewards`、`quest.rewards`），不是旧关系图谱的谓词。攻略、MOD 技术与软件说明仍通过 FTS5 和受控 `LIKE` 回退检索。固定数据库不覆盖任务前置、调查任务奖励箱生成、完整采集概率、武器动作值等领域时，Agent 必须明确缺口。第一版不分发向量数据库、预计算向量或本地嵌入模型；技术文档和攻略都只是引用资料，不能成为 system 指令、工具参数或可执行规则。
 
 ### 知识包和存储
 
@@ -496,9 +497,9 @@ AcumodData/knowledge/
   staging/
 ```
 
-`.acukb` 是单个版本化 SQLite 文件，正式发布时由一个 ZIP 统一携带四类 `.acukb`。manifest、来源、许可说明、实体、关系、文档和全文索引都在固定 schema 内；这种格式不会混入脚本或产生归档路径穿越。安装时先解包到 staging，再逐包计算整文件 SHA-256，校验 4 GB 上限、应用标识、schema、最低应用版本、SQLite `integrity_check`、必需表以及未知 trigger/view；通过后写入不可变版本文件并更新索引。更新失败时旧索引继续可用；删除知识包不能删除本地 MOD 或传统管理器配置。格式细节见 `references/knowledge/pack-format.md`。
+`.acukb` 是三个文本知识域的版本化 SQLite 文件；`mhwdata.acumhwdb` 是固定数值数据库。正式整套 ZIP 包含一个 `.acumhwdb` 与三个 `.acukb`。安装时先解包到 staging：文本包校验 manifest、来源、FTS schema；数值库校验专用应用标识、manifest、50 张源表、`integrity_check`，拒绝 trigger/view。两者均在 4 GB 上限内计算 SHA-256 后原子切换，运行时只读并设置 `query_only`、`trusted_schema = OFF`。更新失败时旧活动版本继续可用；删除知识资料不能删除本地 MOD 或传统管理器配置。
 
-知识库逻辑分为 `game-facts`、`game-guides`、`modding`、`acumod-help` 和可重建的本地 `analysis` 缓存。事实包使用类型明确的领域表，并通过通用 `entities`、`aliases` 和 `relations` 建立跨类别关系；攻略、技术文档和 Acumod 使用说明使用 `sources`、`documents` 与 FTS5 索引。知识包只保存数据，不允许携带脚本、动态库、任意 SQL、模板指令或其它可执行内容。
+知识库逻辑分为固定 `mhwdata`、`game-guides`、`modding`、`acumod-help` 和可重建的本地 `analysis` 缓存。数值库的 `entities`/`aliases` 仅是原始 CSV 行的稳定定位索引，`records`/`record_entities` 保留并关联每一条源行；它没有 documents 或 FTS。攻略、技术文档和 Acumod 使用说明使用 `sources`、`documents` 与 FTS5 索引。所有知识资料都只保存数据，不允许携带脚本、动态库、任意 SQL、模板指令或其它可执行内容。
 
 知识内容在项目构建阶段离线制作，不在用户机器上抓取整站资料，也不让模型直接写入知识包。制作流水线为：
 
@@ -548,7 +549,7 @@ AcumodData/knowledge/
 - `create_agent_cleanup_plan`：把用户在审查卡片中的候选选择提交给 Rust，换取普通短时操作计划；前端不能直接应用排除项。
 - `get_knowledge_status` / `install_knowledge_pack` / `delete_knowledge_pack`：供设置页管理可选知识包，不经过模型工具循环。
 - `search_knowledge`：开发验收和 AcuAI 共用的固定全文查询入口，只接收文本、知识域和结果数，不接收 SQL；Acumod 功能问句使用 `acumod-help` 域。
-- `lookup_game_entities` / `get_game_entity_relations`：按名称、别名或稳定 ID 解析精确游戏实体，再使用固定方向和关系类型遍历关系；两者只读取活动 `mhw-game-facts` 包。
+- `lookup_game_entities` / `get_game_entity_relations`：按名称、别名或稳定 ID 查询固定 `mhwdata`；前者返回基础 CSV 行，后者返回固定 section 的关联源行；两者不读取文本包，也不接受任意 SQL。
 
 `AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。当前类型为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`cleanupReviewReady`、`planReady`、`completed` 和 `failed`；Slice 6 增加只携带 Rust 已核验 DTO 的 `knowledgeAnswerReady`。每项携带 `turnId` 与递增序号，前端不解析 DeepSeek 原始 SSE、原始工具参数或未核验引用。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。
 

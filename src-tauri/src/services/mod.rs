@@ -4,6 +4,7 @@ pub mod effect_remap;
 pub mod game;
 pub mod knowledge;
 pub mod legacy_box;
+pub mod mhwdata;
 pub mod mod_analysis;
 pub mod mod_library;
 pub mod mod_state_sync;

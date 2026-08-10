@@ -6,7 +6,7 @@ use tauri::AppHandle;
 
 use crate::{
     operations::{run_blocking_operation, OperationReporter},
-    services::{game, knowledge, mod_analysis, mod_library, model_recognition},
+    services::{game, knowledge, mhwdata, mod_analysis, mod_library, model_recognition},
     storage::config,
 };
 
@@ -456,15 +456,15 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "search_knowledge",
-                "description": "查询已安装的 MHW 游戏事实、攻略、MOD 制作技术和 Acumod 使用说明知识包。适用于游戏机制、任务、素材、配装建议、术语、MOD 文件作用以及软件操作问题；优先传入 2 至 12 个字的关键术语，长问句未命中时服务端会安全退化为术语查询；返回带来源和适用版本的证据。",
+                "description": "查询已安装的 MOD 制作技术、游戏攻略和 Acumod 使用说明文本包。精确游戏数值、掉率、肉质、装备属性和任务报酬必须改用 lookup_game_entities 与 get_game_entity_relations；本工具不查询 MHWData 数值数据库。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "使用精确 MHW 术语描述要查的事实、关系或技术问题" },
                         "domains": {
                             "type": "array",
-                            "items": { "type": "string", "enum": ["mhw-modding", "mhw-game-facts", "mhw-game-guides", "acumod-help"] },
-                            "description": "可选知识领域；不传时查询全部活动知识包"
+                            "items": { "type": "string", "enum": ["mhw-modding", "mhw-game-guides", "acumod-help"] },
+                            "description": "可选文本知识领域；不传时查询全部活动文本包"
                         },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 30 }
                     },
@@ -477,7 +477,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "lookup_game_entities",
-                "description": "按官方简体、官方繁体、英文名、常用别名或稳定 ID 查询 MHW 游戏实体，并返回精确类型化字段。精确数值、装备、素材、怪物、任务和技能问题应先用此工具消歧。",
+                "description": "在固定版 MHWorldData 本地数据库中按简体、繁体、英文名、别名或稳定 ID 查询游戏实体。返回上游 CSV 的基础行；精确数值、装备、素材、怪物、任务和技能问题必须先用此工具消歧。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -499,7 +499,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "compare_game_entities",
-                "description": "按已查询到的稳定游戏实体 ID 批量读取 2 至 4 个实体，用于比较武器、防具、护石、怪物或素材的结构化字段。必须先调用 lookup_game_entities 消歧；不会自行推断哪个更适合玩家。",
+                "description": "按已查询到的稳定 MHWData 实体 ID 批量读取 2 至 4 个基础 CSV 行，用于比较武器、防具、护石、怪物或素材。必须先调用 lookup_game_entities 消歧；不会自行推断哪个更适合玩家。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -519,7 +519,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "get_game_entity_relations",
-                "description": "查询精确游戏实体与素材、制作、升级、技能、掉落、怪物、任务或解锁条件之间的受控关系。任务地点和报酬分别使用 occursAt、rewardsItem，任务资料使用 hasQuestFacts；怪物生态资料使用 hasMonsterFacts；素材来源用入向 dropsItem、rewardsItem、gathersItem；装备属性资料使用 hasWeaponFacts、hasArmorFacts、hasDecorationFacts。没有返回解锁关系时不能自行推断前置。必须使用 lookup_game_entities 返回的稳定 entityId。",
+                "description": "读取精确实体关联的 MHWorldData 原始 CSV 行。predicates 是固定 section：武器用 weapon.sharpness、weapon.crafting；防具用 armor.skills、armor.crafting；怪物用 monster.weaknesses、monster.hitzones、monster.rewards；任务用 quest.monsters、quest.rewards；技能用 skill.levels；素材可先查 item 再读取关联的 crafting、rewards 或 location.items 行。没有返回的字段不得推断。必须使用 lookup_game_entities 返回的稳定 entityId。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -528,12 +528,12 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                             "type": "array",
                             "items": { "type": "string" },
                             "maxItems": 24,
-                            "description": "可选关系类型过滤；不确定时省略"
+                            "description": "可选 MHWData section 过滤；不确定时省略"
                         },
                         "direction": {
                             "type": "string",
                             "enum": ["outgoing", "incoming", "both"],
-                            "description": "实体指向其它实体、其它实体指向当前实体，或双向"
+                            "description": "为兼容调用保留；MHWData 始终返回与该实体关联的原始行"
                         },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
                     },
@@ -830,7 +830,9 @@ pub(crate) async fn execute_tool(
         "lookup_game_entities" => {
             let args = parse_arguments::<LookupGameEntitiesArgs>(arguments)?;
             let result = tauri::async_runtime::spawn_blocking(move || {
-                knowledge::lookup_game_entities(
+                let root = knowledge::knowledge_root()?;
+                mhwdata::lookup_game_entities(
+                    &root,
                     &args.query,
                     args.kinds.as_deref(),
                     args.limit.unwrap_or(20),
@@ -854,7 +856,8 @@ pub(crate) async fn execute_tool(
                 let mut entities = Vec::with_capacity(entity_ids.len());
                 let mut warnings = Vec::new();
                 for entity_id in entity_ids {
-                    let response = knowledge::lookup_game_entities(&entity_id, None, 4)?;
+                    let root = knowledge::knowledge_root()?;
+                    let response = mhwdata::lookup_game_entities(&root, &entity_id, None, 4)?;
                     warnings.extend(response.warnings);
                     let entity = response
                         .matches
@@ -883,7 +886,9 @@ pub(crate) async fn execute_tool(
         "get_game_entity_relations" => {
             let args = parse_arguments::<GetGameEntityRelationsArgs>(arguments)?;
             let result = tauri::async_runtime::spawn_blocking(move || {
-                knowledge::get_game_entity_relations(
+                let root = knowledge::knowledge_root()?;
+                mhwdata::get_game_entity_relations(
+                    &root,
                     &args.entity_id,
                     args.predicates.as_deref(),
                     args.direction.as_deref().unwrap_or("both"),

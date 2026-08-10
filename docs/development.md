@@ -44,12 +44,13 @@ cargo fmt
 - `build`：先运行 typecheck，再运行 Vite build。
 - `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告；缺少受限的 `15.10.00` 原始表时，会明确切换并报告 MHWData 本地快照输入。
 - `knowledge:fetch-quest-unlocks`：显式联网抓取公开可选任务解锁页面，只保存任务名、来源链接和可结构化解析的条件到本地忽略快照。
-- `knowledge:build-dev`：使用本地研究数据生成不提交、不分发的开发知识包，用于验证查询链路。若本机有完整 `15.10.00` 原始表则使用原始表模式；否则要求先准备固定 MHWData 快照和 MHW-Editor 同键简繁文本桥，并构建带 `mhworlddata-fallback` 标识的本地事实包。
-- `knowledge:build-modding-dev`：只生成 MOD 技术开发包；用于缺少完整游戏事实原始表时验证 MOD 技术知识检索。
+- `knowledge:build-mhwdata`：把固定 commit 的 MHWorldData 快照和可用的同键简繁名称桥构建为 `mhwdata.acumhwdb`；保留所有源 CSV 行，不构建事实图谱或 FTS。
+- `knowledge:build-dev`：构建上述数值数据库，以及 MOD 技术、攻略、Acumod 使用说明三个不提交的文本包，用于完整查询链路验证。
+- `knowledge:build-modding-dev`：只生成 MOD 技术文本包；用于独立验证技术知识检索。
 - `knowledge:package-modding-dev`：把技术开发包打成可从应用设置页安装的单包 ZIP。
-- `knowledge:package-bundle`：将四个 `.acukb` 打包为一个独立 ZIP，供本地安装测试或 release 上传；生成物位于被忽略的 `references/knowledge/release/`。
-- `knowledge:verify-dev`：校验开发包的版本、实体、关系和文档结构。
-- `knowledge:verify-e2e`：临时安装四个真实开发包，验证实体、关系和全文检索链路；Windows 下自动为测试二进制加入 Tauri 所需 manifest。
+- `knowledge:package-bundle`：将一个 `.acumhwdb` 和三个 `.acukb` 文本包打成独立 ZIP，供本地安装测试或 release 上传；生成物位于被忽略的 `references/knowledge/release/`。
+- `knowledge:verify-dev`：校验固定数据库的版本、源表、原始行关联与文本包结构。
+- `knowledge:verify-e2e`：旧的四 `.acukb` 图谱 e2e 脚本已废止；当前由 Rust 的 `mhwdata` 安装/查询集成测试覆盖相同安装边界。
 - `preview`：预览前端构建结果。
 - `tauri`：调用 Tauri CLI。
 - `tauri:dev`：启动 Tauri 桌面开发模式。
@@ -87,8 +88,8 @@ src-tauri/
 - Rust Tauri command 放在 `src-tauri/src/commands/`。
 - Rust 业务逻辑后续放在 `src-tauri/src/services/`。
 - 配置、MOD 元数据、启用状态、排序和部署记录读写后续放在 `src-tauri/src/storage/`。
-- 知识包运行时服务放在 `src-tauri/src/services/knowledge/`，MOD 文件分析放在 `src-tauri/src/services/mod_analysis/`；二者不放进 DeepSeek client 或工具分发文件。
-- 可重复的知识数据清洗、校验和打包脚本放在 `scripts/knowledge/`；开发源数据、来源清单和人工核对记录放在 `references/knowledge/`，生成的 `.acukb` 发布物不作为主程序资源打包。
+- 文本知识包运行时服务在 `src-tauri/src/services/knowledge.rs`，固定游戏数值库在 `src-tauri/src/services/mhwdata.rs`，MOD 文件分析在 `src-tauri/src/services/mod_analysis/`；三者不放进 DeepSeek client 或工具分发文件。
+- 可重复的知识数据清洗、校验和打包脚本放在 `scripts/knowledge/`；开发源数据、来源清单和人工核对记录放在 `references/knowledge/`，生成的 `.acukb`/`.acumhwdb` 不作为主程序资源打包。
 - 知识审计默认读取开发环境的 `src-tauri/target/debug/AcumodData/mods/installed`，也可使用 `npm.cmd run knowledge:audit -- --mod-root <目录>` 指定本地 MOD 库。报告不得记录 MOD 名称、MOD ID、绝对路径或文件名。
 
 ## Tauri invoke 检查清单

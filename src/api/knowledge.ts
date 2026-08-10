@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type KnowledgePackKind = "mhw-modding" | "mhw-game-facts" | "mhw-game-guides" | "acumod-help";
+/** 文本包与固定 MHWData 数值库共用状态 DTO，但数值库不参与全文检索。 */
+export type KnowledgePackKind = "mhwdata" | "mhw-modding" | "mhw-game-guides" | "acumod-help";
 
 export interface KnowledgePackSummary {
   packId: string;

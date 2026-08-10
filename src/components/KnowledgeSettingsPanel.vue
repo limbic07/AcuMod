@@ -19,8 +19,8 @@ const deletingPackId = ref("");
 const confirmingDeletePackId = ref("");
 
 const kindLabels: Record<KnowledgePackKind, string> = {
+  mhwdata: "游戏数值数据库",
   "mhw-modding": "MOD 技术",
-  "mhw-game-facts": "游戏事实",
   "mhw-game-guides": "攻略资料",
   "acumod-help": "Acumod 使用说明",
 };
@@ -124,7 +124,7 @@ onMounted(() => {
           v-model="bundlePath"
           type="text"
           autocomplete="off"
-          placeholder="请选择包含四个 .acukb 文件的 ZIP"
+          placeholder="请选择包含 3 个 .acukb 和 1 个 .acumhwdb 的 ZIP"
         />
         <button type="button" :disabled="isInstallingBundle" @click="chooseBundle">
           选择文件
@@ -137,7 +137,7 @@ onMounted(() => {
           {{ isInstallingBundle ? "整套安装中" : "整套安装" }}
         </button>
       </div>
-      <small>知识包独立发布，不绑定主程序安装包；一个 ZIP 必须同时包含游戏事实、MOD 技术、攻略和 Acumod 说明四个 `.acukb` 文件。</small>
+      <small>知识资料独立发布，不绑定主程序安装包；一个 ZIP 必须包含固定版 MHWData `.acumhwdb`，以及 MOD 技术、攻略、Acumod 说明三个 `.acukb` 文本包。</small>
     </form>
 
     <aside class="knowledge-disclaimer" aria-label="知识库本地开发使用声明">

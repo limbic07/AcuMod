@@ -10,7 +10,7 @@ $buildRoot = Join-Path $root "references/knowledge/build"
   @((Join-Path $buildRoot "acumod-dev-modding.acukb"))
 } else {
   @(
-    (Join-Path $buildRoot "acumod-dev-game-facts.acukb"),
+    (Join-Path $buildRoot "acumod-mhwdata-15.10.acumhwdb"),
     (Join-Path $buildRoot "acumod-dev-modding.acukb"),
     (Join-Path $buildRoot "acumod-dev-game-guides.acukb"),
     (Join-Path $buildRoot "acumod-dev-acumod-help.acukb")
@@ -20,7 +20,7 @@ $buildRoot = Join-Path $root "references/knowledge/build"
 $missing = $files | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
 if ($missing.Count -gt 0) {
   $buildCommand = if ($ModdingOnly) { "npm.cmd run knowledge:build-modding-dev" } else { "npm.cmd run knowledge:build-dev" }
-  throw "缺少开发知识包，请先运行 $buildCommand：$($missing -join ', ')"
+  throw "缺少开发知识资料，请先运行 $buildCommand：$($missing -join ', ')"
 }
 
 $output = Join-Path $root $OutputPath

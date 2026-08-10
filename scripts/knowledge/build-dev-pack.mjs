@@ -1,4 +1,5 @@
-import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import process from "node:process";
@@ -717,7 +718,7 @@ function translatedLocalName(translations, englishName, traditionalToSimplifiedN
   return nameZhHans ? { nameZhHant, nameZhHans } : null;
 }
 
-async function loadTraditionalToSimplifiedNames() {
+async function loadTraditionalToSimplifiedNames({ requireFullBridge = false } = {}) {
   const gameTextPath = path.join(projectRoot, "references/mhwi-data/curated/game-text-zh-hant.json");
   let gameText;
   try {
@@ -725,6 +726,11 @@ async function loadTraditionalToSimplifiedNames() {
   } catch (error) {
     if (error?.code !== "ENOENT") {
       throw new Error(`无法读取完整简繁游戏文本桥：${error.message}`);
+    }
+    if (requireFullBridge) {
+      throw new Error(
+        "MHWData 回退构建需要完整的同键简繁游戏文本桥。请将 Synthlight/MHW-Editor 的固定 commit a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94 克隆到 src-tauri/target/analysis/MHW-Editor-source，随后运行 npm.cmd run knowledge:build-game-text-bridge。",
+      );
     }
     gameText = JSON.parse(await readFile(gameTextPath, "utf8"));
   }
@@ -2183,7 +2189,621 @@ function rawGameRelations(entities, modelIndex) {
   return relations;
 }
 
-async function rawGameFacts(modelIndex) {
+async function pathExists(targetPath) {
+  try {
+    await access(targetPath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function mhworldDataEntityId(kind, stableId) {
+  return `game-${kind}:mhwdata:${stableId}`;
+}
+
+function mhworldDataNameId(kind, nameEn) {
+  // MHWData 的物品与技能表没有可公开复核的数值 ID；名称哈希避免把展示文本
+  // 直接当作主键，同时让同一固定快照的关联保持可重复。
+  const digest = createHash("sha256").update(`${kind}\u001f${nameEn}`).digest("hex").slice(0, 16);
+  return mhworldDataEntityId(kind, `name-${digest}`);
+}
+
+function numericValue(value) {
+  const text = valueText(value);
+  if (!text) return null;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
+}
+
+function mhworldDataDisplayName(row, translation, traditionalToSimplifiedNames, fallback = {}) {
+  const nameEn = valueText(row.name_en ?? translation?.name_en);
+  const nameZhHant = valueText(fallback.nameZhHant ?? translation?.name_zh ?? row.name_zh) || null;
+  const nameZhHans = valueText(fallback.nameZhHans)
+    || (nameZhHant ? traditionalToSimplifiedNames.get(nameZhHant) : null)
+    || null;
+  return {
+    nameEn,
+    nameZhHans,
+    nameZhHant,
+    title: nameZhHans ?? nameZhHant ?? nameEn,
+  };
+}
+
+function mhworldDataEntity({ id, kind, domain, displayName, summary, aliases = [], data }) {
+  return {
+    id,
+    kind,
+    domain,
+    title: displayName.title,
+    nameZhHans: displayName.nameZhHans,
+    nameZhHant: displayName.nameZhHant,
+    aliases: rawAliasValues(
+      displayName.title,
+      displayName.nameZhHans,
+      displayName.nameZhHant,
+      displayName.nameEn,
+      ...aliases,
+    ),
+    summary,
+    gameVersion: targetGameVersion,
+    confidence: 0.8,
+    sourceId: "mhworlddata-armor-name-map",
+    data: {
+      ...data,
+      contentBaselineVersion,
+      buildProfile: "mhworlddata-fallback",
+    },
+  };
+}
+
+function mhworldDataWeaponTypeLabel(weaponType) {
+  return {
+    "great-sword": "大剑",
+    "long-sword": "太刀",
+    "sword-and-shield": "片手剑",
+    "dual-blades": "双刀",
+    hammer: "大锤",
+    "hunting-horn": "狩猎笛",
+    lance: "长枪",
+    gunlance: "铳枪",
+    "switch-axe": "斩击斧",
+    "charge-blade": "盾斧",
+    "insect-glaive": "操虫棍",
+    bow: "弓",
+    "light-bowgun": "轻弩炮",
+    "heavy-bowgun": "重弩炮",
+  }[weaponType] ?? weaponType;
+}
+
+function mhworldDataArmorPartLabel(part) {
+  return {
+    head: "头部",
+    chest: "胸部",
+    arms: "腕部",
+    waist: "腰部",
+    legs: "腿部",
+  }[part] ?? part;
+}
+
+function translatedRowsByEnglishName(rows) {
+  return mapByUniqueKey(rows, "name_en", "MHWData 名称翻译表");
+}
+
+/**
+ * 当授权受限的本地 15.10 原始表不在开发机时，使用固定 commit 的 MHWData
+ * 快照形成可复现的本地事实包。它不伪造原始表稳定 ID，也不以字形转换补名称；
+ * 没有同键简中名称时保留官方繁中或英文回退，并在实体中标出构建模式。
+ */
+function buildMhworldDataFallbackFacts(snapshot, traditionalToSimplifiedNames, curatedLocations) {
+  const tables = snapshot.tables;
+  const weaponTranslations = translatedRowsByEnglishName(tables.weaponTranslations.rows);
+  const armorTranslations = translatedRowsByEnglishName(tables.armorTranslations.rows);
+  const decorationTranslations = translatedRowsByEnglishName(tables.decorationTranslations.rows);
+  const charmTranslations = translatedRowsByEnglishName(tables.charmTranslations.rows);
+  const monsterTranslations = translatedRowsByEnglishName(tables.monsterTranslations.rows);
+  const skillTranslations = translatedRowsByEnglishName(tables.skillTranslations.rows);
+  const itemTranslations = translatedRowsByEnglishName(tables.itemTranslations.rows);
+  const questTranslationsById = mapByUniqueKey(tables.questTranslations.rows, "id", "MHWData 任务翻译表");
+  const entities = [];
+  const entityIds = new Set();
+  const relations = [];
+  const relationIds = new Set();
+  let relationIndex = 0;
+  const addEntity = (entity) => {
+    if (entityIds.has(entity.id)) {
+      throw new Error(`MHWData 回退构建产生重复实体 ID：${entity.id}`);
+    }
+    entityIds.add(entity.id);
+    entities.push(entity);
+    return entity;
+  };
+  const addRelation = (subjectId, predicate, objectId, data = {}, confidence = 0.8) => {
+    if (!entityIds.has(subjectId) || !entityIds.has(objectId)) return;
+    const id = `relation:mhwdata:${predicate}:${subjectId}:${objectId}:${relationIndex}`;
+    relationIndex += 1;
+    if (relationIds.has(id)) throw new Error(`MHWData 回退构建产生重复关系 ID：${id}`);
+    relationIds.add(id);
+    relations.push({
+      id,
+      subjectId,
+      predicate,
+      objectId,
+      gameVersion: targetGameVersion,
+      confidence,
+      sourceId: "mhworlddata-armor-name-map",
+      data: { ...data, contentBaselineVersion, buildProfile: "mhworlddata-fallback" },
+    });
+  };
+
+  const itemsByEnglishName = new Map();
+  const ensureItem = (nameEn) => {
+    const normalizedName = valueText(nameEn);
+    if (!normalizedName) return null;
+    const existing = itemsByEnglishName.get(normalizedName);
+    if (existing) return existing;
+    const translation = itemTranslations.get(normalizedName);
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataNameId("item", normalizedName),
+      kind: "item",
+      domain: "game-item",
+      displayName: mhworldDataDisplayName({ name_en: normalizedName }, translation, traditionalToSimplifiedNames),
+      summary: translation?.description_zh
+        ? `物品。${valueText(translation.description_zh)}`
+        : "物品；当前快照未提供可安全显示的中文说明。",
+      data: {
+        sourceNameEn: normalizedName,
+        descriptionEn: valueText(translation?.description_en),
+        descriptionZhHant: valueText(translation?.description_zh),
+      },
+    }));
+    itemsByEnglishName.set(normalizedName, entity);
+    return entity;
+  };
+  for (const row of tables.itemTranslations.rows) ensureItem(row.name_en);
+
+  const skillsByEnglishName = new Map();
+  const ensureSkill = (nameEn) => {
+    const normalizedName = valueText(nameEn);
+    if (!normalizedName) return null;
+    const existing = skillsByEnglishName.get(normalizedName);
+    if (existing) return existing;
+    const translation = skillTranslations.get(normalizedName);
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataNameId("skill", normalizedName),
+      kind: "skill",
+      domain: "game-skill",
+      displayName: mhworldDataDisplayName({ name_en: normalizedName }, translation, traditionalToSimplifiedNames),
+      summary: translation?.description_zh
+        ? `技能。${valueText(translation.description_zh)}`
+        : "技能；当前快照未提供可安全显示的中文说明。",
+      data: {
+        sourceNameEn: normalizedName,
+        descriptionEn: valueText(translation?.description_en),
+        descriptionZhHant: valueText(translation?.description_zh),
+      },
+    }));
+    skillsByEnglishName.set(normalizedName, entity);
+    return entity;
+  };
+  for (const row of tables.skillTranslations.rows) ensureSkill(row.name_en);
+
+  const weaponsByEnglishName = new Map();
+  for (const row of tables.weaponBase.rows) {
+    const nameEn = valueText(row.name_en);
+    if (!nameEn || !valueText(row.id)) continue;
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("weapon", row.id),
+      kind: "weapon",
+      domain: "game-equipment",
+      displayName: mhworldDataDisplayName(row, weaponTranslations.get(nameEn), traditionalToSimplifiedNames),
+      summary: `${mhworldDataWeaponTypeLabel(valueText(row.weapon_type))}；稀有度 ${valueText(row.rarity) || "未知"}；攻击 ${valueText(row.attack) || "未知"}`,
+      aliases: [mhworldDataWeaponTypeLabel(valueText(row.weapon_type)), row.id],
+      data: {
+        sourceRecordId: valueText(row.id),
+        sourceNameEn: nameEn,
+        weaponType: valueText(row.weapon_type),
+        rarity: numericValue(row.rarity),
+        attack: numericValue(row.attack),
+        affinity: numericValue(row.affinity),
+        defense: numericValue(row.defense),
+        elementHidden: valueText(row.element_hidden) === "TRUE",
+        element1: valueText(row.element1),
+        element1Attack: numericValue(row.element1_attack),
+        element2: valueText(row.element2),
+        element2Attack: numericValue(row.element2_attack),
+        elderseal: valueText(row.elderseal),
+        slots: [numericValue(row.slot_1), numericValue(row.slot_2), numericValue(row.slot_3)].filter((value) => value !== null),
+        phial: valueText(row.phial),
+        phialPower: numericValue(row.phial_power),
+        shelling: valueText(row.shelling),
+        shellingLevel: numericValue(row.shelling_level),
+        ammoConfig: valueText(row.ammo_config),
+      },
+    }));
+    weaponsByEnglishName.set(nameEn, entity);
+  }
+  for (const row of tables.weaponBase.rows) {
+    const weapon = weaponsByEnglishName.get(valueText(row.name_en));
+    const previous = weaponsByEnglishName.get(valueText(row.previous_en));
+    if (weapon && previous) addRelation(weapon.id, "upgradesFrom", previous.id, { type: "weapon" });
+  }
+  for (const row of tables.weaponCrafting.rows) {
+    const weapon = weaponsByEnglishName.get(valueText(row.base_name_en));
+    if (!weapon) continue;
+    for (let slot = 1; slot <= 4; slot += 1) {
+      const item = ensureItem(row[`item${slot}_name`]);
+      if (item) addRelation(weapon.id, "requiresMaterial", item.id, {
+        craftingType: valueText(row.type), quantity: numericValue(row[`item${slot}_qty`]), slot,
+      });
+    }
+  }
+
+  const armorByEnglishName = new Map();
+  for (const row of tables.armorBase.rows) {
+    const nameEn = valueText(row.name_en);
+    if (!nameEn || !valueText(row.id)) continue;
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("armor", row.id),
+      kind: "armor",
+      domain: "game-equipment",
+      displayName: mhworldDataDisplayName(row, armorTranslations.get(nameEn), traditionalToSimplifiedNames),
+      summary: `${mhworldDataArmorPartLabel(valueText(row.type))}；稀有度 ${valueText(row.rarity) || "未知"}；基础防御 ${valueText(row.defense_base) || "未知"}`,
+      aliases: [mhworldDataArmorPartLabel(valueText(row.type)), row.id],
+      data: {
+        sourceRecordId: valueText(row.id), sourceNameEn: nameEn, part: valueText(row.type), gender: valueText(row.gender),
+        rarity: numericValue(row.rarity), defenseBase: numericValue(row.defense_base), defenseMax: numericValue(row.defense_max),
+        defenseAugmentMax: numericValue(row.defense_augment_max),
+        resistances: {
+          fire: numericValue(row.defense_fire), water: numericValue(row.defense_water), thunder: numericValue(row.defense_thunder),
+          ice: numericValue(row.defense_ice), dragon: numericValue(row.defense_dragon),
+        },
+        slots: [numericValue(row.slot_1), numericValue(row.slot_2), numericValue(row.slot_3)].filter((value) => value !== null),
+      },
+    }));
+    armorByEnglishName.set(nameEn, entity);
+  }
+  for (const row of tables.armorSkills.rows) {
+    const armor = armorByEnglishName.get(valueText(row.base_name_en));
+    if (!armor) continue;
+    for (let slot = 1; slot <= 2; slot += 1) {
+      const skill = ensureSkill(row[`skill${slot}_name`]);
+      if (skill) addRelation(armor.id, "grantsSkill", skill.id, { level: numericValue(row[`skill${slot}_level`]), slot });
+    }
+  }
+  for (const row of tables.armorCrafting.rows) {
+    const armor = armorByEnglishName.get(valueText(row.base_name_en));
+    if (!armor) continue;
+    for (let slot = 1; slot <= 4; slot += 1) {
+      const item = ensureItem(row[`item${slot}_name`]);
+      if (item) addRelation(armor.id, "requiresMaterial", item.id, { quantity: numericValue(row[`item${slot}_qty`]), slot });
+    }
+  }
+
+  const decorationsByEnglishName = new Map();
+  for (const row of tables.decorationBase.rows) {
+    const nameEn = valueText(row.name_en);
+    if (!nameEn || !valueText(row.id)) continue;
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("decoration", row.id),
+      kind: "decoration",
+      domain: "game-equipment",
+      displayName: mhworldDataDisplayName(row, decorationTranslations.get(nameEn), traditionalToSimplifiedNames),
+      summary: `装饰珠；孔位 ${valueText(row.slot) || "未知"}；稀有度 ${valueText(row.rarity) || "未知"}`,
+      aliases: [row.id, valueText(row.slot)],
+      data: { sourceRecordId: valueText(row.id), sourceNameEn: nameEn, slot: numericValue(row.slot), rarity: numericValue(row.rarity), iconColor: valueText(row.icon_color) },
+    }));
+    decorationsByEnglishName.set(nameEn, entity);
+    for (let slot = 1; slot <= 2; slot += 1) {
+      const skill = ensureSkill(row[`skill${slot}_name`]);
+      if (skill) addRelation(entity.id, "grantsSkill", skill.id, { level: numericValue(row[`skill${slot}_level`]), slot });
+    }
+  }
+
+  const charmsByEnglishName = new Map();
+  for (const row of tables.charmBase.rows) {
+    const nameEn = valueText(row.name_en);
+    if (!nameEn || !valueText(row.id)) continue;
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("charm", row.id),
+      kind: "charm",
+      domain: "game-equipment",
+      displayName: mhworldDataDisplayName(row, charmTranslations.get(nameEn), traditionalToSimplifiedNames),
+      summary: `护石；稀有度 ${valueText(row.rarity) || "未知"}`,
+      aliases: [row.id],
+      data: { sourceRecordId: valueText(row.id), sourceNameEn: nameEn, rarity: numericValue(row.rarity) },
+    }));
+    charmsByEnglishName.set(nameEn, entity);
+    for (let slot = 1; slot <= 2; slot += 1) {
+      const skill = ensureSkill(row[`skill${slot}_name`]);
+      if (skill) addRelation(entity.id, "grantsSkill", skill.id, { level: numericValue(row[`skill${slot}_level`]), slot });
+    }
+  }
+  for (const row of tables.charmBase.rows) {
+    const charm = charmsByEnglishName.get(valueText(row.name_en));
+    const previous = charmsByEnglishName.get(valueText(row.previous_en));
+    if (charm && previous) addRelation(charm.id, "upgradesFrom", previous.id, { type: "charm" });
+  }
+  for (const row of tables.charmCrafting.rows) {
+    const charm = charmsByEnglishName.get(valueText(row.base_name_en));
+    if (!charm) continue;
+    for (let slot = 1; slot <= 4; slot += 1) {
+      const item = ensureItem(row[`item${slot}_name`]);
+      if (item) addRelation(charm.id, "requiresMaterial", item.id, {
+        craftingType: valueText(row.type), quantity: numericValue(row[`item${slot}_qty`]), slot,
+      });
+    }
+  }
+
+  const monstersByEnglishName = new Map();
+  for (const row of tables.monsterBase.rows) {
+    const nameEn = valueText(row.name_en);
+    if (!nameEn || !valueText(row.id)) continue;
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("monster", row.id),
+      kind: "monster",
+      domain: "game-monster",
+      displayName: mhworldDataDisplayName(row, monsterTranslations.get(nameEn), traditionalToSimplifiedNames),
+      summary: `${valueText(row.size) === "small" ? "小型" : "大型"}怪物；${valueText(row.ecology_en) || "当前快照未提供生态摘要。"}`,
+      aliases: [row.id],
+      data: {
+        sourceRecordId: valueText(row.id), sourceNameEn: nameEn, size: valueText(row.size), ecologyEn: valueText(row.ecology_en),
+        descriptionEn: valueText(monsterTranslations.get(nameEn)?.description_en),
+        descriptionZhHant: valueText(monsterTranslations.get(nameEn)?.description_zh),
+        traps: { pitfall: valueText(row.pitfall_trap), shock: valueText(row.shock_trap), vine: valueText(row.vine_trap) },
+      },
+    }));
+    monstersByEnglishName.set(nameEn, entity);
+  }
+  for (const [index, row] of tables.monsterWeaknesses.rows.entries()) {
+    const monster = monstersByEnglishName.get(valueText(row.name_en));
+    if (!monster) continue;
+    const fact = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("monster-weakness", `${monster.data.sourceRecordId}-${index}`),
+      kind: "monsterWeakness",
+      domain: "game-monster",
+      displayName: { title: `${monster.title}（弱点资料）`, nameZhHans: monster.nameZhHans ? `${monster.nameZhHans}（弱点资料）` : null, nameZhHant: monster.nameZhHant ? `${monster.nameZhHant}（弱點資料）` : null, nameEn: `${monster.data.sourceNameEn} weakness` },
+      summary: `怪物弱点资料；形态 ${valueText(row.form) || "normal"}`,
+      data: {
+        monsterEntityId: monster.id, form: valueText(row.form), alternateDescription: valueText(row.alt_description),
+        elemental: { fire: numericValue(row.fire), water: numericValue(row.water), thunder: numericValue(row.thunder), ice: numericValue(row.ice), dragon: numericValue(row.dragon) },
+        ailments: { poison: numericValue(row.poison), sleep: numericValue(row.sleep), paralysis: numericValue(row.paralysis), blast: numericValue(row.blast), stun: numericValue(row.stun) },
+      },
+    }));
+    addRelation(monster.id, "hasWeaknessFacts", fact.id, { form: valueText(row.form) });
+  }
+  for (const [index, row] of tables.monsterHitzones.rows.entries()) {
+    const monster = monstersByEnglishName.get(valueText(row.base_name_en));
+    if (!monster) continue;
+    const fact = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("monster-hitzone", `${monster.data.sourceRecordId}-${index}`),
+      kind: "monsterHitzone",
+      domain: "game-monster",
+      displayName: { title: `${monster.title}（${valueText(row.hitzone_en) || "部位"}肉质）`, nameZhHans: null, nameZhHant: null, nameEn: `${monster.data.sourceNameEn} ${valueText(row.hitzone_en)} hitzone` },
+      summary: `肉质资料：${valueText(row.hitzone_en) || "未命名部位"}`,
+      data: {
+        monsterEntityId: monster.id, partEn: valueText(row.hitzone_en),
+        hitzone: { cut: numericValue(row.cut), impact: numericValue(row.impact), shot: numericValue(row.shot), fire: numericValue(row.fire), water: numericValue(row.water), thunder: numericValue(row.thunder), ice: numericValue(row.ice), dragon: numericValue(row.dragon), ko: numericValue(row.ko) },
+      },
+    }));
+    addRelation(monster.id, "hasHitzone", fact.id, { partEn: valueText(row.hitzone_en) });
+  }
+  for (const row of tables.monsterRewards.rows) {
+    const monster = monstersByEnglishName.get(valueText(row.base_name_en));
+    const item = ensureItem(row.item_en);
+    if (monster && item) addRelation(monster.id, "rewardsItem", item.id, {
+      rank: valueText(row.rank), conditionEn: valueText(row.condition_en), quantity: numericValue(row.stack), percentage: numericValue(row.percentage),
+    });
+  }
+
+  const locationsByEnglishName = new Map();
+  for (const row of tables.locationBase.rows) {
+    const nameEn = valueText(row.name_en);
+    if (!nameEn || !valueText(row.id)) continue;
+    const curated = curatedLocations.get(nameEn);
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("location", row.id),
+      kind: "location",
+      domain: "game-location",
+      displayName: mhworldDataDisplayName(row, row, traditionalToSimplifiedNames, curated),
+      summary: "地图/场景；可查询任务地点与采集关系。",
+      aliases: [row.id, curated?.stageId ?? ""],
+      data: { sourceRecordId: valueText(row.id), sourceNameEn: nameEn, stageId: curated?.stageId ?? null },
+    }));
+    locationsByEnglishName.set(nameEn, entity);
+  }
+
+  const questsById = new Map();
+  for (const row of tables.questBase.rows) {
+    const questId = valueText(row.id);
+    if (!questId) continue;
+    const translation = questTranslationsById.get(questId);
+    const displayName = mhworldDataDisplayName(row, translation, traditionalToSimplifiedNames);
+    const entity = addEntity(mhworldDataEntity({
+      id: mhworldDataEntityId("quest", questId),
+      kind: "quest",
+      domain: "game-quest",
+      displayName,
+      summary: `任务；${valueText(row.category) || "类别未知"} ${valueText(row.rank) || ""} ${valueText(row.stars) ? `${valueText(row.stars)} 星` : ""}`.trim(),
+      aliases: [questId, valueText(translation?.objective_en)],
+      data: {
+        sourceRecordId: questId, sourceNameEn: valueText(row.name_en), category: valueText(row.category), rank: valueText(row.rank),
+        stars: numericValue(row.stars), questType: valueText(row.quest_type), locationEn: valueText(row.location_en), zenny: numericValue(row.zenny),
+        objectiveEn: valueText(translation?.objective_en), objectiveZhHant: valueText(translation?.objective_zh), descriptionEn: valueText(translation?.description_en), descriptionZhHant: valueText(translation?.description_zh),
+      },
+    }));
+    questsById.set(questId, entity);
+    const location = locationsByEnglishName.get(valueText(row.location_en));
+    if (location) addRelation(entity.id, "occursAt", location.id, { locationEn: valueText(row.location_en) });
+  }
+  for (const row of tables.questMonsters.rows) {
+    const quest = questsById.get(valueText(row.base_id));
+    const monster = monstersByEnglishName.get(valueText(row.monster_en));
+    if (quest && monster) addRelation(quest.id, "huntsMonster", monster.id, {
+      quantity: numericValue(row.quantity), isObjective: valueText(row.is_objective) === "TRUE",
+    });
+  }
+  for (const row of tables.questRewards.rows) {
+    const quest = questsById.get(valueText(row.base_id));
+    const item = ensureItem(row.item_en);
+    if (quest && item) addRelation(quest.id, "rewardsItem", item.id, {
+      group: valueText(row.group), quantity: numericValue(row.stack), percentage: numericValue(row.percentage),
+    });
+  }
+  for (const row of tables.locationItems.rows) {
+    const location = locationsByEnglishName.get(valueText(row.base_name_en));
+    const item = ensureItem(row.item);
+    if (location && item) addRelation(location.id, "gathersItem", item.id, {
+      area: valueText(row.area), rank: valueText(row.rank), quantity: numericValue(row.stack), percentage: numericValue(row.percentage), nodes: numericValue(row.nodes),
+    });
+  }
+
+  return {
+    entities,
+    relations,
+    counts: {
+      skill: skillsByEnglishName.size,
+      weapon: weaponsByEnglishName.size,
+      armor: armorByEnglishName.size,
+      decoration: decorationsByEnglishName.size,
+      charm: charmsByEnglishName.size,
+      monster: monstersByEnglishName.size,
+      quest: questsById.size,
+      location: locationsByEnglishName.size,
+    },
+  };
+}
+
+/**
+ * 回退包只接受 Game8 英文标题与 MHWData 英文标题一对一相同的任务。这样即使没有
+ * 原始表的任务 ID，也不会把近似标题、同名活动或外部数字 ID 猜成前置关系。
+ */
+function addMhworldDataFallbackQuestUnlockFacts(entities, relations, questUnlockSnapshot, curatedLocations) {
+  const empty = {
+    questUnlockEntryCount: 0,
+    prerequisiteRelationCount: 0,
+    unlockConditionCount: 0,
+    unresolvedQuestNameCount: 0,
+    unresolvedMonsterNameCount: 0,
+  };
+  if (!questUnlockSnapshot) return empty;
+  const questsByEnglishName = new Map();
+  const monstersByEnglishName = new Map();
+  for (const entity of entities) {
+    const nameEn = valueText(entity.data?.sourceNameEn);
+    if (!nameEn) continue;
+    if (entity.kind === "quest") addNameCandidate(questsByEnglishName, nameEn, entity);
+    if (entity.kind === "monster") addNameCandidate(monstersByEnglishName, nameEn, entity);
+  }
+  const entriesByQuestName = new Map();
+  for (const entry of questUnlockSnapshot.entries) {
+    if (!Array.isArray(entry.requirements) || entry.requirements.length === 0) continue;
+    const key = normalizedExternalEnglishName(entry.questNameEn);
+    if (!key) continue;
+    const grouped = entriesByQuestName.get(key) ?? [];
+    grouped.push(entry);
+    entriesByQuestName.set(key, grouped);
+  }
+  let questUnlockEntryCount = 0;
+  let prerequisiteRelationCount = 0;
+  let unlockConditionCount = 0;
+  let unresolvedQuestNameCount = 0;
+  let unresolvedMonsterNameCount = 0;
+  for (const entriesForName of entriesByQuestName.values()) {
+    // 同名来源记录会导致任务类别或版本边界不明确，回退模式宁可不导入。
+    if (entriesForName.length !== 1) {
+      unresolvedQuestNameCount += entriesForName.length;
+      continue;
+    }
+    const entry = entriesForName[0];
+    const quest = uniqueNameCandidate(questsByEnglishName, entry.questNameEn);
+    if (!quest) {
+      unresolvedQuestNameCount += 1;
+      continue;
+    }
+    questUnlockEntryCount += 1;
+    for (const [requirementIndex, requirement] of entry.requirements.entries()) {
+      const monster = requirement.monsterNameEn
+        ? uniqueNameCandidate(monstersByEnglishName, requirement.monsterNameEn)
+        : null;
+      const prerequisite = requirement.kind === "completeQuest"
+        ? uniqueNameCandidate(questsByEnglishName, requirement.questNameEn)
+        : null;
+      if (requirement.monsterNameEn && !monster) unresolvedMonsterNameCount += 1;
+      const locationNameZhHans = localizedQuestLocation(requirement, curatedLocations);
+      const display = unlockRequirementDisplay(requirement, monster, prerequisite, locationNameZhHans);
+      const conditionId = `game-unlock-condition:mhwdata:${quest.data.sourceRecordId}:${entry.sourceId}:${requirementIndex}`;
+      if (entities.some((entity) => entity.id === conditionId)) {
+        throw new Error(`MHWData 回退任务解锁条件 ID 重复：${conditionId}`);
+      }
+      entities.push({
+        id: conditionId,
+        kind: "unlockCondition",
+        domain: "game-quest",
+        title: `${quest.title} 解锁条件 ${requirementIndex + 1}`,
+        nameZhHans: `${quest.title} 解锁条件 ${requirementIndex + 1}`,
+        nameZhHant: null,
+        aliases: rawAliasValues(quest.title, entry.questNameEn, display, requirement.questNameEn, requirement.monsterNameEn),
+        summary: `${quest.title} 的已核验来源条件：${display}。回退模式只在英文标题唯一对应本地 MHWData 任务时写入关系。`,
+        gameVersion: targetGameVersion,
+        confidence: 0.68,
+        sourceId: entry.sourceId,
+        data: {
+          questEntityId: quest.id,
+          displayZhHans: display,
+          requirement,
+          relatedMonsterEntityId: monster?.id ?? null,
+          locationNameZhHans,
+          sourceUrl: entry.sourceUrl,
+          sourcePageId: entry.sourceId,
+          retrievedAt: questUnlockSnapshot.retrievedAt,
+          contentBaselineVersion,
+          sourceVersion: "community-unverified",
+          buildProfile: "mhworlddata-fallback",
+        },
+      });
+      relations.push({
+        id: `relation:mhwdata:requiresCondition:${quest.id}:${conditionId}`,
+        subjectId: quest.id,
+        predicate: "requiresCondition",
+        objectId: conditionId,
+        gameVersion: targetGameVersion,
+        confidence: 0.68,
+        sourceId: entry.sourceId,
+        data: { sourceUrl: entry.sourceUrl, sourcePageId: entry.sourceId, contentBaselineVersion, buildProfile: "mhworlddata-fallback" },
+      });
+      unlockConditionCount += 1;
+      if (requirement.kind !== "completeQuest") continue;
+      if (!prerequisite) {
+        unresolvedQuestNameCount += 1;
+        continue;
+      }
+      const relationId = `relation:mhwdata:requiresQuest:${quest.id}:${prerequisite.id}`;
+      if (relations.some((relation) => relation.id === relationId)) continue;
+      relations.push({
+        id: relationId,
+        subjectId: quest.id,
+        predicate: "requiresQuest",
+        objectId: prerequisite.id,
+        gameVersion: targetGameVersion,
+        confidence: 0.68,
+        sourceId: entry.sourceId,
+        data: { sourceUrl: entry.sourceUrl, sourcePageId: entry.sourceId, contentBaselineVersion, buildProfile: "mhworlddata-fallback" },
+      });
+      prerequisiteRelationCount += 1;
+    }
+  }
+  return {
+    questUnlockEntryCount,
+    prerequisiteRelationCount,
+    unlockConditionCount,
+    unresolvedQuestNameCount,
+    unresolvedMonsterNameCount,
+  };
+}
+
+async function rawGameFactsFromLocalTables(modelIndex) {
   englishGameTextNames = await loadSimplifiedToEnglishNames();
   const entities = [];
   for (const table of rawGameTables) {
@@ -2278,6 +2898,7 @@ async function rawGameFacts(modelIndex) {
   return {
     entities: allEntities,
     relations,
+    buildProfile: "local-15.10-tables",
     supplementalSkillFactCount,
     supplementalArmorFactCount,
     supplementalWeaponFactCount,
@@ -2291,6 +2912,72 @@ async function rawGameFacts(modelIndex) {
     ...questUnlockFacts,
     ...deliveryUnlockFacts,
   };
+}
+
+async function mhworldDataFallbackGameFacts(modelIndex) {
+  englishGameTextNames = await loadSimplifiedToEnglishNames();
+  const [snapshot, traditionalToSimplifiedNames, curatedLocations, questUnlockSnapshot] = await Promise.all([
+    loadMhworldDataArmorNameMap(),
+    loadTraditionalToSimplifiedNames({ requireFullBridge: true }),
+    loadCuratedLocationNameMap(),
+    loadGame8QuestUnlockSnapshot(),
+  ]);
+  if (!snapshot) {
+    throw new Error(
+      "本地 15.10.00 原始表缺失，且尚未生成 MHWData 开发快照。请先运行 knowledge:fetch-mhworlddata；如需完整原始表模式，请按 references/mhwi-data/README.md 放入本地资料。",
+    );
+  }
+  const fallback = buildMhworldDataFallbackFacts(snapshot, traditionalToSimplifiedNames, curatedLocations);
+  const questUnlockFacts = addMhworldDataFallbackQuestUnlockFacts(
+    fallback.entities,
+    fallback.relations,
+    questUnlockSnapshot,
+    curatedLocations,
+  );
+  const modelEntities = entityRows(modelIndex).map((entity) => ({
+    ...entity,
+    data: { ...entity.data, contentBaselineVersion, buildProfile: "mhworlddata-fallback" },
+    gameVersion: targetGameVersion,
+    sourceId: "mhwmod-jodo-ice-15.10",
+  }));
+  const allEntities = [...modelEntities, ...fallback.entities];
+  const duplicate = allEntities.find((entity, index) => allEntities.findIndex((other) => other.id === entity.id) !== index);
+  if (duplicate) throw new Error(`MHWData 回退构建实体 ID 重复：${duplicate.id}`);
+  return {
+    entities: allEntities,
+    relations: fallback.relations,
+    buildProfile: "mhworlddata-fallback",
+    supplementalSkillFactCount: fallback.counts.skill,
+    supplementalWeaponFactCount: fallback.counts.weapon,
+    supplementalArmorFactCount: fallback.counts.armor,
+    supplementalDecorationFactCount: fallback.counts.decoration,
+    supplementalCharmCount: fallback.counts.charm,
+    supplementalMonsterFactCount: fallback.counts.monster,
+    supplementalQuestFactCount: fallback.counts.quest,
+    supplementalLocationCount: fallback.counts.location,
+    supplementalQuestRewardCount: fallback.relations.filter((relation) => relation.predicate === "rewardsItem" && relation.subjectId.startsWith("game-quest:")).length,
+    supplementalGatheringCount: fallback.relations.filter((relation) => relation.predicate === "gathersItem").length,
+    ...questUnlockFacts,
+    deliveryUnlockEntryCount: 0,
+    deliveryUnlockConditionCount: 0,
+    deliveryPrerequisiteRelationCount: 0,
+    unresolvedDeliveryCount: 0,
+  };
+}
+
+async function rawGameFacts(modelIndex) {
+  const rawTablePaths = rawGameTables.map((table) => path.join(rawGameDataRoot, table.file));
+  const tablePresence = await Promise.all(rawTablePaths.map(pathExists));
+  if (tablePresence.every(Boolean)) {
+    return rawGameFactsFromLocalTables(modelIndex);
+  }
+  if (tablePresence.some(Boolean)) {
+    const missingTables = rawGameTables
+      .filter((_table, index) => !tablePresence[index])
+      .map((table) => table.file);
+    throw new Error(`本地 15.10.00 原始表不完整，缺少：${missingTables.join("、")}。请补齐后重试，避免混用两个数据基线。`);
+  }
+  return mhworldDataFallbackGameFacts(modelIndex);
 }
 
 function validateKnowledgeDocuments(documentStore, sourceIds, label) {
@@ -2430,6 +3117,9 @@ async function main() {
   }
   const gameFacts = await rawGameFacts(modelIndex);
   const entities = gameFacts.entities;
+  const gameFactsDescription = gameFacts.buildProfile === "mhworlddata-fallback"
+    ? "目标运行版本为 15.23；本机未提供授权受限的 15.10.00 原始表，当前由固定 commit 的 MHWData 快照和同键游戏文本桥构建。本包仅用于本地开发验收，未映射的名称保留官方繁中或英文回退，不能作为正式知识包分发。"
+    : "目标运行版本为 15.23；内容事实以 15.10.00 为基线，项目已确认 15.11 至 15.23 未新增明显游戏内容或机制。该开发包仍不可作为正式知识包分发。";
   await mkdir(path.dirname(outputPath), { recursive: true });
   await rm(outputPath, { force: true });
   await rm(moddingOutputPath, { force: true });
@@ -2527,7 +3217,7 @@ async function main() {
       targetGameVersion,
       "zh-Hans",
       "0.1.0",
-      "目标运行版本为 15.23；内容事实以 15.10.00 为基线，项目已确认 15.11 至 15.23 未新增明显游戏内容或机制。该开发包仍不可作为正式知识包分发。",
+      gameFactsDescription,
     );
     const insertSource = database.prepare("INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?)");
     for (const source of sourceCatalog.sources) {
@@ -2560,7 +3250,7 @@ async function main() {
         entity.domain,
         entity.title,
         entity.nameZhHans ?? entity.title,
-        null,
+        entity.nameZhHant ?? null,
         entity.summary,
         entity.gameVersion ?? modelIndex.gameVersion,
         entity.confidence ?? 0.9,
@@ -2618,12 +3308,12 @@ async function main() {
   await copyFile(outputPath, moddingOutputPath);
   await copyFile(outputPath, guideOutputPath);
   await copyFile(outputPath, acumodHelpOutputPath);
-  pruneDevelopmentPack(outputPath, "mhw-game-facts");
+  pruneDevelopmentPack(outputPath, "mhw-game-facts", gameFacts.buildProfile);
   pruneDevelopmentPack(moddingOutputPath, "mhw-modding");
   pruneDevelopmentPack(guideOutputPath, "mhw-game-guides");
   pruneDevelopmentPack(acumodHelpOutputPath, "acumod-help");
   process.stdout.write(
-    `开发知识包已生成:\n- ${path.relative(projectRoot, outputPath)}\n- ${path.relative(projectRoot, moddingOutputPath)}\n- ${path.relative(projectRoot, guideOutputPath)}\n游戏实体 ${entities.length}，可验证关系 ${gameFacts.relations.length}，技能等级补充 ${gameFacts.supplementalSkillFactCount}，武器属性补充 ${gameFacts.supplementalWeaponFactCount}，防具属性补充 ${gameFacts.supplementalArmorFactCount}，装饰珠属性补充 ${gameFacts.supplementalDecorationFactCount}，护石补充 ${gameFacts.supplementalCharmCount}，怪物生态补充 ${gameFacts.supplementalMonsterFactCount}，任务资料 ${gameFacts.supplementalQuestFactCount}，地图 ${gameFacts.supplementalLocationCount}，任务报酬 ${gameFacts.supplementalQuestRewardCount}，采集关系 ${gameFacts.supplementalGatheringCount}，任务链条目 ${gameFacts.questUnlockEntryCount}，前置任务关系 ${gameFacts.prerequisiteRelationCount}，解锁条件 ${gameFacts.unlockConditionCount}，未唯一对应任务名 ${gameFacts.unresolvedQuestNameCount}，未唯一对应怪物名 ${gameFacts.unresolvedMonsterNameCount}，技术文档 ${technicalDocuments.length}，攻略文档 ${guideDocuments.length}\n`,
+    `开发知识包已生成（${gameFacts.buildProfile}）:\n- ${path.relative(projectRoot, outputPath)}\n- ${path.relative(projectRoot, moddingOutputPath)}\n- ${path.relative(projectRoot, guideOutputPath)}\n游戏实体 ${entities.length}，可验证关系 ${gameFacts.relations.length}，技能等级补充 ${gameFacts.supplementalSkillFactCount}，武器属性补充 ${gameFacts.supplementalWeaponFactCount}，防具属性补充 ${gameFacts.supplementalArmorFactCount}，装饰珠属性补充 ${gameFacts.supplementalDecorationFactCount}，护石补充 ${gameFacts.supplementalCharmCount}，怪物生态补充 ${gameFacts.supplementalMonsterFactCount}，任务资料 ${gameFacts.supplementalQuestFactCount}，地图 ${gameFacts.supplementalLocationCount}，任务报酬 ${gameFacts.supplementalQuestRewardCount}，采集关系 ${gameFacts.supplementalGatheringCount}，任务链条目 ${gameFacts.questUnlockEntryCount}，前置任务关系 ${gameFacts.prerequisiteRelationCount}，解锁条件 ${gameFacts.unlockConditionCount}，未唯一对应任务名 ${gameFacts.unresolvedQuestNameCount}，未唯一对应怪物名 ${gameFacts.unresolvedMonsterNameCount}，技术文档 ${technicalDocuments.length}，攻略文档 ${guideDocuments.length}\n`,
   );
   process.stdout.write(
     `交货委托解锁条目 ${gameFacts.deliveryUnlockEntryCount}，解锁条件 ${gameFacts.deliveryUnlockConditionCount}，前置任务关系 ${gameFacts.deliveryPrerequisiteRelationCount}，未唯一对应交货委托 ${gameFacts.unresolvedDeliveryCount}\n`,
@@ -2634,7 +3324,7 @@ async function main() {
   );
 }
 
-function pruneDevelopmentPack(databasePath, kind) {
+function pruneDevelopmentPack(databasePath, kind, gameFactsBuildProfile = "local-15.10-tables") {
   const database = new DatabaseSync(databasePath);
   database.exec("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE");
   try {
@@ -2645,7 +3335,9 @@ function pruneDevelopmentPack(databasePath, kind) {
           "acumod-dev-game-facts",
           "AcuAI 游戏事实开发包",
           kind,
-          "目标运行版本为 15.23；内容事实以 15.10.00 为基线，项目已确认 15.11 至 15.23 未新增明显游戏内容或机制。该开发包仍不可作为正式知识包分发。",
+          gameFactsBuildProfile === "mhworlddata-fallback"
+            ? "目标运行版本为 15.23；本机未提供授权受限的 15.10.00 原始表，当前由固定 commit 的 MHWData 快照和同键游戏文本桥构建。本包仅用于本地开发验收，未映射的名称保留官方繁中或英文回退，不能作为正式知识包分发。"
+            : "目标运行版本为 15.23；内容事实以 15.10.00 为基线，项目已确认 15.11 至 15.23 未新增明显游戏内容或机制。该开发包仍不可作为正式知识包分发。",
         );
       database.exec(`
         DELETE FROM knowledge_fts WHERE result_kind = 'document';

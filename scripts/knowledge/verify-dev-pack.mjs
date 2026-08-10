@@ -67,6 +67,74 @@ function verifyPackSourceReferences(filePath, catalogIds, label) {
   }
 }
 
+function verifyMhworldDataFallbackFacts(database) {
+  expect(
+    String(scalar(database, "SELECT description FROM pack_manifest")).includes("MHWData 快照"),
+    "MHWData 回退事实包必须在 manifest 中明确其本地开发边界。",
+  );
+  expect(
+    scalar(database, "SELECT COUNT(*) FROM entities WHERE json_extract(data_json, '$.buildProfile') = 'mhworlddata-fallback'") >= 9_000,
+    "MHWData 回退事实数量异常。",
+  );
+  expect(scalar(database, "SELECT COUNT(*) FROM entities") >= 11_000, "MHWData 回退实体数量异常。");
+  expect(scalar(database, "SELECT COUNT(*) FROM relations") >= 37_000, "MHWData 回退关系数量异常。");
+  for (const [kind, minimum] of [["weapon", 3_500], ["armor", 1_500], ["item", 1_300], ["monster", 90], ["quest", 500], ["skill", 170], ["location", 17], ["decoration", 390], ["charm", 300]]) {
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM entities WHERE kind = ?", [kind]) >= minimum,
+      `MHWData 回退缺少足量 ${kind} 实体。`,
+    );
+  }
+  for (const [predicate, minimum] of [["grantsSkill", 3_000], ["requiresMaterial", 17_000], ["huntsMonster", 1_400], ["occursAt", 500], ["rewardsItem", 9_000], ["gathersItem", 900], ["hasWeaknessFacts", 80], ["hasHitzone", 780], ["upgradesFrom", 2_900]]) {
+    expect(
+      scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = ?", [predicate]) >= minimum,
+      `MHWData 回退缺少 ${predicate} 关系。`,
+    );
+  }
+  const defender = database.prepare("SELECT canonical_name, name_zh_hant, data_json FROM entities WHERE id = 'game-weapon:mhwdata:2001'").get();
+  const defenderData = defender ? JSON.parse(defender.data_json) : null;
+  expect(
+    defender?.canonical_name === "防卫队炎刃型大剑1"
+      && defender?.name_zh_hant === "防衛隊炎刃型大劍Ⅰ"
+      && defenderData?.attack === 624
+      && defenderData?.weaponType === "great-sword",
+    "防卫队炎刃型大剑 I 的同键名称桥或攻击字段异常。",
+  );
+  const leather = database.prepare("SELECT data_json FROM entities WHERE id = 'game-armor:mhwdata:1'").get();
+  const leatherData = leather ? JSON.parse(leather.data_json) : null;
+  expect(
+    leatherData?.defenseBase === 2 && leatherData?.resistances?.fire === 2,
+    "皮制头饰的防御或耐性字段异常。",
+  );
+  const firstQuest = database.prepare("SELECT data_json FROM entities WHERE id = 'game-quest:mhwdata:101'").get();
+  const firstQuestData = firstQuest ? JSON.parse(firstQuest.data_json) : null;
+  expect(
+    firstQuestData?.locationEn === "Ancient Forest" && firstQuestData?.objectiveEn === "Slay 7 Jagras",
+    "首个任务的地点或目标字段异常。",
+  );
+  const ancientForest = database.prepare("SELECT data_json FROM entities WHERE id = 'game-location:mhwdata:1'").get();
+  const ancientForestData = ancientForest ? JSON.parse(ancientForest.data_json) : null;
+  expect(
+    ancientForestData?.stageId === "ST101",
+    "古代树森林必须保留人工核对的 ST101 场景映射。",
+  );
+  expect(
+    scalar(database, "SELECT COUNT(*) FROM relations WHERE subject_id = 'game-quest:mhwdata:101' AND predicate = 'occursAt' AND object_id = 'game-location:mhwdata:1'") === 1,
+    "首个任务与古代树森林的地点关系缺失。",
+  );
+  expect(
+    scalar(database, "SELECT COUNT(*) FROM entities WHERE kind = 'unlockCondition'") >= 600,
+    "MHWData 回退任务解锁条件覆盖异常。",
+  );
+  expect(
+    scalar(database, "SELECT COUNT(*) FROM relations WHERE predicate = 'requiresQuest'") >= 200,
+    "MHWData 回退任务前置关系覆盖异常。",
+  );
+  expect(
+    scalar(database, "SELECT COUNT(*) FROM relations WHERE subject_id = 'game-quest:mhwdata:201' AND predicate = 'requiresQuest' AND object_id = 'game-quest:mhwdata:103'") === 1,
+    "致力于设置营地与狩猎大贼龙的唯一英文标题前置关系缺失。",
+  );
+}
+
 function verifyGameFacts() {
   const database = new DatabaseSync(gameFactsPath, { readOnly: true });
   try {
@@ -74,6 +142,10 @@ function verifyGameFacts() {
       scalar(database, "SELECT game_version FROM pack_manifest") === "15.23",
       "开发游戏事实包必须声明 15.23 运行版本。",
     );
+    if (scalar(database, "SELECT COUNT(*) FROM entities WHERE json_extract(data_json, '$.buildProfile') = 'mhworlddata-fallback'") > 0) {
+      verifyMhworldDataFallbackFacts(database);
+      return;
+    }
     expect(
       scalar(
         database,

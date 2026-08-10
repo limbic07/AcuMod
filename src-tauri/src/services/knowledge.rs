@@ -2364,6 +2364,128 @@ mod tests {
             4
         );
 
+        // 完整原始表和 MHWData 回退包使用不同的稳定 ID，但两者都必须经过真实安装、
+        // 别名检索、关系遍历和 FTS/LIKE 回退，不能只检查 SQLite 内部记录。
+        let mhworlddata_fallback =
+            lookup_game_entities_from(&knowledge_root, "game-weapon:mhwdata:2001", None, 4)
+                .unwrap()
+                .matches
+                .iter()
+                .any(|item| item.entity_id == "game-weapon:mhwdata:2001");
+        if mhworlddata_fallback {
+            let defender_greatsword =
+                lookup_game_entities_from(&knowledge_root, "防卫队炎刃型大剑 I", None, 20).unwrap();
+            let defender_greatsword = defender_greatsword
+                .matches
+                .iter()
+                .find(|item| item.entity_id == "game-weapon:mhwdata:2001")
+                .expect("MHWData 回退包必须能按简中名称查询防卫队炎刃型大剑 I");
+            assert_eq!(defender_greatsword.data["attack"], 624);
+            let defender_relations = get_game_entity_relations_from(
+                &knowledge_root,
+                "game-weapon:mhwdata:2001",
+                Some(&["requiresMaterial".to_string()]),
+                "outgoing",
+                20,
+            )
+            .unwrap();
+            assert!(!defender_relations.relations.is_empty());
+
+            let first_quest = lookup_game_entities_from(
+                &knowledge_root,
+                "Jagras of the Ancient Forest",
+                None,
+                20,
+            )
+            .unwrap();
+            assert!(first_quest
+                .matches
+                .iter()
+                .any(|item| item.entity_id == "game-quest:mhwdata:101"));
+            let quest_relations = get_game_entity_relations_from(
+                &knowledge_root,
+                "game-quest:mhwdata:101",
+                Some(&[
+                    "occursAt".to_string(),
+                    "huntsMonster".to_string(),
+                    "rewardsItem".to_string(),
+                ]),
+                "outgoing",
+                20,
+            )
+            .unwrap();
+            assert!(quest_relations
+                .relations
+                .iter()
+                .any(|item| item.object_id == "game-location:mhwdata:1"));
+            assert!(quest_relations
+                .relations
+                .iter()
+                .any(|item| item.predicate == "huntsMonster"));
+            assert!(quest_relations
+                .relations
+                .iter()
+                .any(|item| item.predicate == "rewardsItem"));
+
+            let camp_quest_relations = get_game_entity_relations_from(
+                &knowledge_root,
+                "game-quest:mhwdata:201",
+                Some(&["requiresQuest".to_string(), "requiresCondition".to_string()]),
+                "outgoing",
+                20,
+            )
+            .unwrap();
+            assert!(camp_quest_relations.relations.iter().any(|item| {
+                item.predicate == "requiresQuest" && item.object_id == "game-quest:mhwdata:103"
+            }));
+            assert!(camp_quest_relations
+                .relations
+                .iter()
+                .any(|item| item.predicate == "requiresCondition"));
+
+            let great_jagras =
+                lookup_game_entities_from(&knowledge_root, "大贼龙", None, 20).unwrap();
+            let great_jagras_id = great_jagras
+                .matches
+                .iter()
+                .find(|item| item.entity_id.starts_with("game-monster:mhwdata:"))
+                .map(|item| item.entity_id.clone())
+                .expect("MHWData 回退包必须能按简中名称查询大贼龙");
+            let monster_relations = get_game_entity_relations_from(
+                &knowledge_root,
+                &great_jagras_id,
+                Some(&["hasWeaknessFacts".to_string(), "hasHitzone".to_string()]),
+                "outgoing",
+                20,
+            )
+            .unwrap();
+            assert!(monster_relations
+                .relations
+                .iter()
+                .any(|item| item.predicate == "hasWeaknessFacts"));
+            assert!(monster_relations
+                .relations
+                .iter()
+                .any(|item| item.predicate == "hasHitzone"));
+
+            let guide_domains = vec!["mhw-game-guides".to_string()];
+            let guide_matches =
+                search_from(&knowledge_root, "冰原中后期大剑", Some(&guide_domains), 20).unwrap();
+            assert!(guide_matches
+                .matches
+                .iter()
+                .any(|item| item.result_id == "guide-greatsword-iceborne-midlate"));
+            let modding_domains = vec!["mhw-modding".to_string()];
+            let modding_matches =
+                search_from(&knowledge_root, "EVAM", Some(&modding_domains), 20).unwrap();
+            assert!(modding_matches
+                .matches
+                .iter()
+                .any(|item| item.result_id == "modding-evam-slinger"));
+            fs::remove_dir_all(test_root).unwrap();
+            return;
+        }
+
         // 真实包验收覆盖核心实体、关系、攻略和 MOD 技术问法，确保安装索引、别名检索、
         // 关系遍历和 FTS/LIKE 回退均能为 AcuAI 返回证据，而不是只检查 SQLite 中存在原始记录。
         let quest =

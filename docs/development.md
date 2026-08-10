@@ -42,9 +42,9 @@ cargo fmt
 - `dev`：启动 Vite 开发服务器。
 - `typecheck`：运行 `vue-tsc --noEmit`。
 - `build`：先运行 typecheck，再运行 Vite build。
-- `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告。
+- `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告；缺少受限的 `15.10.00` 原始表时，会明确切换并报告 MHWData 本地快照输入。
 - `knowledge:fetch-quest-unlocks`：显式联网抓取公开可选任务解锁页面，只保存任务名、来源链接和可结构化解析的条件到本地忽略快照。
-- `knowledge:build-dev`：使用本地研究数据生成不提交、不分发的开发知识包，用于验证查询链路。
+- `knowledge:build-dev`：使用本地研究数据生成不提交、不分发的开发知识包，用于验证查询链路。若本机有完整 `15.10.00` 原始表则使用原始表模式；否则要求先准备固定 MHWData 快照和 MHW-Editor 同键简繁文本桥，并构建带 `mhworlddata-fallback` 标识的本地事实包。
 - `knowledge:build-modding-dev`：只生成 MOD 技术开发包；用于缺少完整游戏事实原始表时验证 MOD 技术知识检索。
 - `knowledge:package-modding-dev`：把技术开发包打成可从应用设置页安装的单包 ZIP。
 - `knowledge:package-bundle`：将四个 `.acukb` 打包为一个独立 ZIP，供本地安装测试或 release 上传；生成物位于被忽略的 `references/knowledge/release/`。

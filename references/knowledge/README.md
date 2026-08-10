@@ -55,9 +55,29 @@ npm.cmd run knowledge:audit -- --mod-root "D:\path\to\AcumodData\mods\installed"
 
 `knowledge:build-dev` 生成 `acumod-dev-game-facts.acukb`、`acumod-dev-modding.acukb`、`acumod-dev-game-guides.acukb` 与 `acumod-dev-acumod-help.acukb`。裁剪包会重建 FTS5，避免保留事实包的无效索引段。实际体积在每次构建后重新测量；这只是开发数据，不代表正式完整知识库大小。游戏事实包含有许可尚未满足正式分发要求的本地派生字段；四者都只能用于开发验收，不提交 Git、不作为 release 附件。
 
+### 无原始表时的可重复开发构建
+
+`15.10.00-agent-package` 是受限本地研究资料，不会随仓库提供。开发机没有该表时，构建器会自动切换到 `mhworlddata-fallback`：使用固定 commit 的 MHWData 快照生成武器、防具、装饰珠、护石、物品、技能、怪物、肉质、任务、地图、制作、奖励和采集关系。该模式不伪造原始表的稳定 ID；实体 ID 会带 `mhwdata` 命名空间，manifest 和实体数据会明确标识它仅供本地开发。
+
+首次准备步骤如下：
+
+```powershell
+npm.cmd run knowledge:fetch-mhworlddata
+git clone https://github.com/Synthlight/MHW-Editor.git src-tauri/target/analysis/MHW-Editor-source
+git -C src-tauri/target/analysis/MHW-Editor-source checkout a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94
+npm.cmd run knowledge:build-game-text-bridge
+npm.cmd run knowledge:fetch-mhw-db
+npm.cmd run knowledge:fetch-quest-unlocks
+npm.cmd run knowledge:build-dev
+npm.cmd run knowledge:verify-dev
+npm.cmd run knowledge:verify-e2e
+```
+
+当前 MHW-Editor 文本源固定为 commit `a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94`；克隆后应以 `git -C src-tauri/target/analysis/MHW-Editor-source rev-parse HEAD` 核对。构建器只按同一文本键配对简中、繁中和英文，绝不做逐字简繁转换；没有唯一同键简中名称的任务等条目保留官方繁中或英文回退。回退包会导入 Game8 中英文标题唯一对应 MHWData 本地任务的解锁资料；当前含 459 个任务条目、214 条前置关系和 616 条条件。相近标题、同名记录、特别任务和交货委托仍不会猜测成关系，查询这些具体条件时必须明确说明资料缺口。
+
 程序只支持整套 ZIP 导入：选择一个包含四个 `.acukb` 文件的 ZIP 并点击“整套安装”。程序会先解包并校验四类知识包，全部通过后再逐个安装；包在本地仍保持独立的类型、版本、哈希和启用状态，后续可以单独删除或更新整套 ZIP。
 
-`knowledge:build-dev` 构建四个开发包。`knowledge:verify-dev` 读取已生成的 SQLite 知识包，核验开发包声明 `15.23` 运行版本、基础实体保留 `15.10.00` 内容基线、实体和关系数量没有缩减，以及 MOD3、MRL3、EVAM、SOBJ 等核心技术文档、Acumod 导入/启停/冲突/改绑/知识包边界等使用说明、398 条任务-怪物关系、354 条按稳定任务 ID 关联的任务资料、329 个已验证任务链条目、180 条任务 `requiresQuest` 前置关系、466 条任务 `requiresCondition` 解锁条件、32 条交货委托解锁条件、21 条交货委托前置任务关系、16 张场景 ID 交叉核对地图、任务报酬/采集关系与 18 条攻略摘要仍存在。问题集暂不作为自动验收入口，后续将根据真实使用场景重新设计。
+`knowledge:build-dev` 构建四个开发包。`knowledge:verify-dev` 会先识别事实包的构建模式：完整原始表模式继续验证稳定 ID、任务链和交货委托的高覆盖断言；`mhworlddata-fallback` 模式验证 15.23 manifest、本地开发边界、至少 11,000 个实体、37,000 条关系、装备/技能/素材/怪物弱点与肉质/任务地点奖励/地图采集，以及 600 条以上解锁条件和 200 条以上唯一标题前置关系的覆盖；还会抽查防卫队大剑、皮制头饰、首个任务、古代树森林与“致力于设置营地”的前置关系。两种模式都会验证 MOD3、MRL3、EVAM、SOBJ 等核心技术文档、Acumod 导入/启停/冲突/改绑/知识包边界等使用说明和 18 条攻略摘要。问题集暂不作为自动验收入口，后续将根据真实使用场景重新设计。
 
 `knowledge:verify-e2e` 在临时目录安装刚生成的游戏事实、MOD 技术、攻略和 Acumod 使用说明包，再走与程序相同的实体查询、关系查询和全文检索 service，验证安装、查询和跨知识域检索链路。测试完成后删除临时知识目录，不会写入实际程序数据。Windows 下脚本只为测试二进制嵌入 Tauri 所需的 Common Controls manifest，不影响桌面应用本体的构建产物。
 

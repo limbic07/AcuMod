@@ -9,6 +9,10 @@ const rawPackageRoot = path.join(
   "references/mhwi-data/raw/15.10.00-agent-package",
 );
 const rawManifestPath = path.join(rawPackageRoot, "manifest.json");
+const mhworldDataSnapshotPath = path.join(
+  projectRoot,
+  "references/knowledge/raw/mhworlddata/armor-name-map.json",
+);
 const curatedRoot = path.join(projectRoot, "references/mhwi-data/curated");
 const defaultOutputRoot = path.join(projectRoot, "references/knowledge/audits");
 const questUnlockSnapshotPath = path.join(projectRoot, "references/knowledge/raw/game8-quest-unlocks/current.json");
@@ -282,6 +286,9 @@ async function findModLibrary(explicitRoot) {
 }
 
 async function auditRawPackage() {
+  if (!(await pathExists(rawManifestPath))) {
+    return auditMhworldDataFallbackInput();
+  }
   const manifest = await readJson(rawManifestPath);
   const formatTotals = {};
   for (const format of ["csv", "jsonl"]) {
@@ -319,6 +326,58 @@ async function auditRawPackage() {
     })),
     sourcePage: "http://www.mhwmod.com/archives/660",
     redistribution: "requiresPermission",
+  };
+}
+
+async function auditMhworldDataFallbackInput() {
+  if (!(await pathExists(mhworldDataSnapshotPath))) {
+    throw new Error(
+      "本地 15.10.00 原始表缺失，且未找到 MHWData 开发快照。请先运行 npm.cmd run knowledge:fetch-mhworlddata。",
+    );
+  }
+  const [snapshot, metadata] = await Promise.all([
+    readJson(mhworldDataSnapshotPath),
+    stat(mhworldDataSnapshotPath),
+  ]);
+  if (
+    snapshot.schemaVersion !== 1
+    || snapshot.sourceId !== "mhworlddata-armor-name-map"
+    || snapshot.contentBaselineVersion !== "15.10.00"
+    || !snapshot.tables
+  ) {
+    throw new Error("MHWData 开发快照结构或内容基线无效。");
+  }
+  const tableNameMap = {
+    weaponBase: "weapons", armorBase: "armor", skillTranslations: "skills", decorationBase: "decorations",
+    charmBase: "charms", itemTranslations: "items", weaponCrafting: "crafting", armorCrafting: "crafting",
+    charmCrafting: "crafting", monsterBase: "monsters", monsterRewards: "monster_drops", questBase: "quests",
+    questMonsters: "quests", questRewards: "quests", locationBase: "stages", locationItems: "stages",
+  };
+  const tables = Object.entries(snapshot.tables).map(([sourceTable, table]) => ({
+    index: sourceTable,
+    sheetTitle: sourceTable,
+    tableName: tableNameMap[sourceTable] ?? sourceTable,
+    rowCount: Array.isArray(table.rows) ? table.rows.length : 0,
+    columnCount: Array.isArray(table.rows) && table.rows[0] ? Object.keys(table.rows[0]).length : 0,
+    columns: Array.isArray(table.rows) && table.rows[0] ? Object.keys(table.rows[0]) : [],
+  }));
+  return {
+    inputProfile: "mhworlddata-fallback",
+    packageName: "MHWData fixed-commit local development snapshot",
+    sourceFileName: path.basename(mhworldDataSnapshotPath),
+    sourceSha256: null,
+    gameVersion: snapshot.contentBaselineVersion,
+    sheetCount: tables.length,
+    totalDataRows: tables.reduce((total, table) => total + table.rowCount, 0),
+    formats: {
+      csv: { fileCount: 0, totalBytes: 0 },
+      jsonl: { fileCount: 0, totalBytes: 0 },
+      sqlite: { fileCount: 0, totalBytes: 0 },
+      snapshot: { fileCount: 1, totalBytes: metadata.size },
+    },
+    tables,
+    sourcePage: "https://github.com/gatheringhallstudios/MHWorldData",
+    redistribution: "snapshotIgnored-derivedFieldsRequireReleaseAudit",
   };
 }
 
@@ -608,13 +667,8 @@ function renderReport(baseline, modProfile) {
     `- 当前结构化游戏数据基线：\`${baseline.baseGameVersion}\`。`,
     "- 项目确认 15.10 是最后一次明显新增游戏内容和机制的更新；15.10.00 可作为 15.23 的内容事实基线。外部字段和原始数据再分发许可仍须单独核验。",
     "",
-    "## 现有数据包",
+    "## 当前构建输入",
     "",
-    `- 数据表：${baseline.rawPackage.sheetCount} 张，共 ${baseline.rawPackage.totalDataRows} 行。`,
-    `- CSV：${baseline.rawPackage.formats.csv.fileCount} 个，${formatBytes(baseline.rawPackage.formats.csv.totalBytes)}。`,
-    `- JSONL：${baseline.rawPackage.formats.jsonl.fileCount} 个，${formatBytes(baseline.rawPackage.formats.jsonl.totalBytes)}。`,
-    `- SQLite：${formatBytes(baseline.rawPackage.formats.sqlite.totalBytes)}。`,
-    "- 原始数据只用于本地研究，重新分发前需要来源方许可。",
     "",
     "## 原始资料字段覆盖",
     "",
@@ -625,6 +679,28 @@ function renderReport(baseline, modProfile) {
     "## 开发事实包实际内容",
     "",
   ];
+
+  if (baseline.rawPackage.inputProfile === "mhworlddata-fallback") {
+    lines.splice(
+      lines.indexOf("## 原始资料字段覆盖"),
+      0,
+      `- 输入模式：\`mhworlddata-fallback\`。本机未提供授权受限的 15.10.00 原始表，构建器改用固定 commit 的 MHWData 本地快照。`,
+      `- 数据表：${baseline.rawPackage.sheetCount} 张，共 ${baseline.rawPackage.totalDataRows} 行；快照 ${formatBytes(baseline.rawPackage.formats.snapshot.totalBytes)}。`,
+      "- 该输入只用于本地开发验收；字段、中文名称覆盖和再分发许可均仍需发布审计。",
+      "",
+    );
+  } else {
+    lines.splice(
+      lines.indexOf("## 原始资料字段覆盖"),
+      0,
+      `- 数据表：${baseline.rawPackage.sheetCount} 张，共 ${baseline.rawPackage.totalDataRows} 行。`,
+      `- CSV：${baseline.rawPackage.formats.csv.fileCount} 个，${formatBytes(baseline.rawPackage.formats.csv.totalBytes)}。`,
+      `- JSONL：${baseline.rawPackage.formats.jsonl.fileCount} 个，${formatBytes(baseline.rawPackage.formats.jsonl.totalBytes)}。`,
+      `- SQLite：${formatBytes(baseline.rawPackage.formats.sqlite.totalBytes)}。`,
+      "- 原始数据只用于本地研究，重新分发前需要来源方许可。",
+      "",
+    );
+  }
 
   if (!baseline.developmentFacts.available) {
     lines.push(baseline.developmentFacts.message, "");
@@ -748,6 +824,41 @@ async function main() {
     ...definition,
     tablesPresent: definition.tables.filter((table) => availableTables.has(table)),
   }));
+  if (rawPackage.inputProfile === "mhworlddata-fallback") {
+    const byTopic = new Map(coverage.map((item) => [item.topic, item]));
+    Object.assign(byTopic.get("weapons"), {
+      status: "partial", available: "名称、类型、攻击、属性、孔位、升级关系与大部分制作素材",
+      missing: "斩味、模型路径、可精确复核的游戏内稳定 ID",
+    });
+    Object.assign(byTopic.get("armor"), {
+      status: "partial", available: "名称、部位、防御、耐性、孔位、技能和制作素材",
+      missing: "幻化 ID、模型路径和部分中文名称",
+    });
+    Object.assign(byTopic.get("charms"), {
+      status: "partial", available: "护石名称、技能、升级关系和制作素材",
+      missing: "少量中文名称和游戏内稳定 ID",
+    });
+    Object.assign(byTopic.get("crafting"), {
+      status: "partial", available: "武器、防具和护石制作/升级素材关系",
+      missing: "道具合成、全部解锁条件与来源路线",
+    });
+    Object.assign(byTopic.get("monsters"), {
+      status: "partial", available: "名称、生态摘要、弱点、肉质、陷阱与任务目标关系",
+      missing: "招式、状态阈值和完整特殊形态说明",
+    });
+    Object.assign(byTopic.get("monsterDrops"), {
+      status: "partial", available: "怪物奖励/剥取条目、数量和概率",
+      missing: "部位破坏条件、调查任务与完整掉落语义",
+    });
+    Object.assign(byTopic.get("quests"), {
+      status: "partial", available: "任务名称、目标、地点、怪物、奖励，以及英文标题唯一对应的前置/解锁关系",
+      missing: "可靠的简中任务名称、特别任务、交货委托、同名或近似标题的解锁链",
+    });
+    Object.assign(byTopic.get("stages"), {
+      status: "partial", available: "地图、16 个稳定场景映射、任务地点和采集关系",
+      missing: "完整区域、营地解锁和环境机制",
+    });
+  }
   const baseline = {
     schemaVersion: 1,
     baseGameVersion: "15.10.00",

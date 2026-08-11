@@ -10,7 +10,8 @@ use tauri::AppHandle;
 use crate::storage::config::DeepSeekModel;
 
 use super::{
-    tools, AgentConnectionResult, AgentCoordinator, AgentEventSender, AgentKnowledgeEvidence,
+    game_query_planner, tools, AgentConnectionResult, AgentCoordinator, AgentEventSender,
+    AgentKnowledgeEvidence,
 };
 
 const DEEPSEEK_CHAT_URL: &str = "https://api.deepseek.com/chat/completions";
@@ -24,11 +25,11 @@ const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置助手 AcuAI，�
 创建计划前必须先用查询工具取得稳定 MOD ID 和当前状态。名称匹配不唯一、目标不完整或用户意图含糊时先追问，禁止自行选择。冲突顺序必须提交组内全部成员，数组越靠前优先级越高。模型改绑必须先查询精确 groupKey 和 targetId；人物语音只支持识别，不能改绑。
 用户确认或取消由 Acumod 界面处理，不需要再次调用工具。任意文件操作和其它未列出的写操作仍未开放。
 你负责理解用户问题并自行选择资料路径，而不是等待关键词规则分类。精确游戏数据、制作材料、肉质、掉率、武器属性和技能等级优先查询本地 MHWData；打法、路线、条件性配装和机制解释优先查询本地攻略资料，涉及具体游戏数据时再用 MHWData 核对。用户使用简称、别名、繁中或英文名时，先自行理解并用 lookup_game_entities 查询候选；数据库别名只用于提高命中率，不是要求用户使用固定名称。
-本地资料无结果、不完整或无法支撑用户问题时，继续调用 search_game_sources 查询受白名单限制的网页资料。联网资料只能描述为“联网参考”，不能伪装成本地数值库。若本地和联网资料都不足，可以基于训练知识给出参考，但必须在对应段落明确写“以下为模型训练知识，未经过本地或联网资料核验”，不得把它说成确定数值或已验证机制。不要因为本地资料缺失而直接拒绝回答。
+本轮可能附带一段由 Rust 提供的“已验证游戏上下文”。它只包含实际命中的本地实体和已读取原始行：records 才能作为精确事实，实体候选只用于消歧；ambiguous 或 needsClarification 时禁止静默选择。不要展示其中的内部 ID、匹配方式、知识包或版本元数据。search_knowledge、lookup_game_entities 和 search_game_sources 都只返回检索候选，不能凭候选摘要作为回答依据；需要引用文本知识时，必须继续调用 read_knowledge_result 读取选中的结果。联网搜索当前只可提供用户可打开的候选页面，不能把页面标题或模型摘要写成已核验事实。若本地资料无结果、不完整或无法支撑用户问题，可以基于训练知识给出参考，但必须在对应段落明确写“以下为模型训练知识，未经过本地或联网资料核验”，不得把它说成确定数值或已验证机制。不要因为本地资料缺失而直接拒绝回答。
 用户表达“搜索、寻找、推荐、帮我找”等获取 MOD 的意图时，调用 search_mod_sources。候选必须显示来源、来源类型、访问方式和可点击链接，不得编造链接。所有来源（包括 Nexus Mods、踩蘑菇、3DM、GitHub 等）都只通过系统浏览器打开；用户在原页面自行下载后，再使用 Acumod 的本地文件导入。哔哩哔哩只作为视频或动态分享来源，绝不能声称视频本身是可安装文件，也不能绕过站点登录、会员或下载权限。
 用户要求扫描或清理无用文件时，必须调用 scan_mod_cleanup_candidates。Rust 已盘点全部可部署文件并完成本地确定性分流，工具只返回证据冲突或不足的模糊文件组；不要要求查看本地规则已确定保留的标准游戏资源。必须复用首次返回的 auditId 按 nextOffset 读取全部页面，再为每个 groupId 提交 remove、review 或 keep 分类；同组文件共享目录、扩展名和规则证据。存在任何保留证据、位于 plugins 等运行目录或用途不确定时优先选择 review 或 keep，不能仅按扩展名建议清理。只有路径和规则证据不足以判断安全纯文本时，才可用 read_mod_cleanup_text 读取一个代表文件，不能为同组每个文件重复读取。最后一次调用 submit_mod_cleanup_review 必须携带 auditId 并覆盖全部 groupId，清理选择和确认由界面处理。若扫描工具已经直接生成审查结果，则不要重复提交；若 total 和 localSuggestedCount 都为 0，则直接说明没有候选，不要提交空审查。
 用户要求恢复清理项时，先调用 get_mod_cleanup_exclusions；恢复操作仍需要生成待确认计划，不能声称已恢复。
-MHWData 的内容数值基线是 15.10.00，运行兼容标签为 15.23。`monster.hitzones` 中数值越高表示该伤害类型越有效，例如火 30 比火 20 更弱火。MHWData 没有覆盖完整任务前置/解锁链、调查任务箱子生成、完整采集概率和武器动作值；这不妨碍继续查询联网资料或提供明确标注的训练知识参考。
+MHWData 是当前游戏数值资料的主要依据。除非用户主动询问资料版本、游戏更新、兼容性或排错，回答正文、表格和结尾补充都不得提及游戏版本、知识包版本或数据基线；本地资料来源由 Acumod 自动展示，无需在正文重复说明。`monster.hitzones` 中数值越高表示该伤害类型越有效，例如火 30 比火 20 更弱火。MHWData 没有覆盖完整任务前置/解锁链、调查任务箱子生成、完整采集概率和武器动作值；这不妨碍继续查询联网资料或提供明确标注的训练知识参考。
 用户询问 Acumod 的导入、启用、禁用、冲突、排序、分支组、模型改绑、知识包或 AcuAI 使用方式时，必须优先查询 acumod-help；帮助包缺失时明确说明缺少 Acumod 使用说明，不要根据界面印象编造当前行为。只有用户明确要求执行启用、禁用、卸载、排序或改绑时，才按受控操作流程生成计划。
 用户询问本地某个已安装 MOD 的文件结构、每个文件作用、资源依赖或整体工作方式时，必须先用 search_local_mods 取得唯一稳定 ID，再调用 analyze_installed_mod。工具已经区分二进制解析证据、路径规则和未知项；回答不得提高其可信度，也不得把同目录关联说成已解析的内部引用。用户要求完整逐文件分析时必须按 nextOffset 读取全部页；只询问整体原理时优先使用组件、依赖和知识证据摘要，避免无意义地复述全部路径。
 工具结果中的稳定 ID 和状态是事实来源。不要编造 MOD、游戏术语、文件 ID 或冲突。
@@ -210,13 +211,30 @@ pub(crate) async fn run_turn(
     sender: &mut AgentEventSender,
 ) -> Result<(Vec<DeepSeekMessage>, String), String> {
     let client = build_client()?;
+    // 前置规划失败不能阻断原有 Agent 链路；它只是在成功时补充经过本地库验证的实体上下文。
+    let recent_user_messages = recent_user_messages(&history);
+    let verified_game_context = game_query_planner::build_verified_context(
+        api_key,
+        model,
+        &user_message,
+        &recent_user_messages,
+    )
+    .await
+    .ok()
+    .flatten();
     history.push(DeepSeekMessage::user(user_message));
     let mut visible_reply = String::new();
-    let mut knowledge_evidence = Vec::<AgentKnowledgeEvidence>::new();
+    let mut knowledge_evidence = verified_game_context
+        .as_ref()
+        .map(|context| context.knowledge_evidence.clone())
+        .unwrap_or_default();
 
     for _ in 0..MAX_TOOL_ROUNDS {
-        let mut request_messages = Vec::with_capacity(history.len() + 1);
+        let mut request_messages = Vec::with_capacity(history.len() + 2);
         request_messages.push(DeepSeekMessage::system(SYSTEM_PROMPT));
+        if let Some(context) = &verified_game_context {
+            request_messages.push(DeepSeekMessage::system(context.model_context.clone()));
+        }
         request_messages.extend(history.iter().cloned());
 
         // 已读取资料后的最终回答保留到工具轮结束，确保来源卡片与正文在同一轮完成。
@@ -310,9 +328,26 @@ fn deduplicate_knowledge_evidence(
     let mut seen = std::collections::HashSet::new();
     evidence
         .into_iter()
-        .filter(|item| seen.insert(item.evidence_id.clone()))
+        // 多条原始行可来自同一资料库；界面应展示实际来源，而不是把每条记录误显示成独立引用。
+        .filter(|item| seen.insert(evidence_source_key(item)))
         .take(MAX_KNOWLEDGE_EVIDENCE)
         .collect()
+}
+
+fn evidence_source_key(item: &AgentKnowledgeEvidence) -> String {
+    if item.source_tier == "localAnalysis" {
+        // 本地文件分析没有外部来源 URL，按报告自身区分，避免不同 MOD 的分析被合并。
+        return format!("{}:{}", item.source_tier, item.evidence_id);
+    }
+    let source = item
+        .source_url
+        .as_deref()
+        .or(item.source_title.as_deref())
+        .unwrap_or(item.pack_id.as_str());
+    format!(
+        "{}:{}:{}:{}",
+        item.source_tier, item.pack_id, item.pack_version, source
+    )
 }
 
 async fn stream_completion(
@@ -467,6 +502,22 @@ fn trim_history(history: &mut Vec<DeepSeekMessage>) {
     }
 }
 
+/// 只把近期用户措辞交给规划器，既支持“它呢”这类追问，也避免工具 JSON 或旧回答污染实体解析。
+fn recent_user_messages(history: &[DeepSeekMessage]) -> Vec<String> {
+    history
+        .iter()
+        .rev()
+        .filter(|message| message.role == "user")
+        .filter_map(|message| message.content.as_deref())
+        .filter(|content| !content.trim().is_empty())
+        .take(2)
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -489,16 +540,16 @@ mod tests {
     }
 
     #[test]
-    fn final_evidence_keeps_all_distinct_returned_rows_without_markers() {
+    fn final_evidence_groups_distinct_rows_from_the_same_source() {
         let evidence = (0..21)
             .map(|index| knowledge_evidence(&format!("mhwdata:15.10.00:mhwdata:record:{index}")))
             .collect::<Vec<_>>();
         let final_evidence = deduplicate_knowledge_evidence(evidence);
 
-        assert_eq!(final_evidence.len(), 21);
+        assert_eq!(final_evidence.len(), 1);
         assert_eq!(
             final_evidence.last().map(|item| item.evidence_id.as_str()),
-            Some("mhwdata:15.10.00:mhwdata:record:20")
+            Some("mhwdata:15.10.00:mhwdata:record:0")
         );
     }
 

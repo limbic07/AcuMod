@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -26,6 +26,7 @@ const MAX_SEARCH_QUERY_CHARS: usize = 200;
 const MAX_SEARCH_RESULTS: usize = 50;
 const MAX_STRUCTURED_DATA_BYTES: usize = 256 * 1024;
 const MAX_FTS_FALLBACK_TERMS: usize = 48;
+const MAX_READ_RESULT_CHARS: usize = 16 * 1024;
 
 const FTS_SEARCH_SQL: &str = "SELECT f.result_id, f.result_kind, f.domain, f.title, snippet(knowledge_fts, 4, '', '', '…', 36), COALESCE(e.game_version, d.game_version, ''), COALESCE(e.confidence, d.confidence, 0.5), s.title, s.url FROM knowledge_fts f LEFT JOIN entities e ON f.result_kind = 'entity' AND e.id = f.result_id LEFT JOIN documents d ON f.result_kind = 'document' AND d.id = f.result_id LEFT JOIN sources s ON s.id = COALESCE(e.source_id, d.source_id) WHERE knowledge_fts MATCH ?1 ORDER BY bm25(knowledge_fts) LIMIT ?2";
 const LIKE_SEARCH_SQL: &str = "SELECT f.result_id, f.result_kind, f.domain, f.title, substr(f.body, 1, 240), COALESCE(e.game_version, d.game_version, ''), COALESCE(e.confidence, d.confidence, 0.5), s.title, s.url FROM knowledge_fts f LEFT JOIN entities e ON f.result_kind = 'entity' AND e.id = f.result_id LEFT JOIN documents d ON f.result_kind = 'document' AND d.id = f.result_id LEFT JOIN sources s ON s.id = COALESCE(e.source_id, d.source_id) WHERE (f.title LIKE ?1 ESCAPE '\\' OR f.body LIKE ?1 ESCAPE '\\') ORDER BY CASE WHEN f.title LIKE ?1 ESCAPE '\\' THEN 0 ELSE 1 END, length(f.title), f.title, f.result_id LIMIT ?2";
@@ -95,6 +96,25 @@ pub struct KnowledgeSearchMatch {
     pub domain: String,
     pub title: String,
     pub snippet: String,
+    pub game_version: String,
+    pub confidence: f64,
+    pub source_title: Option<String>,
+    pub source_url: Option<String>,
+    pub pack_id: String,
+    pub pack_version: String,
+    pub pack_kind: String,
+}
+
+/// 从一次受控检索返回的候选中读取正文。调用方必须携带候选所属包，不能指定任意文件或 SQL。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeReadResult {
+    pub result_id: String,
+    pub result_kind: String,
+    pub domain: String,
+    pub title: String,
+    pub body: String,
+    pub body_truncated: bool,
     pub game_version: String,
     pub confidence: f64,
     pub source_title: Option<String>,
@@ -663,6 +683,34 @@ pub fn search(
     search_from(&root, query, domains, limit)
 }
 
+/// 读取 `search` 返回的一个候选全文，用于把检索候选与回答实际依据分开。
+pub fn read_search_result(
+    pack_id: &str,
+    pack_version: &str,
+    result_id: &str,
+) -> Result<KnowledgeReadResult, String> {
+    validate_read_key(pack_id, "知识包 ID", 80)?;
+    validate_read_key(pack_version, "知识包版本", 80)?;
+    validate_read_key(result_id, "知识结果 ID", 240)?;
+    let root = knowledge_root()?;
+    let index = load_index(&root)?;
+    let pack = index
+        .packs
+        .iter()
+        .find(|pack| {
+            pack.active
+                && pack.kind != "mhw-game-facts"
+                && pack.pack_id == pack_id
+                && pack.version == pack_version
+        })
+        .ok_or_else(|| "该知识检索候选已失效，请重新搜索。".to_string())?;
+    let path = installed_pack_path(&root, &pack.relative_path)?;
+    if !path.is_file() {
+        return Err(format!("知识包“{}”文件缺失。", pack.display_name));
+    }
+    read_result_from_pack(&path, pack, result_id)
+}
+
 fn search_from(
     root: &Path,
     query: &str,
@@ -725,6 +773,62 @@ fn search_from(
         searched_pack_count: active_packs.len(),
         matches,
         warnings,
+    })
+}
+
+fn read_result_from_pack(
+    path: &Path,
+    pack: &InstalledPackRecord,
+    result_id: &str,
+) -> Result<KnowledgeReadResult, String> {
+    let connection = open_read_only(path)?;
+    // 两张表使用固定 UNION；结果 ID 仍是绑定参数，模型无法借此读出任意 SQLite 内容。
+    let mut statement = connection
+        .prepare(
+            "SELECT 'entity', e.id, e.domain, e.canonical_name, e.data_json,
+                    e.game_version, e.confidence, s.title, s.url
+             FROM entities e LEFT JOIN sources s ON s.id = e.source_id
+             WHERE e.id = ?1
+             UNION ALL
+             SELECT 'document', d.id, d.namespace, d.title, d.body,
+                    d.game_version, d.confidence, s.title, s.url
+             FROM documents d LEFT JOIN sources s ON s.id = d.source_id
+             WHERE d.id = ?1
+             LIMIT 1",
+        )
+        .map_err(|error| format!("无法准备知识全文读取：{error}"))?;
+    let row = statement
+        .query_row([result_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, f64>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+            ))
+        })
+        .optional()
+        .map_err(|error| format!("无法读取知识全文：{error}"))?
+        .ok_or_else(|| "该知识检索候选已失效，请重新搜索。".to_string())?;
+    let (body, body_truncated) = truncate_chars(&row.4, MAX_READ_RESULT_CHARS);
+    Ok(KnowledgeReadResult {
+        result_id: row.1,
+        result_kind: row.0,
+        domain: row.2,
+        title: row.3,
+        body,
+        body_truncated,
+        game_version: row.5,
+        confidence: row.6,
+        source_title: row.7,
+        source_url: row.8,
+        pack_id: pack.pack_id.clone(),
+        pack_version: pack.version.clone(),
+        pack_kind: pack.kind.clone(),
     })
 }
 
@@ -1830,6 +1934,22 @@ fn validate_short_text(value: &str, label: &str, max_chars: usize) -> Result<(),
         return Err(format!("{label}为空或过长。"));
     }
     Ok(())
+}
+
+fn validate_read_key(value: &str, label: &str, max_chars: usize) -> Result<(), String> {
+    if value.trim().is_empty()
+        || value.chars().count() > max_chars
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!("{label}为空、过长或包含控制字符。"));
+    }
+    Ok(())
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
+    let mut characters = value.chars();
+    let body = characters.by_ref().take(max_chars).collect::<String>();
+    (body, characters.next().is_some())
 }
 
 fn ensure_supported_app_version(minimum: &str) -> Result<(), String> {

@@ -438,7 +438,8 @@ function knowledgeEvidenceMeta(item: AgentKnowledgeEvidence) {
     localAnalysis: "本地文件分析",
     webReference: "联网参考资料",
   }[item.sourceTier];
-  return `${tier} · ${item.sourceTitle || item.packId} · ${item.gameVersion} · 可信度 ${Math.round(item.confidence * 100)}%`;
+  // 版本属于可追溯元数据，不应干扰正常问答；用户主动追问时再由 AcuAI 说明。
+  return `${tier} · ${item.sourceTitle || item.packId} · 可信度 ${Math.round(item.confidence * 100)}%`;
 }
 
 function formatFileSize(sizeBytes: number) {

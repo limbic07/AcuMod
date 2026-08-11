@@ -335,7 +335,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "search_knowledge",
-                "description": "查询已安装的 MOD 制作技术、游戏攻略和 Acumod 使用说明文本包。精确游戏数值、掉率、肉质、装备属性和任务报酬可结合 lookup_game_entities 与 get_game_entity_data；本工具不查询 MHWData 数值数据库。",
+                "description": "查询已安装的 MOD 制作技术、游戏攻略和 Acumod 使用说明文本包，返回候选摘要。候选不是回答依据；若要据此回答，必须再调用 read_knowledge_result 读取一个选中的结果。精确游戏数值、掉率、肉质、装备属性和任务报酬可结合 lookup_game_entities 与 get_game_entity_data；本工具不查询 MHWData 数值数据库。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -392,6 +392,23 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                         "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
                     },
                     "required": ["entityId"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "read_knowledge_result",
+                "description": "读取 search_knowledge 返回的一个候选全文或结构化实体，作为实际回答依据。必须原样使用候选返回的 packId、packVersion 和 resultId；不能编造这些值，也不能读取未搜索到的内容。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "packId": { "type": "string" },
+                        "packVersion": { "type": "string" },
+                        "resultId": { "type": "string" }
+                    },
+                    "required": ["packId", "packVersion", "resultId"],
                     "additionalProperties": false
                 }
             }
@@ -461,6 +478,7 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "create_cleanup_restore_plan" => "生成清理恢复计划",
         "analyze_installed_mod" => "分析 MOD 文件",
         "search_knowledge" => "查询 MHW 知识库",
+        "read_knowledge_result" => "读取知识资料",
         "lookup_game_entities" => "查询游戏实体",
         "get_game_entity_data" => "读取游戏实体数据",
         "get_armor_set_crafting" => "查询整套防具制作配方",
@@ -690,10 +708,23 @@ pub(crate) async fn execute_tool(
             })
             .await
             .map_err(|error| format!("知识库查询任务失败：{error}"))??;
-            let evidence = search_evidence(&result);
-            Ok(ToolExecution::knowledge_query(
+            // 搜索只产生候选；只有后续全文读取才可成为回答来源。
+            Ok(ToolExecution::query(
                 serde_json::to_string(&json!({ "ok": true, "knowledge": result }))
                     .map_err(|error| format!("无法序列化知识库结果：{error}"))?,
+            ))
+        }
+        "read_knowledge_result" => {
+            let args = parse_arguments::<ReadKnowledgeResultArgs>(arguments)?;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                knowledge::read_search_result(&args.pack_id, &args.pack_version, &args.result_id)
+            })
+            .await
+            .map_err(|error| format!("知识资料读取任务失败：{error}"))??;
+            let evidence = read_knowledge_evidence(&result);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({ "ok": true, "knowledge": result }))
+                    .map_err(|error| format!("无法序列化知识资料：{error}"))?,
                 evidence,
             ))
         }
@@ -710,11 +741,10 @@ pub(crate) async fn execute_tool(
             })
             .await
             .map_err(|error| format!("游戏实体查询任务失败：{error}"))??;
-            let evidence = entity_evidence(&result);
-            Ok(ToolExecution::knowledge_query(
+            // 实体列表只用于消歧；实际依据来自后续固定 section 的原始行。
+            Ok(ToolExecution::query(
                 serde_json::to_string(&json!({ "ok": true, "entities": result }))
                     .map_err(|error| format!("无法序列化游戏实体结果：{error}"))?,
-                evidence,
             ))
         }
         "get_game_entity_data" => {
@@ -787,16 +817,14 @@ pub(crate) async fn execute_tool(
             let key = super::require_deepseek_api_key()?;
             let model = config::load(app)?.deep_seek_model;
             let results = source_search::search_game_sources(&key, model, &args.query).await?;
-            let evidence = game_source_evidence(&results);
-            Ok(ToolExecution::knowledge_query(
+            // 联网结果仍是待用户打开的候选页面；在实现受控页面摘录前不得当作事实来源。
+            Ok(ToolExecution::query(
                 serde_json::to_string(&json!({
                     "ok": true,
                     "resultCount": results.len(),
-                    "results": results,
-                    "sourceTier": "webReference"
+                    "results": results
                 }))
                 .map_err(|error| format!("无法序列化联网游戏资料结果：{error}"))?,
-                evidence,
             ))
         }
         _ => Err("模型请求了未开放的工具。".to_string()),
@@ -932,6 +960,14 @@ struct GetGameEntityDataArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadKnowledgeResultArgs {
+    pack_id: String,
+    pack_version: String,
+    result_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GetArmorSetCraftingArgs {
     armor_set_id: String,
 }
@@ -949,55 +985,15 @@ fn parse_arguments<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, S
     serde_json::from_str(arguments).map_err(|error| format!("AI 工具参数格式无效：{error}"))
 }
 
-fn search_evidence(result: &knowledge::KnowledgeSearchResponse) -> Vec<AgentKnowledgeEvidence> {
-    result
-        .matches
-        .iter()
-        .map(|item| AgentKnowledgeEvidence {
-            evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.result_id),
-            title: item.title.clone(),
-            game_version: item.game_version.clone(),
-            confidence: item.confidence,
-            source_title: item.source_title.clone(),
-            source_url: item.source_url.clone(),
-            pack_id: item.pack_id.clone(),
-            pack_version: item.pack_version.clone(),
-            source_tier: "localReference".to_string(),
-        })
-        .collect()
-}
-
-fn entity_evidence(
-    result: &knowledge::KnowledgeEntityLookupResponse,
-) -> Vec<AgentKnowledgeEvidence> {
-    entity_evidence_matches(&result.matches)
-}
-
-fn entity_evidence_matches(
-    matches: &[knowledge::KnowledgeEntityMatch],
-) -> Vec<AgentKnowledgeEvidence> {
-    matches
-        .iter()
-        .map(|item| AgentKnowledgeEvidence {
-            evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.entity_id),
-            title: item
-                .name_zh_hans
-                .clone()
-                .unwrap_or_else(|| item.canonical_name.clone()),
-            game_version: item.game_version.clone(),
-            confidence: item.confidence,
-            source_title: item.source_title.clone(),
-            source_url: item.source_url.clone(),
-            pack_id: item.pack_id.clone(),
-            pack_version: item.pack_version.clone(),
-            source_tier: "localVerified".to_string(),
-        })
-        .collect()
-}
-
 fn relation_evidence(result: &knowledge::KnowledgeRelationResponse) -> Vec<AgentKnowledgeEvidence> {
-    result
-        .relations
+    relation_evidence_from_relations(&result.relations)
+}
+
+/// 只有实际读取的原始行才会成为来源卡片，实体候选不会伪装成回答依据。
+pub(crate) fn relation_evidence_from_relations(
+    relations: &[knowledge::KnowledgeRelationMatch],
+) -> Vec<AgentKnowledgeEvidence> {
+    relations
         .iter()
         .map(|item| AgentKnowledgeEvidence {
             evidence_id: format!(
@@ -1019,24 +1015,21 @@ fn relation_evidence(result: &knowledge::KnowledgeRelationResponse) -> Vec<Agent
         .collect()
 }
 
-fn game_source_evidence(
-    results: &[source_search::GameSourceSearchResult],
-) -> Vec<AgentKnowledgeEvidence> {
-    results
-        .iter()
-        .map(|item| AgentKnowledgeEvidence {
-            // URL 已经过 Rust 的精确来源校验；网页摘要依旧只作为联网参考。
-            evidence_id: format!("game-web:{}", item.url),
-            title: item.title.clone(),
-            game_version: "联网参考".to_string(),
-            confidence: item.confidence,
-            source_title: Some(item.source.clone()),
-            source_url: Some(item.url.clone()),
-            pack_id: "game-web".to_string(),
-            pack_version: "live".to_string(),
-            source_tier: "webReference".to_string(),
-        })
-        .collect()
+fn read_knowledge_evidence(result: &knowledge::KnowledgeReadResult) -> Vec<AgentKnowledgeEvidence> {
+    vec![AgentKnowledgeEvidence {
+        evidence_id: format!(
+            "{}:{}:{}",
+            result.pack_id, result.pack_version, result.result_id
+        ),
+        title: result.title.clone(),
+        game_version: result.game_version.clone(),
+        confidence: result.confidence,
+        source_title: result.source_title.clone(),
+        source_url: result.source_url.clone(),
+        pack_id: result.pack_id.clone(),
+        pack_version: result.pack_version.clone(),
+        source_tier: "localReference".to_string(),
+    }]
 }
 
 fn local_mod_analysis_evidence_id(report: &mod_analysis::ModAnalysisReport) -> String {
@@ -1047,7 +1040,8 @@ fn local_mod_analysis_evidence_id(report: &mod_analysis::ModAnalysisReport) -> S
 }
 
 fn mod_analysis_evidence(report: &mod_analysis::ModAnalysisReport) -> Vec<AgentKnowledgeEvidence> {
-    let mut evidence = vec![AgentKnowledgeEvidence {
+    // 本地文件分析本身是实际读取到的证据；关联知识命中仍只是候选，不能直接显示为引用。
+    vec![AgentKnowledgeEvidence {
         // 本地分析报告是文件、组件和依赖结论的第一手证据；它不依赖知识包是否存在。
         evidence_id: local_mod_analysis_evidence_id(report),
         title: format!("{} 的本地文件分析", report.mod_name),
@@ -1058,24 +1052,7 @@ fn mod_analysis_evidence(report: &mod_analysis::ModAnalysisReport) -> Vec<AgentK
         pack_id: "acumod-local-analysis".to_string(),
         pack_version: report.analyzer_version.to_string(),
         source_tier: "localAnalysis".to_string(),
-    }];
-    evidence.extend(
-        report
-            .knowledge_evidence
-            .iter()
-            .map(|item| AgentKnowledgeEvidence {
-                evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.result_id),
-                title: item.title.clone(),
-                game_version: item.game_version.clone(),
-                confidence: item.confidence,
-                source_title: item.source_title.clone(),
-                source_url: item.source_url.clone(),
-                pack_id: item.pack_id.clone(),
-                pack_version: item.pack_version.clone(),
-                source_tier: "localReference".to_string(),
-            }),
-    );
-    evidence
+    }]
 }
 
 fn mod_analysis_tool_result(

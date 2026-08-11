@@ -1,5 +1,6 @@
 pub mod cleanup;
 mod deepseek;
+mod game_query_planner;
 mod source_search;
 mod tools;
 

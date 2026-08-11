@@ -482,7 +482,7 @@ services/agent/source_search.rs    MOD 与游戏资料的联网搜索、结果�
 - **联网搜索与本地导入**：来源适配层只返回通过站点规则校验的外部链接，包含 Nexus、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 和 CurseForge。结果携带来源类型和访问方式，用户在系统浏览器自行下载后复用传统本地导入；DeepSeek 不充当浏览器、下载器或站点抓取器。
 - **自然语言控制**：模型把意图映射为稳定 ID 和操作枚举；`AgentActionPlan` 确认后复用现有 `OperationCoordinator`，不新增第二套启停、卸载、冲突和改绑实现。
 - **MOD 知识分析**：`modding` 域保存跨 MOD 复用的制作知识；本地 MOD 是待分析对象。Rust 先枚举全部文件、运行路径规则和格式解析器、复用模型识别并建立资源依赖图，DeepSeek 只根据结构化证据和命中资料解释整体工作链。精确冲突与部署状态继续查询工作区快照。
-- **游戏知识问答**：固定 `mhwdata.acumhwdb` 保存 MHWorldData 的原始 CSV 行及其稳定实体索引，`game-guides` 保存带来源和条件的攻略经验。项目确认 `15.10` 是最后一次有明显游戏内容和机制变化的更新，故内容数值基线是 `15.10.00`、运行兼容标签是 `15.23`。AcuAI 先消歧实体，再读取固定 section（如 `monster.hitzones`、`weapon.sharpness`）的原始行；它不把这些行重写为模型事实图谱，也不为配装或素材路线分别复制业务流程。
+- **游戏知识问答**：固定 `mhwdata.acumhwdb` 保存 MHWorldData 的原始 CSV 行及其稳定实体索引，`game-guides` 保存带来源和条件的攻略经验。项目内部保留内容基线与运行兼容标签以支持数据审计，但普通游戏问答只展示结论和资料来源；仅当用户主动询问版本、更新、兼容性或排错时才说明这些元数据。AcuAI 先消歧实体，再读取固定 section（如 `monster.hitzones`、`weapon.sharpness`）的原始行；它不把这些行重写为模型事实图谱，也不为配装或素材路线分别复制业务流程。
 
 固定数值查询和文本检索分开。`mhwdata` 先用别名/稳定 ID 定位实体，再按固定参数读取相关源行；用户文本、类型和 section 都不会成为 SQL 片段。面向 AcuAI 的 `get_game_entity_data` 返回固定 section 的关联源行；底层 Tauri 查询 command 仍保留 `get_game_entity_relations` 名称以兼容既有前端。攻略、MOD 技术与软件说明仍通过 FTS5 和受控 `LIKE` 回退检索。固定数据库不覆盖任务前置、调查任务奖励箱生成、完整采集概率、武器动作值等领域时，Agent 可继续搜索受白名单限制的游戏资料，并将其明确标为联网参考。第一版不分发向量数据库、预计算向量或本地嵌入模型；技术文档和攻略都只是引用资料，不能成为 system 指令、工具参数或可执行规则。
 
@@ -527,15 +527,19 @@ AcumodData/knowledge/
 
 ```text
 用户问题
-  -> DeepSeek 解析意图、实体和资料需求
-  -> 本地 MHWData 或文本包多轮查询
+  -> DeepSeek 短语义规划（只输出实体候选，不回答）
+  -> Rust 以名称、别名和类型约束验证候选，并按确定性规则消歧
+  -> 唯一实体或可并列套装自动读取固定 MHWData section
+  -> 主对话 DeepSeek 基于已验证上下文整理回答，必要时继续查询文本包
   -> 本地不足时 search_game_sources 白名单检索
   -> 仍不足时明确标注训练知识
   -> Rust 汇总实际工具来源与层级
   -> Vue 展示正文和来源卡片
 ```
 
-每轮只保存当前 turn 的短时来源账本，包含知识域、实体或文档 ID、来源、游戏版本、知识包版本与来源层级。来源层级只能由 Rust 从已执行工具结果写入：本地数值资料、本地参考资料、本地文件分析或联网参考资料。模型不能伪造来源层级，也不接收用于向用户展示的内部 ID。普通对话可以流式输出；已调用资料工具的最终回答会在工具轮结束后与来源卡片一同展示，避免工具调用前的准备文字混入正文。来源卡片说明资料实际被读取过，不宣称对自由文本完成逐句语义证明。
+语义规划器使用与主对话相同的模型配置、关闭思考并限制输出为 JSON；它可以将“王冰”“黑龙套”等口语改写为多个候选词，但不能输出实体 ID、数值或网页结论。Rust 限制实体数、候选词、实体类别与 section 白名单，再查询本地库；多个同分精确命中保留为歧义，只有“整套制作材料”这类可并列回答的防具套装会自动读取多个目标。规划结果只保存在内存两分钟，数据库仍在每一轮重新读取，避免知识包更新后使用陈旧事实。
+
+每轮只保存当前 turn 的短时来源账本，包含知识域、实体或文档 ID、来源、游戏版本、知识包版本与来源层级。来源层级只能由 Rust 从**实际读取**的工具结果写入：固定 section 原始行、`read_knowledge_result` 读取的文本/实体，或本地文件分析；`search_knowledge`、`lookup_game_entities` 和 `search_game_sources` 都只是候选，不产生来源卡片。同一来源返回多条原始行时按来源身份合并为一张卡片。模型不能伪造来源层级，也不接收用于向用户展示的内部 ID。普通对话可以流式输出；已调用资料工具的最终回答会在工具轮结束后与来源卡片一同展示，避免工具调用前的准备文字混入正文。来源卡片说明资料实际被读取过，不宣称对自由文本完成逐句语义证明。
 
 建议的首批 Tauri command：
 
@@ -546,7 +550,7 @@ AcumodData/knowledge/
 - `confirm_agent_action_plan` / `cancel_agent_action_plan`：按 `planId` 确认或丢弃 Rust 内存中的计划。
 - `create_agent_cleanup_plan`：把用户在审查卡片中的候选选择提交给 Rust，换取普通短时操作计划；前端不能直接应用排除项。
 - `get_knowledge_status` / `install_knowledge_pack` / `delete_knowledge_pack`：供设置页管理可选知识包，不经过模型工具循环。
-- `search_knowledge`：开发验收和 AcuAI 共用的固定全文查询入口，只接收文本、知识域和结果数，不接收 SQL；Acumod 功能问句使用 `acumod-help` 域。
+- `search_knowledge` / `read_knowledge_result`：前者只搜索候选，后者必须携带候选返回的包和结果 ID，才可读取受 16K 字符上限保护的全文或结构化实体并成为回答来源；两者都不接收 SQL。
 - `lookup_game_entities` / `get_game_entity_data`：AcuAI 按名称、别名或稳定 ID查询固定 `mhwdata`；前者返回基础 CSV 行，后者返回固定 section 的关联源行；两者不读取文本包，也不接受任意 SQL。
 
 `AgentEvent` 使用有序 Channel 而不是全局广播事件，避免多个窗口或会话串线。当前类型为 `started`、`textDelta`、`toolStarted`、`toolFinished`、`cleanupReviewReady`、`planReady`、`knowledgeEvidenceReady`、`completed` 和 `failed`；`knowledgeEvidenceReady` 只携带 Rust 根据实际工具结果生成的来源元数据。每项携带 `turnId` 与递增序号，前端不解析 DeepSeek 原始 SSE、原始工具参数或模型内部引用。第一版不提供停止生成；单次请求设置总超时，进行中禁用重复发送。

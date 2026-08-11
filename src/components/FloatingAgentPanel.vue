@@ -432,10 +432,13 @@ function cleanupRiskLabel(item: AgentCleanupReviewItem) {
 }
 
 function knowledgeEvidenceMeta(item: AgentKnowledgeEvidence) {
-  if (item.packId === "acumod-local-analysis") {
-    return `${item.sourceTitle || "Acumod 本地 MOD 分析器"} · 分析器 ${item.packVersion}`;
-  }
-  return `${item.sourceTitle || "本地已验证知识"} · 游戏 ${item.gameVersion} · 可信度 ${Math.round(item.confidence * 100)}%`;
+  const tier = {
+    localVerified: "本地数值资料",
+    localReference: "本地参考资料",
+    localAnalysis: "本地文件分析",
+    webReference: "联网参考资料",
+  }[item.sourceTier];
+  return `${tier} · ${item.sourceTitle || item.packId} · ${item.gameVersion} · 可信度 ${Math.round(item.confidence * 100)}%`;
 }
 
 function formatFileSize(sizeBytes: number) {
@@ -727,7 +730,7 @@ onBeforeUnmount(() => {
             v-if="message.role === 'assistant' && message.knowledgeEvidence.length"
             class="knowledge-evidence-card"
           >
-            <summary>本次回答的知识来源（{{ message.knowledgeEvidence.length }}）</summary>
+            <summary>本次实际资料来源（{{ message.knowledgeEvidence.length }}）</summary>
             <ul>
               <li v-for="item in message.knowledgeEvidence" :key="item.evidenceId">
                 <a

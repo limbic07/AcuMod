@@ -10,24 +10,16 @@ use crate::{
     storage::config,
 };
 
-use super::{
-    cleanup, source_search, AgentActionPlan, AgentCoordinator, AgentKnowledgeClaim,
-    AgentKnowledgeEvidence,
-};
+use super::{cleanup, source_search, AgentActionPlan, AgentCoordinator, AgentKnowledgeEvidence};
 
 const DEFAULT_RESULT_LIMIT: usize = 100;
 const MAX_RESULT_LIMIT: usize = 100;
-const MAX_CLAIM_HINTS_PER_EVIDENCE: usize = 16;
-const MAX_CLAIM_HINTS_PER_TOOL_RESULT: usize = 60;
 
 pub(crate) struct ToolExecution {
     pub content: String,
     pub plan: Option<AgentActionPlan>,
     pub cleanup_review: Option<cleanup::AgentCleanupReview>,
-    /// 标记本轮已实际查询知识包或执行本地 MOD 分析，即使查询结果为空。
-    pub knowledge_query_performed: bool,
     pub knowledge_evidence: Vec<AgentKnowledgeEvidence>,
-    pub knowledge_claims: Vec<AgentKnowledgeClaim>,
 }
 
 impl ToolExecution {
@@ -36,24 +28,17 @@ impl ToolExecution {
             content,
             plan: None,
             cleanup_review: None,
-            knowledge_query_performed: false,
             knowledge_evidence: Vec::new(),
-            knowledge_claims: Vec::new(),
         }
     }
 
-    fn knowledge_query(
-        content: String,
-        knowledge_evidence: Vec<AgentKnowledgeEvidence>,
-        knowledge_claims: Vec<AgentKnowledgeClaim>,
-    ) -> Self {
+    /// 知识来源由 Rust 按实际工具结果记录，模型无需拼接内部引用标记。
+    fn knowledge_query(content: String, knowledge_evidence: Vec<AgentKnowledgeEvidence>) -> Self {
         Self {
-            content: with_claim_hints(content, &knowledge_claims),
+            content,
             plan: None,
             cleanup_review: None,
-            knowledge_query_performed: true,
             knowledge_evidence,
-            knowledge_claims,
         }
     }
 
@@ -72,9 +57,7 @@ impl ToolExecution {
             content,
             plan: Some(plan),
             cleanup_review: None,
-            knowledge_query_performed: false,
             knowledge_evidence: Vec::new(),
-            knowledge_claims: Vec::new(),
         })
     }
 
@@ -90,96 +73,8 @@ impl ToolExecution {
             content,
             plan: None,
             cleanup_review: Some(review),
-            knowledge_query_performed: false,
             knowledge_evidence: Vec::new(),
-            knowledge_claims: Vec::new(),
         })
-    }
-}
-
-/// 将可核验的标量字段显式交给模型，避免它猜测相对于证据快照的 JSON 指针。
-fn with_claim_hints(content: String, claims: &[AgentKnowledgeClaim]) -> String {
-    if claims.is_empty() {
-        return content;
-    }
-    let Ok(mut value) = serde_json::from_str::<Value>(&content) else {
-        return content;
-    };
-    let Some(object) = value.as_object_mut() else {
-        return content;
-    };
-    let mut total = 0;
-    let hints = claims
-        .iter()
-        .map(|claim| {
-            let mut fields = Vec::new();
-            collect_claim_hint_fields(
-                &claim.data,
-                "",
-                &mut fields,
-                &mut total,
-                MAX_CLAIM_HINTS_PER_EVIDENCE,
-            );
-            json!({ "evidenceId": claim.evidence_id, "fields": fields })
-        })
-        .collect::<Vec<_>>();
-    object.insert("claimHints".to_string(), Value::Array(hints));
-    serde_json::to_string(&value).unwrap_or(content)
-}
-
-fn collect_claim_hint_fields(
-    value: &Value,
-    pointer: &str,
-    fields: &mut Vec<Value>,
-    total: &mut usize,
-    per_evidence_limit: usize,
-) {
-    if *total >= MAX_CLAIM_HINTS_PER_TOOL_RESULT || fields.len() >= per_evidence_limit {
-        return;
-    }
-    match value {
-        Value::String(value) if !value.is_empty() => {
-            fields.push(json!({ "pointer": pointer, "value": value }));
-            *total += 1;
-        }
-        Value::Number(value) => {
-            fields.push(json!({ "pointer": pointer, "value": value }));
-            *total += 1;
-        }
-        Value::Bool(value) => {
-            fields.push(json!({ "pointer": pointer, "value": value }));
-            *total += 1;
-        }
-        Value::Array(values) => {
-            for (index, item) in values.iter().enumerate() {
-                collect_claim_hint_fields(
-                    item,
-                    &format!("{pointer}/{index}"),
-                    fields,
-                    total,
-                    per_evidence_limit,
-                );
-                if *total >= MAX_CLAIM_HINTS_PER_TOOL_RESULT || fields.len() >= per_evidence_limit {
-                    break;
-                }
-            }
-        }
-        Value::Object(values) => {
-            for (key, item) in values {
-                let key = key.replace('~', "~0").replace('/', "~1");
-                collect_claim_hint_fields(
-                    item,
-                    &format!("{pointer}/{key}"),
-                    fields,
-                    total,
-                    per_evidence_limit,
-                );
-                if *total >= MAX_CLAIM_HINTS_PER_TOOL_RESULT || fields.len() >= per_evidence_limit {
-                    break;
-                }
-            }
-        }
-        Value::Null | Value::String(_) => {}
     }
 }
 
@@ -343,22 +238,6 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
-                "name": "lookup_mhw_terms",
-                "description": "查询内置 MHW 简体中文、繁体中文游戏名称和资源 ID。用于核对武器、防具、发型等游戏术语。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 30 }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": false
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
                 "name": "get_mod_remap_options",
                 "description": "按稳定 MOD ID 查询可改绑分组和目标。模型改绑前必须先调用；query 可按游戏名称或资源 ID 缩小目标。",
                 "parameters": {
@@ -456,7 +335,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "search_knowledge",
-                "description": "查询已安装的 MOD 制作技术、游戏攻略和 Acumod 使用说明文本包。精确游戏数值、掉率、肉质、装备属性和任务报酬必须改用 lookup_game_entities 与 get_game_entity_relations；本工具不查询 MHWData 数值数据库。",
+                "description": "查询已安装的 MOD 制作技术、游戏攻略和 Acumod 使用说明文本包。精确游戏数值、掉率、肉质、装备属性和任务报酬可结合 lookup_game_entities 与 get_game_entity_data；本工具不查询 MHWData 数值数据库。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -477,7 +356,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "lookup_game_entities",
-                "description": "在固定版 MHWorldData 本地数据库中按简体、繁体、英文名、别名或稳定 ID 查询游戏实体。返回上游 CSV 的基础行；精确数值、装备、素材、怪物、任务和技能问题必须先用此工具消歧。",
+                "description": "在固定版 MHWorldData 本地数据库中按简体、繁体、英文名、别名或稳定 ID 查询游戏实体。返回上游 CSV 的基础行，可用于识别精确的装备、素材、怪物、任务和技能数据。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -498,42 +377,17 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
-                "name": "compare_game_entities",
-                "description": "按已查询到的稳定 MHWData 实体 ID 批量读取 2 至 4 个基础 CSV 行，用于比较武器、防具、护石、怪物或素材。必须先调用 lookup_game_entities 消歧；不会自行推断哪个更适合玩家。",
+                "name": "get_game_entity_data",
+                "description": "读取一个 MHWData 游戏实体的关联原始行。sections 可按数据区段过滤：武器常用 weapon.sharpness、weapon.crafting；防具常用 armor.skills、armor.crafting；怪物常用 monster.weaknesses、monster.hitzones、monster.rewards；任务常用 quest.monsters、quest.rewards；技能常用 skill.levels。省略 sections 时返回该实体的关联数据。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "entityIds": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "minItems": 2,
-                            "maxItems": 4
-                        }
-                    },
-                    "required": ["entityIds"],
-                    "additionalProperties": false
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "get_game_entity_relations",
-                "description": "读取精确实体关联的 MHWorldData 原始 CSV 行。predicates 是固定 section：武器用 weapon.sharpness、weapon.crafting；防具用 armor.skills、armor.crafting；怪物用 monster.weaknesses、monster.hitzones、monster.rewards；任务用 quest.monsters、quest.rewards；技能用 skill.levels；素材可先查 item 再读取关联的 crafting、rewards 或 location.items 行。没有返回的字段不得推断。必须使用 lookup_game_entities 返回的稳定 entityId。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "entityId": { "type": "string", "description": "lookup_game_entities 返回的稳定实体 ID" },
-                        "predicates": {
+                        "entityId": { "type": "string", "description": "要读取的稳定游戏实体 ID" },
+                        "sections": {
                             "type": "array",
                             "items": { "type": "string" },
                             "maxItems": 24,
                             "description": "可选 MHWData section 过滤；不确定时省略"
-                        },
-                        "direction": {
-                            "type": "string",
-                            "enum": ["outgoing", "incoming", "both"],
-                            "description": "为兼容调用保留；MHWData 始终返回与该实体关联的原始行"
                         },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
                     },
@@ -546,7 +400,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "get_armor_set_crafting",
-                "description": "读取一个已消歧防具套装的完整五部位制作配方。仅接受 lookup_game_entities 返回的 armorSet 稳定 ID；返回每件的 MHWData armor.crafting 原始行和同库中文材料名称桥。用户问“整套需要多少材料”时优先使用。",
+                "description": "读取一个防具套装的完整五部位制作配方。返回每件的 MHWData armor.crafting 原始行和同库中文材料名称桥；用户问“整套需要多少材料”时适合使用。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -572,6 +426,21 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "search_game_sources",
+                "description": "联网搜索 MHW 游戏资料补充页面。只返回经 Rust 白名单校验的 Kiranico MHW 数据库、MHWorldData 上游项目或 Monster Hunter 官方页面；结果仅为联网参考，不会下载文件或执行本地操作。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "需要补充的 MHW / MHWI 游戏知识问题" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
     ]
 }
 
@@ -581,7 +450,6 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "get_mod_details" => "读取 MOD 详情",
         "get_enabled_conflicts" => "分析启用冲突",
         "get_game_directory_status" => "检查游戏目录",
-        "lookup_mhw_terms" => "查询 MHW 术语",
         "get_mod_remap_options" => "查询模型改绑目标",
         "create_mod_action_plan" => "生成 MOD 操作计划",
         "create_conflict_order_plan" => "生成冲突优先级计划",
@@ -594,9 +462,10 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "analyze_installed_mod" => "分析 MOD 文件",
         "search_knowledge" => "查询 MHW 知识库",
         "lookup_game_entities" => "查询游戏实体",
-        "get_game_entity_relations" => "查询游戏实体关系",
+        "get_game_entity_data" => "读取游戏实体数据",
         "get_armor_set_crafting" => "查询整套防具制作配方",
         "search_mod_sources" => "联网搜索 MOD",
+        "search_game_sources" => "联网搜索游戏资料",
         _ => "处理 AI 请求",
     }
 }
@@ -634,19 +503,6 @@ pub(crate) async fn execute_tool(
                     "message": status.message
                 })
                 .to_string(),
-            ))
-        }
-        "lookup_mhw_terms" => {
-            let args = parse_arguments::<LookupTermsArgs>(arguments)?;
-            let limit = normalized_limit(args.limit);
-            let query = args.query;
-            let terms = tauri::async_runtime::spawn_blocking(move || {
-                model_recognition::search_game_terms(&query, limit)
-            })
-            .await
-            .map_err(|error| format!("MHW 术语查询任务失败：{error}"))??;
-            Ok(ToolExecution::query(
-                json!({ "ok": true, "terms": terms }).to_string(),
             ))
         }
         "get_mod_remap_options" => {
@@ -820,9 +676,8 @@ pub(crate) async fn execute_tool(
             .await
             .map_err(|error| format!("MOD 文件分析任务失败：{error}"))??;
             let evidence = mod_analysis_evidence(&report.0);
-            let claims = mod_analysis_claims(&report.0, &evidence);
             mod_analysis_tool_result(report.0, report.1, &evidence)
-                .map(|content| ToolExecution::knowledge_query(content, evidence, claims))
+                .map(|content| ToolExecution::knowledge_query(content, evidence))
         }
         "search_knowledge" => {
             let args = parse_arguments::<SearchKnowledgeArgs>(arguments)?;
@@ -840,7 +695,6 @@ pub(crate) async fn execute_tool(
                 serde_json::to_string(&json!({ "ok": true, "knowledge": result }))
                     .map_err(|error| format!("无法序列化知识库结果：{error}"))?,
                 evidence,
-                Vec::new(),
             ))
         }
         "lookup_game_entities" => {
@@ -857,69 +711,31 @@ pub(crate) async fn execute_tool(
             .await
             .map_err(|error| format!("游戏实体查询任务失败：{error}"))??;
             let evidence = entity_evidence(&result);
-            let claims = entity_claims(&result);
             Ok(ToolExecution::knowledge_query(
                 serde_json::to_string(&json!({ "ok": true, "entities": result }))
                     .map_err(|error| format!("无法序列化游戏实体结果：{error}"))?,
                 evidence,
-                claims,
             ))
         }
-        "compare_game_entities" => {
-            let args = parse_arguments::<CompareGameEntitiesArgs>(arguments)?;
-            let entity_ids = normalized_comparison_entity_ids(args.entity_ids)?;
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                let mut entities = Vec::with_capacity(entity_ids.len());
-                let mut warnings = Vec::new();
-                for entity_id in entity_ids {
-                    let root = knowledge::knowledge_root()?;
-                    let response = mhwdata::lookup_game_entities(&root, &entity_id, None, 4)?;
-                    warnings.extend(response.warnings);
-                    let entity = response
-                        .matches
-                        .into_iter()
-                        .find(|item| item.entity_id == entity_id)
-                        .ok_or_else(|| format!("未找到用于比较的精确游戏实体：{entity_id}"))?;
-                    entities.push(entity);
-                }
-                Ok::<_, String>((entities, warnings))
-            })
-            .await
-            .map_err(|error| format!("游戏实体比较任务失败：{error}"))??;
-            let evidence = entity_evidence_matches(&result.0);
-            let claims = entity_claims_matches(&result.0);
-            Ok(ToolExecution::knowledge_query(
-                serde_json::to_string(&json!({
-                    "ok": true,
-                    "entities": result.0,
-                    "warnings": result.1,
-                }))
-                .map_err(|error| format!("无法序列化游戏实体比较结果：{error}"))?,
-                evidence,
-                claims,
-            ))
-        }
-        "get_game_entity_relations" => {
-            let args = parse_arguments::<GetGameEntityRelationsArgs>(arguments)?;
+        "get_game_entity_data" => {
+            let args = parse_arguments::<GetGameEntityDataArgs>(arguments)?;
             let result = tauri::async_runtime::spawn_blocking(move || {
                 let root = knowledge::knowledge_root()?;
                 mhwdata::get_game_entity_relations(
                     &root,
                     &args.entity_id,
-                    args.predicates.as_deref(),
-                    args.direction.as_deref().unwrap_or("both"),
+                    args.sections.as_deref(),
+                    "both",
                     args.limit.unwrap_or(30),
                 )
             })
             .await
             .map_err(|error| format!("游戏实体关系查询任务失败：{error}"))??;
             let evidence = relation_evidence(&result);
-            let claims = relation_claims(&result);
             Ok(ToolExecution::knowledge_query(
                 serde_json::to_string(&json!({ "ok": true, "relations": result }))
                     .map_err(|error| format!("无法序列化游戏关系结果：{error}"))?,
                 evidence,
-                claims,
             ))
         }
         "get_armor_set_crafting" => {
@@ -931,12 +747,10 @@ pub(crate) async fn execute_tool(
             .await
             .map_err(|error| format!("防具套装制作查询任务失败：{error}"))??;
             let evidence = relation_evidence(&result);
-            let claims = relation_claims(&result);
             Ok(ToolExecution::knowledge_query(
                 serde_json::to_string(&json!({ "ok": true, "armorSetCrafting": result }))
                     .map_err(|error| format!("无法序列化防具套装制作结果：{error}"))?,
                 evidence,
-                claims,
             ))
         }
         "search_mod_sources" => {
@@ -966,6 +780,23 @@ pub(crate) async fn execute_tool(
                     "results": values
                 })
                 .to_string(),
+            ))
+        }
+        "search_game_sources" => {
+            let args = parse_arguments::<SearchGameSourcesArgs>(arguments)?;
+            let key = super::require_deepseek_api_key()?;
+            let model = config::load(app)?.deep_seek_model;
+            let results = source_search::search_game_sources(&key, model, &args.query).await?;
+            let evidence = game_source_evidence(&results);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({
+                    "ok": true,
+                    "resultCount": results.len(),
+                    "results": results,
+                    "sourceTier": "webReference"
+                }))
+                .map_err(|error| format!("无法序列化联网游戏资料结果：{error}"))?,
+                evidence,
             ))
         }
         _ => Err("模型请求了未开放的工具。".to_string()),
@@ -1000,13 +831,6 @@ struct ConflictArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmptyArgs {}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LookupTermsArgs {
-    query: String,
-    limit: Option<usize>,
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1078,6 +902,12 @@ struct SearchModSourcesArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SearchGameSourcesArgs {
+    query: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SearchKnowledgeArgs {
     query: String,
     domains: Option<Vec<String>>,
@@ -1094,16 +924,9 @@ struct LookupGameEntitiesArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompareGameEntitiesArgs {
-    entity_ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GetGameEntityRelationsArgs {
+struct GetGameEntityDataArgs {
     entity_id: String,
-    predicates: Option<Vec<String>>,
-    direction: Option<String>,
+    sections: Option<Vec<String>>,
     limit: Option<usize>,
 }
 
@@ -1126,25 +949,6 @@ fn parse_arguments<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, S
     serde_json::from_str(arguments).map_err(|error| format!("AI 工具参数格式无效：{error}"))
 }
 
-fn normalized_comparison_entity_ids(entity_ids: Vec<String>) -> Result<Vec<String>, String> {
-    if !(2..=4).contains(&entity_ids.len()) {
-        return Err("游戏实体比较需要 2 到 4 个稳定实体 ID。".to_string());
-    }
-    let mut result = Vec::with_capacity(entity_ids.len());
-    let mut seen = HashSet::new();
-    for entity_id in entity_ids {
-        let entity_id = entity_id.trim();
-        if entity_id.is_empty() || entity_id.chars().count() > 240 {
-            return Err("游戏实体比较包含无效的实体 ID。".to_string());
-        }
-        if !seen.insert(entity_id.to_string()) {
-            return Err("游戏实体比较不能包含重复实体 ID。".to_string());
-        }
-        result.push(entity_id.to_string());
-    }
-    Ok(result)
-}
-
 fn search_evidence(result: &knowledge::KnowledgeSearchResponse) -> Vec<AgentKnowledgeEvidence> {
     result
         .matches
@@ -1158,6 +962,7 @@ fn search_evidence(result: &knowledge::KnowledgeSearchResponse) -> Vec<AgentKnow
             source_url: item.source_url.clone(),
             pack_id: item.pack_id.clone(),
             pack_version: item.pack_version.clone(),
+            source_tier: "localReference".to_string(),
         })
         .collect()
 }
@@ -1185,26 +990,7 @@ fn entity_evidence_matches(
             source_url: item.source_url.clone(),
             pack_id: item.pack_id.clone(),
             pack_version: item.pack_version.clone(),
-        })
-        .collect()
-}
-
-fn entity_claims(result: &knowledge::KnowledgeEntityLookupResponse) -> Vec<AgentKnowledgeClaim> {
-    entity_claims_matches(&result.matches)
-}
-
-fn entity_claims_matches(matches: &[knowledge::KnowledgeEntityMatch]) -> Vec<AgentKnowledgeClaim> {
-    matches
-        .iter()
-        .map(|item| AgentKnowledgeClaim {
-            evidence_id: format!("{}:{}:{}", item.pack_id, item.pack_version, item.entity_id),
-            data: json!({
-                "entityId": item.entity_id,
-                "canonicalName": item.canonical_name,
-                "nameZhHans": item.name_zh_hans,
-                "nameZhHant": item.name_zh_hant,
-                "data": item.data,
-            }),
+            source_tier: "localVerified".to_string(),
         })
         .collect()
 }
@@ -1228,27 +1014,27 @@ fn relation_evidence(result: &knowledge::KnowledgeRelationResponse) -> Vec<Agent
             source_url: item.source_url.clone(),
             pack_id: item.pack_id.clone(),
             pack_version: item.pack_version.clone(),
+            source_tier: "localVerified".to_string(),
         })
         .collect()
 }
 
-fn relation_claims(result: &knowledge::KnowledgeRelationResponse) -> Vec<AgentKnowledgeClaim> {
-    result
-        .relations
+fn game_source_evidence(
+    results: &[source_search::GameSourceSearchResult],
+) -> Vec<AgentKnowledgeEvidence> {
+    results
         .iter()
-        .map(|item| AgentKnowledgeClaim {
-            evidence_id: format!(
-                "{}:{}:{}",
-                item.pack_id, item.pack_version, item.relation_id
-            ),
-            data: json!({
-                "subjectId": item.subject_id,
-                "subjectName": item.subject_name,
-                "predicate": item.predicate,
-                "objectId": item.object_id,
-                "objectName": item.object_name,
-                "data": item.data,
-            }),
+        .map(|item| AgentKnowledgeEvidence {
+            // URL 已经过 Rust 的精确来源校验；网页摘要依旧只作为联网参考。
+            evidence_id: format!("game-web:{}", item.url),
+            title: item.title.clone(),
+            game_version: "联网参考".to_string(),
+            confidence: item.confidence,
+            source_title: Some(item.source.clone()),
+            source_url: Some(item.url.clone()),
+            pack_id: "game-web".to_string(),
+            pack_version: "live".to_string(),
+            source_tier: "webReference".to_string(),
         })
         .collect()
 }
@@ -1271,6 +1057,7 @@ fn mod_analysis_evidence(report: &mod_analysis::ModAnalysisReport) -> Vec<AgentK
         source_url: None,
         pack_id: "acumod-local-analysis".to_string(),
         pack_version: report.analyzer_version.to_string(),
+        source_tier: "localAnalysis".to_string(),
     }];
     evidence.extend(
         report
@@ -1285,35 +1072,10 @@ fn mod_analysis_evidence(report: &mod_analysis::ModAnalysisReport) -> Vec<AgentK
                 source_url: item.source_url.clone(),
                 pack_id: item.pack_id.clone(),
                 pack_version: item.pack_version.clone(),
+                source_tier: "localReference".to_string(),
             }),
     );
     evidence
-}
-
-fn mod_analysis_claims(
-    report: &mod_analysis::ModAnalysisReport,
-    evidence: &[AgentKnowledgeEvidence],
-) -> Vec<AgentKnowledgeClaim> {
-    let Some(local_evidence) = evidence
-        .iter()
-        .find(|item| item.pack_id == "acumod-local-analysis")
-    else {
-        return Vec::new();
-    };
-    vec![AgentKnowledgeClaim {
-        evidence_id: local_evidence.evidence_id.clone(),
-        data: json!({
-            "modId": report.mod_id,
-            "modName": report.mod_name,
-            "fileCount": report.file_count,
-            "recognizedFileCount": report.recognized_file_count,
-            "unknownFileCount": report.unknown_file_count,
-            "componentCount": report.component_count,
-            "components": report.components,
-            "dependencies": report.edges,
-            "warnings": report.warnings,
-        }),
-    }]
 }
 
 fn mod_analysis_tool_result(
@@ -1709,9 +1471,8 @@ fn pagination_bounds(total: usize, offset: usize, limit: usize) -> (usize, usize
 #[cfg(test)]
 mod tests {
     use super::{
-        mod_analysis_evidence, mod_analysis_tool_result, normalized_comparison_entity_ids,
-        normalized_limit, pagination_bounds, tool_definitions, with_claim_hints,
-        AgentKnowledgeClaim, AnalyzeInstalledModArgs, DEFAULT_RESULT_LIMIT, MAX_RESULT_LIMIT,
+        mod_analysis_evidence, mod_analysis_tool_result, normalized_limit, pagination_bounds,
+        tool_definitions, AnalyzeInstalledModArgs, DEFAULT_RESULT_LIMIT, MAX_RESULT_LIMIT,
     };
     use crate::services::mod_analysis::{ModAnalysisReport, ModKnowledgeEvidence};
 
@@ -1776,6 +1537,7 @@ mod tests {
             evidence[0].source_title.as_deref(),
             Some("Acumod 本地 MOD 分析器")
         );
+        assert_eq!(evidence[0].source_tier, "localAnalysis");
         assert_eq!(evidence[1].evidence_id, "mhw-modding:dev:modding-mod3");
 
         let content = mod_analysis_tool_result(
@@ -1797,43 +1559,18 @@ mod tests {
     }
 
     #[test]
-    fn structured_claim_hints_expose_bounded_json_pointers() {
-        let content = with_claim_hints(
-            r#"{"ok":true}"#.to_string(),
-            &[AgentKnowledgeClaim {
-                evidence_id: "test:entity".to_string(),
-                data: serde_json::json!({
-                    "nameZhHans": "测试大剑",
-                    "data": { "attack": 624, "isCraftable": true }
-                }),
-            }],
-        );
-        let value = serde_json::from_str::<serde_json::Value>(&content).unwrap();
-        let fields = value["claimHints"][0]["fields"].as_array().unwrap();
-        assert!(fields
-            .iter()
-            .any(|field| { field["pointer"] == "/data/attack" && field["value"] == 624 }));
-        assert!(fields
-            .iter()
-            .any(|field| { field["pointer"] == "/data/isCraftable" && field["value"] == true }));
-    }
+    fn game_data_tools_are_consolidated_for_the_agent() {
+        let names = tool_definitions()
+            .into_iter()
+            .filter_map(|item| item["function"]["name"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
 
-    #[test]
-    fn comparison_requires_unique_stable_entity_ids() {
-        assert_eq!(
-            normalized_comparison_entity_ids(vec![
-                "game-weapon:0:136".to_string(),
-                "game-weapon:0:137".to_string(),
-            ])
-            .unwrap(),
-            ["game-weapon:0:136", "game-weapon:0:137"]
-        );
-        assert!(normalized_comparison_entity_ids(vec!["one".to_string()]).is_err());
-        assert!(
-            normalized_comparison_entity_ids(vec!["one".to_string(), "one".to_string()]).is_err()
-        );
-        assert!(tool_definitions()
-            .iter()
-            .any(|item| item["function"]["name"] == "compare_game_entities"));
+        assert!(names.contains(&"lookup_game_entities".to_string()));
+        assert!(names.contains(&"get_game_entity_data".to_string()));
+        assert!(names.contains(&"get_armor_set_crafting".to_string()));
+        assert!(names.contains(&"search_game_sources".to_string()));
+        assert!(!names.contains(&"lookup_mhw_terms".to_string()));
+        assert!(!names.contains(&"compare_game_entities".to_string()));
+        assert!(!names.contains(&"get_game_entity_relations".to_string()));
     }
 }

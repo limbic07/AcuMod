@@ -10,39 +10,30 @@ use tauri::AppHandle;
 use crate::storage::config::DeepSeekModel;
 
 use super::{
-    tools, AgentConnectionResult, AgentCoordinator, AgentEventSender, AgentKnowledgeClaim,
-    AgentKnowledgeEvidence,
+    tools, AgentConnectionResult, AgentCoordinator, AgentEventSender, AgentKnowledgeEvidence,
 };
 
 const DEEPSEEK_CHAT_URL: &str = "https://api.deepseek.com/chat/completions";
 const MAX_TOOL_ROUNDS: usize = 24;
 const MAX_HISTORY_MESSAGES: usize = 48;
-const MAX_KNOWLEDGE_ANSWER_REPAIR_ATTEMPTS: usize = 1;
-const MAX_KNOWLEDGE_TOOL_REQUIREMENT_ATTEMPTS: usize = 1;
-// 一套防具的五件配方和前置消歧可自然超过 20 条；截断会让模型拿到的 ID
-// 在最后校验时消失。上限仍防止异常工具循环把来源列表无限扩大。
+// 一轮可能读取多个原始行；界面只需要展示去重后的实际资料来源，防止来源区无限增长。
 const MAX_KNOWLEDGE_EVIDENCE: usize = 100;
-const MAX_KNOWLEDGE_CLAIMS: usize = 100;
-const KNOWLEDGE_EVIDENCE_MARKER_PREFIX: &str = "[[evidence:";
-const KNOWLEDGE_CLAIM_MARKER_PREFIX: &str = "[[claim:";
-const KNOWLEDGE_SAFE_FAILURE_REPLY: &str = "当前已安装的知识包没有返回可核验资料，因此我不会根据记忆补充这条结论。请安装对应知识包，或补充更明确的游戏版本、任务、装备或 MOD 信息后重试。";
-const TASK_UNLOCK_PROMPT: &str = "当前固定版 MHWData 不提供任务前置/解锁链数据。任务解锁问题只能查询任务基础行、目标和报酬作为背景；不能据此推断前置、等级、NPC 或活动开放条件。若用户需要明确解锁链，应说明当前本地数据尚未覆盖。";
 const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置助手 AcuAI，面向简体中文的 Monster Hunter: World 用户。
-你只能使用 Acumod 提供的本地 MOD、冲突、游戏目录状态、模型改绑、MHW 术语和受控 MOD 来源工具。涉及当前本地状态时必须先调用工具，不得凭空猜测。
+你只能使用 Acumod 提供的本地 MOD、冲突、游戏目录状态、模型改绑、MHWData、文本知识和受控联网来源工具。涉及当前本地状态时必须先调用工具，不得凭空猜测。
 只读工具可以直接调用。启用、禁用、卸载、冲突优先级和模型改绑只能调用对应的 create_*_plan 工具生成待确认计划，绝不能声称已经执行，也不能绕过计划直接修改数据。
 创建计划前必须先用查询工具取得稳定 MOD ID 和当前状态。名称匹配不唯一、目标不完整或用户意图含糊时先追问，禁止自行选择。冲突顺序必须提交组内全部成员，数组越靠前优先级越高。模型改绑必须先查询精确 groupKey 和 targetId；人物语音只支持识别，不能改绑。
 用户确认或取消由 Acumod 界面处理，不需要再次调用工具。任意文件操作和其它未列出的写操作仍未开放。
-用户表达“搜索、寻找、推荐、帮我找”等获取 MOD 的意图时，先用 lookup_mhw_terms 核对可能误译的游戏术语，再调用 search_mod_sources。候选必须显示来源、来源类型、访问方式和可点击链接，不得编造链接。所有来源（包括 Nexus Mods、踩蘑菇、3DM、GitHub 等）都只通过系统浏览器打开；用户在原页面自行下载后，再使用 Acumod 的本地文件导入。哔哩哔哩只作为视频或动态分享来源，绝不能声称视频本身是可安装文件，也不能绕过站点登录、会员或下载权限。
+你负责理解用户问题并自行选择资料路径，而不是等待关键词规则分类。精确游戏数据、制作材料、肉质、掉率、武器属性和技能等级优先查询本地 MHWData；打法、路线、条件性配装和机制解释优先查询本地攻略资料，涉及具体游戏数据时再用 MHWData 核对。用户使用简称、别名、繁中或英文名时，先自行理解并用 lookup_game_entities 查询候选；数据库别名只用于提高命中率，不是要求用户使用固定名称。
+本地资料无结果、不完整或无法支撑用户问题时，继续调用 search_game_sources 查询受白名单限制的网页资料。联网资料只能描述为“联网参考”，不能伪装成本地数值库。若本地和联网资料都不足，可以基于训练知识给出参考，但必须在对应段落明确写“以下为模型训练知识，未经过本地或联网资料核验”，不得把它说成确定数值或已验证机制。不要因为本地资料缺失而直接拒绝回答。
+用户表达“搜索、寻找、推荐、帮我找”等获取 MOD 的意图时，调用 search_mod_sources。候选必须显示来源、来源类型、访问方式和可点击链接，不得编造链接。所有来源（包括 Nexus Mods、踩蘑菇、3DM、GitHub 等）都只通过系统浏览器打开；用户在原页面自行下载后，再使用 Acumod 的本地文件导入。哔哩哔哩只作为视频或动态分享来源，绝不能声称视频本身是可安装文件，也不能绕过站点登录、会员或下载权限。
 用户要求扫描或清理无用文件时，必须调用 scan_mod_cleanup_candidates。Rust 已盘点全部可部署文件并完成本地确定性分流，工具只返回证据冲突或不足的模糊文件组；不要要求查看本地规则已确定保留的标准游戏资源。必须复用首次返回的 auditId 按 nextOffset 读取全部页面，再为每个 groupId 提交 remove、review 或 keep 分类；同组文件共享目录、扩展名和规则证据。存在任何保留证据、位于 plugins 等运行目录或用途不确定时优先选择 review 或 keep，不能仅按扩展名建议清理。只有路径和规则证据不足以判断安全纯文本时，才可用 read_mod_cleanup_text 读取一个代表文件，不能为同组每个文件重复读取。最后一次调用 submit_mod_cleanup_review 必须携带 auditId 并覆盖全部 groupId，清理选择和确认由界面处理。若扫描工具已经直接生成审查结果，则不要重复提交；若 total 和 localSuggestedCount 都为 0，则直接说明没有候选，不要提交空审查。
 用户要求恢复清理项时，先调用 get_mod_cleanup_exclusions；恢复操作仍需要生成待确认计划，不能声称已恢复。
-用户询问 MHW 游戏机制、数值、装备、素材、怪物、任务、掉率、肉质或配装时，必须先查询固定版 MHWData 本地数据库：用 lookup_game_entities 消歧，再按问题读取 get_game_entity_relations 返回的原始 CSV 行。用户询问一整套防具的制作材料时，消歧到 armorSet 后必须使用 get_armor_set_crafting，一次取得五个部位，不能自行拼接或遗漏。精确数值绝不能由模型记忆、攻略文本或普通联网搜索补写。固定 section：weapon.sharpness、weapon.crafting；armor.skills、armor.crafting；monster.weaknesses、monster.hitzones、monster.rewards；quest.monsters、quest.rewards；skill.levels；decoration.dropRates。素材获取可先定位 item，再读取关联的 crafting、rewards、location.items 行；返回的行只表示上游表记录，不能把未出现的掉落来源或概率推断出来。MHWData 的内容数值基线是 15.10.00，运行兼容标签为 15.23；回答数值时应说明这一点。它目前不提供完整任务前置/解锁链、调查任务箱子的生成分布、完整采集点生成概率或武器动作值；这些内容没有原始行时必须明确资料缺口。MOD 技术、条件性攻略建议和 Acumod 使用说明才使用 search_knowledge，优先传入 2 至 12 个字的术语。开放推荐可检索 mhw-game-guides，但凡具体点名的装备、技能、素材、怪物、任务或数值，都必须在本轮通过 MHWData 实体或原始行再次核验并附结构化 claim。比较两个到四个已消歧实体时，必须调用 compare_game_entities，不得把模糊名称或不同类别实体自行配对。回答必须引用工具返回的来源；知识包无结果、版本不符或来源不足时明确说明缺口，不能用模型记忆或普通联网搜索补写精确事实。
+MHWData 的内容数值基线是 15.10.00，运行兼容标签为 15.23。`monster.hitzones` 中数值越高表示该伤害类型越有效，例如火 30 比火 20 更弱火。MHWData 没有覆盖完整任务前置/解锁链、调查任务箱子生成、完整采集概率和武器动作值；这不妨碍继续查询联网资料或提供明确标注的训练知识参考。
 用户询问 Acumod 的导入、启用、禁用、冲突、排序、分支组、模型改绑、知识包或 AcuAI 使用方式时，必须优先查询 acumod-help；帮助包缺失时明确说明缺少 Acumod 使用说明，不要根据界面印象编造当前行为。只有用户明确要求执行启用、禁用、卸载、排序或改绑时，才按受控操作流程生成计划。
 用户询问本地某个已安装 MOD 的文件结构、每个文件作用、资源依赖或整体工作方式时，必须先用 search_local_mods 取得唯一稳定 ID，再调用 analyze_installed_mod。工具已经区分二进制解析证据、路径规则和未知项；回答不得提高其可信度，也不得把同目录关联说成已解析的内部引用。用户要求完整逐文件分析时必须按 nextOffset 读取全部页；只询问整体原理时优先使用组件、依赖和知识证据摘要，避免无意义地复述全部路径。
 工具结果中的稳定 ID 和状态是事实来源。不要编造 MOD、游戏术语、文件 ID 或冲突。
-游戏事实、攻略或 MOD 技术问题在没有本轮知识或本地分析证据时，AcuAI 会拒绝展示回答；此时必须调用合适工具或明确说明知识包缺失。
 当用户明确要求“所有”“全部”或完整列表时，必须检查工具返回的 nextOffset；只要 nextOffset 不是 null，就继续分页查询，最终逐项列出全部结果并说明总数，不能只展示部分结果或自行补写未查询条目。
-本轮调用过知识工具后，每个包含具体游戏事实、技术判断或攻略建议的段落末尾必须附上至少一个工具结果中的内部证据标记，格式为 `[[evidence:<完整 evidenceId>]]`。标记会在展示前由 Acumod 移除，不能编造、不能引用本轮未返回的 ID。实体、原始行或本地 MOD 分析工具还会返回可核验字段；回答中使用具体数字、名称、关系或文件统计时，至少附一个字段标记，格式为 `[[claim:<完整 evidenceId>|/JSON/Pointer|JSON值]]`，例如 `[[claim:mhwdata:15.10.00:mhwdata:weapon:2001|/data/attack|624]]`。字段标记中的值必须原样出现在正文，Acumod 会校验后移除。若资料不足，应明确说明缺口并仍为该判断附上相关来源标记。
-回答使用清晰的 Markdown，优先使用短段落、列表和必要的表格，不展示工具 JSON、内部函数名、准备调用工具的说明或推理过程。需要调用工具时，直接调用且 content 留空。"#;
+回答使用清晰的 Markdown，优先使用短段落、列表和必要的表格。不要展示工具 JSON、内部函数名、准备调用工具的说明、内部证据 ID 或推理过程。资料来源由 Acumod 根据本轮实际工具调用自动展示；需要调用工具时，直接调用且 content 留空。"#;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct DeepSeekMessage {
@@ -219,24 +210,17 @@ pub(crate) async fn run_turn(
     sender: &mut AgentEventSender,
 ) -> Result<(Vec<DeepSeekMessage>, String), String> {
     let client = build_client()?;
-    let knowledge_evidence_required = requires_knowledge_evidence(&user_message);
     history.push(DeepSeekMessage::user(user_message));
     let mut visible_reply = String::new();
     let mut knowledge_evidence = Vec::<AgentKnowledgeEvidence>::new();
-    let mut knowledge_claims = Vec::<AgentKnowledgeClaim>::new();
-    let mut knowledge_query_performed = false;
-    let mut knowledge_answer_repair_attempts = 0;
-    let mut knowledge_tool_requirement_attempts = 0;
 
     for _ in 0..MAX_TOOL_ROUNDS {
         let mut request_messages = Vec::with_capacity(history.len() + 1);
-        request_messages.push(DeepSeekMessage::system(format!(
-            "{TASK_UNLOCK_PROMPT}\n{SYSTEM_PROMPT}"
-        )));
+        request_messages.push(DeepSeekMessage::system(SYSTEM_PROMPT));
         request_messages.extend(history.iter().cloned());
 
-        // 知识工具返回后，最终正文必须先通过本轮证据引用校验；否则不能在流中提前展示。
-        let stream_text = knowledge_evidence.is_empty() && !knowledge_evidence_required;
+        // 已读取资料后的最终回答保留到工具轮结束，确保来源卡片与正文在同一轮完成。
+        let stream_text = knowledge_evidence.is_empty();
         let outcome = stream_completion(
             &client,
             api_key,
@@ -251,69 +235,8 @@ pub(crate) async fn run_turn(
             if outcome.content.trim().is_empty() {
                 return Err("DeepSeek 没有返回可显示的回答。".to_string());
             }
-            if knowledge_evidence_required && !knowledge_query_performed {
-                if knowledge_tool_requirement_attempts < MAX_KNOWLEDGE_TOOL_REQUIREMENT_ATTEMPTS {
-                    knowledge_tool_requirement_attempts += 1;
-                    history.push(DeepSeekMessage::assistant(
-                        Some(outcome.content),
-                        Vec::new(),
-                    ));
-                    history.push(DeepSeekMessage::user(
-                        "系统要求：上一条属于游戏事实、攻略或 MOD 技术问题。请先调用合适的知识查询或本地 MOD 分析工具，再基于返回证据重写；知识包没有资料时，明确说明缺口。",
-                    ));
-                    continue;
-                }
-                return Err("该问题需要查询本地知识包或已安装 MOD 分析结果，但 AcuAI 未能取得可核验证据。请确认已安装对应知识包后重试。".to_string());
-            }
-            // 校验集与界面来源列表使用同一批证据，避免回答引用用户无法追溯的截断结果。
             let final_evidence = deduplicate_knowledge_evidence(knowledge_evidence.clone());
-            let final_claims = deduplicate_knowledge_claims(&knowledge_claims, &final_evidence);
-            if knowledge_evidence_required && final_evidence.is_empty() {
-                // 查询成功但没有命中证据时，不能把模型的自由回答当作知识事实。
-                // 由 Rust 生成确定性的缺口说明，保证知识包缺失或资料不足时不猜测。
-                sender.emit(
-                    "textDelta",
-                    Some(KNOWLEDGE_SAFE_FAILURE_REPLY.to_string()),
-                    None,
-                    None,
-                );
-                visible_reply.push_str(KNOWLEDGE_SAFE_FAILURE_REPLY);
-                history.push(DeepSeekMessage::assistant(
-                    Some(KNOWLEDGE_SAFE_FAILURE_REPLY.to_string()),
-                    Vec::new(),
-                ));
-                sender.emit_knowledge_evidence(Vec::new());
-                trim_history(&mut history);
-                return Ok((history, visible_reply));
-            }
-            let final_content = if final_evidence.is_empty() {
-                outcome.content
-            } else {
-                match validate_and_strip_knowledge_markers(
-                    &outcome.content,
-                    &final_evidence,
-                    &final_claims,
-                ) {
-                    Ok(content) => content,
-                    Err(error)
-                        if knowledge_answer_repair_attempts
-                            < MAX_KNOWLEDGE_ANSWER_REPAIR_ATTEMPTS =>
-                    {
-                        knowledge_answer_repair_attempts += 1;
-                        history.push(DeepSeekMessage::assistant(
-                            Some(outcome.content),
-                            Vec::new(),
-                        ));
-                        history.push(DeepSeekMessage::user(format!(
-                            "系统校验未通过：{error}。请只重写上一条知识回答；保留原有 Markdown 内容，并在每个事实或建议段落末尾附上本轮工具结果中的 [[evidence:<完整 evidenceId>]] 标记。若使用了实体、关系或本地 MOD 分析的具体字段，也必须附 [[claim:<完整 evidenceId>|/JSON/Pointer|JSON值]] 标记。"
-                        )));
-                        continue;
-                    }
-                    Err(error) => {
-                        return Err(format!("知识回答引用校验失败：{error}"));
-                    }
-                }
-            };
+            let final_content = outcome.content.trim().to_string();
             if !stream_text {
                 sender.emit("textDelta", Some(final_content.clone()), None, None);
             }
@@ -361,9 +284,7 @@ pub(crate) async fn run_turn(
                     if let Some(review) = result.cleanup_review {
                         sender.emit_cleanup_review(review);
                     }
-                    knowledge_query_performed |= result.knowledge_query_performed;
                     knowledge_evidence.extend(result.knowledge_evidence);
-                    knowledge_claims.extend(result.knowledge_claims);
                     result.content
                 }
                 Err(error) => {
@@ -383,179 +304,6 @@ pub(crate) async fn run_turn(
     Err("AI 工具调用轮次过多，请缩小问题范围后重试。".to_string())
 }
 
-/// 只拦截需要知识证据的事实、攻略、MOD 技术或 Acumod 使用说明问句，避免影响搜索与传统管理操作。
-fn requires_knowledge_evidence(user_message: &str) -> bool {
-    let message = user_message.trim().to_lowercase();
-    if message.is_empty() {
-        return false;
-    }
-    if ["搜索", "寻找", "帮我找", "下载", "链接", "nexus"]
-        .iter()
-        .any(|term| message.contains(term))
-    {
-        return false;
-    }
-    let asks_how_to = ["如何", "怎么", "怎样"]
-        .iter()
-        .any(|term| message.contains(term));
-    let has_acumod_term = ["acumod", "acuai", "mod管理器", "冲突管理", "知识包"]
-        .iter()
-        .any(|term| message.contains(term));
-    let asks_acumod_help = has_acumod_term
-        && [
-            "什么",
-            "作用",
-            "如何",
-            "怎么",
-            "怎样",
-            "为什么",
-            "区别",
-            "规则",
-            "流程",
-            "哪里",
-        ]
-        .iter()
-        .any(|term| message.contains(term));
-    if [
-        "启用", "禁用", "卸载", "删除", "排序", "改绑", "恢复", "导入", "打开",
-    ]
-    .iter()
-    .any(|term| message.contains(term))
-        && !asks_how_to
-        && !asks_acumod_help
-    {
-        return false;
-    }
-
-    // 多轮追问经常只保留“那……呢”“这个呢”等指代词；仍需重新查询，
-    // 避免模型仅凭上一轮记忆继续扩展事实。搜索请求和实际操作已在上方豁免。
-    let is_contextual_follow_up = message.len() <= 32
-        && (["那", "这个", "它", "该", "上述", "前面", "刚才"]
-            .iter()
-            .any(|term| message.starts_with(term))
-            || message.ends_with('呢'));
-    if is_contextual_follow_up {
-        return true;
-    }
-
-    let asks_for_explanation = [
-        "什么",
-        "为何",
-        "为什么",
-        "如何",
-        "怎么",
-        "作用",
-        "区别",
-        "关系",
-        "依赖",
-        "前置",
-        "解锁",
-        "弱点",
-        "掉落",
-        "配装",
-        "推荐",
-        "建议",
-        "路线",
-        "适合",
-        "怎么过",
-        "怎么打",
-        "打法",
-        "准备",
-        "需要什么",
-        "有没有",
-        "想要",
-        "装备",
-        "哪里",
-        "获得",
-        "攻击力",
-        "数值",
-        "属性",
-        "素材",
-    ]
-    .iter()
-    .any(|term| message.contains(term));
-    if !asks_for_explanation {
-        return false;
-    }
-
-    let has_domain_term = [
-        "mhw",
-        "冰原",
-        "聚魔",
-        "怪物",
-        "龙",
-        "兽",
-        "任务",
-        "素材",
-        "矿石",
-        "骨",
-        "爪",
-        "鳞",
-        "玉",
-        "宝珠",
-        "武器",
-        "大剑",
-        "太刀",
-        "片手剑",
-        "双剑",
-        "大锤",
-        "狩猎笛",
-        "长枪",
-        "铳枪",
-        "斩斧",
-        "盾斧",
-        "操虫棍",
-        "轻弩",
-        "重弩",
-        "弓",
-        "防具",
-        "装备",
-        "黑龙",
-        "飞翔爪",
-        "技能",
-        "装饰珠",
-        "护石",
-        "配装",
-        "猎虫",
-        "随从",
-        "猫饭",
-        "地图",
-        "营地",
-        "调和",
-        "mod3",
-        "mrl3",
-        "tex",
-        "dds",
-        "evam",
-        "evwp",
-        "epv",
-        "efx",
-        "timl",
-        "ctc",
-        "ccl",
-        "sobj",
-        "sobjl",
-        "lmt",
-        "gmd",
-        "nativepc",
-        "插件",
-        "飞翔爪",
-        "文件格式",
-        "acumod",
-        "acuai",
-        "mod管理器",
-        "冲突管理",
-        "知识包",
-        "mod库",
-        "分支组",
-        "批量操作",
-        "游戏目录检测",
-    ]
-    .iter()
-    .any(|term| message.contains(term));
-    has_domain_term || (message.contains("mod") && message.contains("文件"))
-}
-
 fn deduplicate_knowledge_evidence(
     evidence: Vec<AgentKnowledgeEvidence>,
 ) -> Vec<AgentKnowledgeEvidence> {
@@ -565,143 +313,6 @@ fn deduplicate_knowledge_evidence(
         .filter(|item| seen.insert(item.evidence_id.clone()))
         .take(MAX_KNOWLEDGE_EVIDENCE)
         .collect()
-}
-
-fn deduplicate_knowledge_claims(
-    claims: &[AgentKnowledgeClaim],
-    evidence: &[AgentKnowledgeEvidence],
-) -> Vec<AgentKnowledgeClaim> {
-    let allowed = evidence
-        .iter()
-        .map(|item| item.evidence_id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let mut seen = std::collections::HashSet::new();
-    claims
-        .iter()
-        .filter(|item| allowed.contains(item.evidence_id.as_str()))
-        .filter(|item| seen.insert(item.evidence_id.clone()))
-        .cloned()
-        .take(MAX_KNOWLEDGE_CLAIMS)
-        .collect()
-}
-
-fn validate_and_strip_knowledge_markers(
-    content: &str,
-    evidence: &[AgentKnowledgeEvidence],
-    claims: &[AgentKnowledgeClaim],
-) -> Result<String, String> {
-    let content = validate_and_strip_knowledge_evidence_markers(content, evidence)?;
-    validate_and_strip_knowledge_claim_markers(&content, claims)
-}
-
-fn validate_and_strip_knowledge_evidence_markers(
-    content: &str,
-    evidence: &[AgentKnowledgeEvidence],
-) -> Result<String, String> {
-    let allowed = evidence
-        .iter()
-        .map(|item| item.evidence_id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let mut output = String::with_capacity(content.len());
-    let mut remaining = content;
-    let mut marker_count = 0;
-
-    while let Some(start) = remaining.find(KNOWLEDGE_EVIDENCE_MARKER_PREFIX) {
-        output.push_str(&remaining[..start]);
-        let marker = &remaining[start + KNOWLEDGE_EVIDENCE_MARKER_PREFIX.len()..];
-        let Some(end) = marker.find("]]") else {
-            return Err("存在未闭合的内部证据标记".to_string());
-        };
-        let evidence_id = marker[..end].trim();
-        if evidence_id.is_empty() {
-            return Err("存在空的内部证据标记".to_string());
-        }
-        if !allowed.contains(evidence_id) {
-            return Err(format!("引用了本轮未返回的证据：{evidence_id}"));
-        }
-        marker_count += 1;
-        remaining = &marker[end + 2..];
-    }
-    output.push_str(remaining);
-
-    if marker_count == 0 {
-        return Err("没有引用本轮知识工具返回的证据".to_string());
-    }
-    let output = output.trim().to_string();
-    if output.is_empty() {
-        return Err("移除内部证据标记后没有可展示的正文".to_string());
-    }
-    Ok(output)
-}
-
-fn validate_and_strip_knowledge_claim_markers(
-    content: &str,
-    claims: &[AgentKnowledgeClaim],
-) -> Result<String, String> {
-    if claims.is_empty() {
-        return Ok(content.to_string());
-    }
-    let allowed = claims
-        .iter()
-        .map(|item| (item.evidence_id.as_str(), &item.data))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut output = String::with_capacity(content.len());
-    let mut remaining = content;
-    let mut validated_values = Vec::new();
-    let mut marker_count = 0;
-
-    while let Some(start) = remaining.find(KNOWLEDGE_CLAIM_MARKER_PREFIX) {
-        output.push_str(&remaining[..start]);
-        let marker = &remaining[start + KNOWLEDGE_CLAIM_MARKER_PREFIX.len()..];
-        let Some(end) = marker.find("]]") else {
-            return Err("存在未闭合的内部字段标记".to_string());
-        };
-        let parts = marker[..end].splitn(3, '|').collect::<Vec<_>>();
-        if parts.len() != 3 {
-            return Err("内部字段标记必须包含证据、JSON 指针和值".to_string());
-        }
-        let evidence_id = parts[0].trim();
-        let pointer = parts[1].trim();
-        if evidence_id.is_empty() || !pointer.starts_with('/') {
-            return Err("内部字段标记的证据或 JSON 指针无效".to_string());
-        }
-        let Some(data) = allowed.get(evidence_id) else {
-            return Err(format!("字段标记引用了本轮不可核验的证据：{evidence_id}"));
-        };
-        let expected = serde_json::from_str::<Value>(parts[2].trim())
-            .map_err(|_| "内部字段标记的 JSON 值无效".to_string())?;
-        let Some(actual) = data.pointer(pointer) else {
-            return Err(format!("字段标记引用了不存在的字段：{pointer}"));
-        };
-        if actual != &expected {
-            return Err(format!("字段标记的值与本轮证据不一致：{pointer}"));
-        }
-        let display = claim_display_value(actual)?;
-        validated_values.push(display);
-        marker_count += 1;
-        remaining = &marker[end + 2..];
-    }
-    output.push_str(remaining);
-
-    if marker_count == 0 {
-        return Err("没有核验实体、关系或本地分析中的具体字段".to_string());
-    }
-    let output = output.trim().to_string();
-    for value in validated_values {
-        if !output.contains(&value) {
-            return Err(format!("已核验字段值未出现在展示正文中：{value}"));
-        }
-    }
-    Ok(output)
-}
-
-fn claim_display_value(value: &Value) -> Result<String, String> {
-    match value {
-        Value::String(value) if !value.is_empty() => Ok(value.clone()),
-        Value::Number(value) => Ok(value.to_string()),
-        Value::Bool(value) => Ok(value.to_string()),
-        _ => Err("内部字段标记暂只支持非空字符串、数字或布尔值".to_string()),
-    }
 }
 
 async fn stream_completion(
@@ -859,9 +470,8 @@ fn trim_history(history: &mut Vec<DeepSeekMessage>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        deduplicate_knowledge_evidence, requires_knowledge_evidence, trim_history,
-        validate_and_strip_knowledge_markers, AgentKnowledgeClaim, AgentKnowledgeEvidence,
-        DeepSeekMessage, MAX_HISTORY_MESSAGES,
+        deduplicate_knowledge_evidence, trim_history, AgentKnowledgeEvidence, DeepSeekMessage,
+        MAX_HISTORY_MESSAGES,
     };
 
     fn knowledge_evidence(id: &str) -> AgentKnowledgeEvidence {
@@ -874,69 +484,21 @@ mod tests {
             source_url: None,
             pack_id: "mhwdata".to_string(),
             pack_version: "dev".to_string(),
+            source_tier: "localVerified".to_string(),
         }
     }
 
     #[test]
-    fn knowledge_answer_requires_and_hides_current_turn_evidence_markers() {
-        let evidence = vec![knowledge_evidence("mhwdata:15.10.00:mhwdata:weapon:2001")];
-        let claims = vec![AgentKnowledgeClaim {
-            evidence_id: "mhwdata:15.10.00:mhwdata:weapon:2001".to_string(),
-            data: serde_json::json!({ "data": { "attack": 624 } }),
-        }];
-        let content = "攻击力是 624。[[evidence:mhwdata:15.10.00:mhwdata:weapon:2001]][[claim:mhwdata:15.10.00:mhwdata:weapon:2001|/data/attack|624]]";
-        assert_eq!(
-            validate_and_strip_knowledge_markers(content, &evidence, &claims).unwrap(),
-            "攻击力是 624。"
-        );
-
-        assert!(validate_and_strip_knowledge_markers("没有引用", &evidence, &claims).is_err());
-        assert!(validate_and_strip_knowledge_markers(
-            "伪造来源。[[evidence:mhwdata:15.10.00:mhwdata:weapon:9999]][[claim:mhwdata:15.10.00:mhwdata:weapon:2001|/data/attack|624]]",
-            &evidence,
-            &claims,
-        )
-        .is_err());
-        assert!(validate_and_strip_knowledge_markers(
-            "错误数值 625。[[evidence:mhwdata:15.10.00:mhwdata:weapon:2001]][[claim:mhwdata:15.10.00:mhwdata:weapon:2001|/data/attack|625]]",
-            &evidence,
-            &claims,
-        )
-        .is_err());
-        assert!(validate_and_strip_knowledge_markers(
-            "没有展示数值。[[evidence:mhwdata:15.10.00:mhwdata:weapon:2001]][[claim:mhwdata:15.10.00:mhwdata:weapon:2001|/data/attack|624]]",
-            &evidence,
-            &claims,
-        )
-        .is_err());
-        assert_eq!(
-            validate_and_strip_knowledge_markers(
-                "攻略建议。[[evidence:mhwdata:15.10.00:mhwdata:weapon:2001]]",
-                &evidence,
-                &[],
-            )
-            .unwrap(),
-            "攻略建议。"
-        );
-    }
-
-    #[test]
-    fn final_evidence_keeps_the_last_returned_recipe_row() {
+    fn final_evidence_keeps_all_distinct_returned_rows_without_markers() {
         let evidence = (0..21)
             .map(|index| knowledge_evidence(&format!("mhwdata:15.10.00:mhwdata:record:{index}")))
             .collect::<Vec<_>>();
         let final_evidence = deduplicate_knowledge_evidence(evidence);
-        let last_id = "mhwdata:15.10.00:mhwdata:record:20";
 
         assert_eq!(final_evidence.len(), 21);
         assert_eq!(
-            validate_and_strip_knowledge_markers(
-                &format!("第 21 条配方。[[evidence:{last_id}]]"),
-                &final_evidence,
-                &[]
-            )
-            .unwrap(),
-            "第 21 条配方。"
+            final_evidence.last().map(|item| item.evidence_id.as_str()),
+            Some("mhwdata:15.10.00:mhwdata:record:20")
         );
     }
 
@@ -954,35 +516,5 @@ mod tests {
             history.first().map(|message| message.role.as_str()),
             Some("user")
         );
-    }
-
-    #[test]
-    fn knowledge_questions_require_tool_evidence_but_operations_do_not() {
-        assert!(requires_knowledge_evidence(
-            "冰鱼龙弱什么属性，应该打哪里？"
-        ));
-        assert!(requires_knowledge_evidence("冰原中期大剑怎么配装？"));
-        assert!(requires_knowledge_evidence(
-            "我刚到冰原中期，想要一套能打黑龙的装备。"
-        ));
-        assert!(requires_knowledge_evidence("黑龙怎么打？"));
-        assert!(requires_knowledge_evidence("那技能呢？"));
-        assert!(requires_knowledge_evidence("铁矿石从哪里获得？"));
-        assert!(requires_knowledge_evidence(
-            "MOD 里的 EVAM 和 EPV 文件有什么作用？"
-        ));
-        assert!(requires_knowledge_evidence("紧急任务狩猎毒妖鸟怎么解锁？"));
-        assert!(requires_knowledge_evidence("Acumod如何安装知识包？"));
-        assert!(requires_knowledge_evidence("冲突管理的优先级规则是什么？"));
-        assert!(!requires_knowledge_evidence("帮我找一个太刀外观 MOD"));
-        assert!(!requires_knowledge_evidence("启用太刀分类的所有 MOD"));
-        assert!(!requires_knowledge_evidence("那就启用它"));
-        assert!(!requires_knowledge_evidence("你好"));
-    }
-
-    #[test]
-    fn empty_knowledge_results_use_a_non_speculative_failure_message() {
-        assert!(super::KNOWLEDGE_SAFE_FAILURE_REPLY.contains("不会根据记忆补充"));
-        assert!(super::KNOWLEDGE_SAFE_FAILURE_REPLY.contains("安装对应知识包"));
     }
 }

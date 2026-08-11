@@ -10545,6 +10545,11 @@ fn clear_import_staging(import_staging_path: &Path) -> Result<(), String> {
 }
 
 fn software_data_path() -> Result<PathBuf, String> {
+    #[cfg(feature = "live-eval")]
+    if let Some(root) = env::var_os("ACUMOD_LIVE_EVAL_SOFTWARE_DATA_ROOT") {
+        // 人工题库验收只需验证只读工具路由，不能读取或改写用户的 MOD 库。
+        return Ok(PathBuf::from(root));
+    }
     let executable_path = env::current_exe()
         .map_err(|error| format!("Could not resolve executable path: {error}"))?;
     let executable_dir = executable_path.parent().ok_or_else(|| {

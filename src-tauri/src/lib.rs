@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(feature = "live-eval")]
+pub mod live_eval;
 mod operations;
 mod services;
 mod storage;

@@ -16,7 +16,6 @@ use std::{
 
 use keyring::Entry;
 use serde::Serialize;
-use serde_json::Value;
 use tauri::{ipc::Channel, AppHandle};
 
 use crate::{
@@ -164,7 +163,7 @@ pub struct AgentEvent {
     pub knowledge_evidence: Vec<AgentKnowledgeEvidence>,
 }
 
-/// AcuAI 回答实际使用的本地知识证据。前端只展示来源元数据，不回传包内全文。
+/// AcuAI 本轮实际读取到的资料来源。前端只展示来源元数据，不回传包内全文。
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentKnowledgeEvidence {
@@ -176,13 +175,8 @@ pub(crate) struct AgentKnowledgeEvidence {
     pub source_url: Option<String>,
     pub pack_id: String,
     pub pack_version: String,
-}
-
-/// 本轮可被 Rust 逐字段核验的结构化事实，不会发送给前端或写入会话历史。
-#[derive(Clone)]
-pub(crate) struct AgentKnowledgeClaim {
-    pub evidence_id: String,
-    pub data: Value,
+    /// 由 Rust 根据实际工具生成，不信任模型自行声明来源层级。
+    pub source_tier: String,
 }
 
 pub(crate) struct AgentEventSender {

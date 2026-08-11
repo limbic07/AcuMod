@@ -105,6 +105,7 @@ export interface AgentKnowledgeEvidence {
   sourceUrl: string | null;
   packId: string;
   packVersion: string;
+  sourceTier: "localVerified" | "localReference" | "localAnalysis" | "webReference";
 }
 
 export interface AgentEvent {

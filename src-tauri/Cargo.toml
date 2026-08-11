@@ -1,5 +1,6 @@
 [package]
 name = "acumod"
+default-run = "acumod"
 version = "0.1.0"
 description = "Acumod desktop application"
 authors = ["Acumod contributors"]
@@ -16,6 +17,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[features]
+# 仅供本地人工验收二进制使用；默认开发与发布构建均不包含该入口。
+live-eval = []
+
+[[bin]]
+name = "live_question_bank_eval"
+path = "src/bin/live_question_bank_eval.rs"
+required-features = ["live-eval"]
 
 [dependencies]
 tauri = { version = "2", features = [] }

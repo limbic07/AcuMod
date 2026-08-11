@@ -11,9 +11,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -299,6 +299,123 @@ pub(crate) fn get_game_entity_relations(
             "返回的是与实体关联的 MHWorldData 原始 CSV 行；predicate 为固定 section，不是可执行查询语句。".to_string(),
         ],
     })
+}
+
+/// 读取一个防具套装的五个部位及其制作原始行。
+///
+/// 这是对 `armorSet.base -> armor.crafting` 固定关联的受控展开，避免模型为了
+/// 回答“整套需要哪些材料”而遗漏部位，调用方不能提交 SQL 或任意字段名。
+pub(crate) fn get_armor_set_crafting(
+    root: &Path,
+    armor_set_id: &str,
+) -> Result<KnowledgeRelationResponse, String> {
+    validate_entity_id(armor_set_id)?;
+    let (path, manifest) = active_database(root)?;
+    let connection = open_read_only(&path)?;
+    let set_data_json: String = connection
+        .query_row(
+            "SELECT data_json FROM entities WHERE id = ?1 AND kind = 'armorSet'",
+            [armor_set_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| format!("未找到防具套装实体 {armor_set_id}。"))?;
+    let set_data = serde_json::from_str::<Value>(&set_data_json)
+        .map_err(|error| format!("防具套装 {armor_set_id} 的原始数据无效：{error}"))?;
+    let slots = ["head", "chest", "arms", "waist", "legs"];
+    let mut relations = Vec::with_capacity(slots.len());
+
+    for slot in slots {
+        let armor_name = set_data
+            .get(slot)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("防具套装 {armor_set_id} 缺少 {slot} 部位名称。"))?;
+        let (armor_id, armor_name_display, record_id, crafting_json): (String, String, i64, String) = connection
+            .query_row(
+                "SELECT e.id, COALESCE(e.name_zh_hans, e.name_zh_hant, e.name_en), r.id, r.data_json
+                 FROM entities e
+                 JOIN record_entities re ON re.entity_id = e.id
+                 JOIN records r ON r.id = re.record_id
+                 WHERE e.kind = 'armor' AND e.name_en = ?1 AND r.section = 'armor.crafting'
+                 ORDER BY r.id
+                 LIMIT 1",
+                [armor_name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|_| format!("防具套装 {armor_set_id} 的 {slot} 部位缺少 armor.crafting 原始行。"))?;
+        if crafting_json.len() > MAX_STRUCTURED_DATA_BYTES {
+            return Err(format!(
+                "MHWData 防具制作原始行 {record_id} 超过安全大小上限。"
+            ));
+        }
+        let mut data = serde_json::from_str::<Value>(&crafting_json)
+            .map_err(|error| format!("MHWData 防具制作原始行 {record_id} JSON 无效：{error}"))?;
+        append_localized_materials(&connection, &mut data)?;
+        relations.push(KnowledgeRelationMatch {
+            relation_id: format!("mhwdata:record:{record_id}"),
+            subject_id: armor_id,
+            subject_name: armor_name_display,
+            predicate: "armor.crafting".to_string(),
+            object_id: format!("mhwdata:record:{record_id}"),
+            object_name: slot.to_string(),
+            game_version: manifest.runtime_game_version.clone(),
+            confidence: 1.0,
+            data,
+            source_title: Some(SOURCE_TITLE.to_string()),
+            source_url: Some(SOURCE_URL.to_string()),
+            pack_id: "mhwdata".to_string(),
+            pack_version: manifest.content_baseline_version.clone(),
+        });
+    }
+
+    Ok(KnowledgeRelationResponse {
+        entity_id: armor_set_id.to_string(),
+        direction: "outgoing".to_string(),
+        searched_pack_count: 1,
+        relations,
+        warnings: vec![
+            "返回的是 MHWData armorSet.base 所列五个部位的 armor.crafting 原始行；materials 仅为同库物品名称桥。".to_string(),
+        ],
+    })
+}
+
+/// 在不改变上游制作行的前提下，附加同一数据库中已经核对的中文物品名称。
+fn append_localized_materials(connection: &Connection, data: &mut Value) -> Result<(), String> {
+    let mut materials = Vec::new();
+    for index in 1..=4 {
+        let name_en = data
+            .get(format!("item{index}_name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let quantity = data
+            .get(format!("item{index}_qty"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let (Some(name_en), Some(quantity)) = (name_en, quantity) else {
+            continue;
+        };
+        let name_zh_hans = connection
+            .query_row(
+                "SELECT name_zh_hans FROM entities WHERE kind = 'item' AND name_en = ?1 LIMIT 1",
+                [name_en],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|error| format!("无法读取制作材料 {name_en} 的名称桥：{error}"))?
+            .flatten();
+        materials.push(json!({
+            "nameEn": name_en,
+            "nameZhHans": name_zh_hans,
+            "quantity": quantity,
+        }));
+    }
+    let object = data
+        .as_object_mut()
+        .ok_or_else(|| "MHWData 防具制作原始行不是 JSON 对象。".to_string())?;
+    object.insert("materials".to_string(), Value::Array(materials));
+    Ok(())
 }
 
 fn lookup_variant(
@@ -822,8 +939,8 @@ mod tests {
     use crate::operations::OperationReporter;
 
     use super::{
-        delete_database, get_game_entity_relations, install_database_into, lookup_game_entities,
-        status_summary, unix_nanos_now,
+        delete_database, get_armor_set_crafting, get_game_entity_relations, install_database_into,
+        lookup_game_entities, status_summary, unix_nanos_now,
     };
 
     #[test]
@@ -856,6 +973,23 @@ mod tests {
         assert_eq!(
             status_summary(&root).unwrap().unwrap().game_version,
             "15.23"
+        );
+
+        let armor_set_kinds = vec!["armorSet".to_string()];
+        let black_dragon_sets =
+            lookup_game_entities(&root, "黑龙套", Some(&armor_set_kinds), 4).unwrap();
+        let alpha_set = black_dragon_sets
+            .matches
+            .into_iter()
+            .find(|entry| entry.canonical_name == "黑龙α+套装")
+            .expect("黑龙套中文别名应定位到 α+ 套装");
+        let recipes = get_armor_set_crafting(&root, &alpha_set.entity_id).unwrap();
+        assert_eq!(recipes.relations.len(), 5);
+        assert_eq!(recipes.relations[0].subject_name, "黑龙头部α+");
+        assert_eq!(recipes.relations[0].data["item1_qty"], "3");
+        assert_eq!(
+            recipes.relations[0].data["materials"][0]["nameZhHans"],
+            "黑龙的重壳"
         );
 
         delete_database(&root, &reporter).unwrap();

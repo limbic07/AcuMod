@@ -12,6 +12,10 @@ const gameTextBridgePath = path.join(
   projectRoot,
   "references/knowledge/raw/mhw-editor/game-text-bridge.json",
 );
+const nameOverridesPath = path.join(
+  projectRoot,
+  "references/knowledge/sources/mhwdata-name-overrides.json",
+);
 const defaultOutputPath = path.join(
   projectRoot,
   "references/knowledge/build/acumod-mhwdata-15.10.acumhwdb",
@@ -76,11 +80,20 @@ function simplifiedToTraditionalMap(bridge) {
   return new Map([...candidates].filter(([, values]) => values.size === 1).map(([target, values]) => [target, [...values][0]]));
 }
 
-function entityNames(baseRow, translation, hantToHans) {
+function overrideKey(kind, nameEn) {
+  return `${kind}\u001F${normalized(nameEn)}`;
+}
+
+function entityNames(baseRow, translation, hantToHans, override) {
   const nameEn = text(baseRow.name_en);
   const nameZhHant = text(translation?.name_zh ?? baseRow.name_zh);
   const nameZhHans = hantToHans.get(nameZhHant) ?? nameZhHant;
-  return { nameEn, nameZhHans, nameZhHant };
+  return {
+    nameEn,
+    // 上游缺少同键中文列时才使用经过文本桥人工核对的极小名称补丁。
+    nameZhHans: nameZhHans || text(override?.nameZhHans),
+    nameZhHant: nameZhHant || text(override?.nameZhHant),
+  };
 }
 
 function tableDigest(snapshot) {
@@ -95,6 +108,21 @@ if (snapshot.schemaVersion !== 1 || snapshot.sourceId !== "mhworlddata-armor-nam
 }
 const bridge = await readJson(gameTextBridgePath, false);
 const hantToHans = simplifiedToTraditionalMap(bridge);
+const nameOverrides = await readJson(nameOverridesPath);
+if (nameOverrides.schemaVersion !== 1 || nameOverrides.sourceId !== "mhw-editor-game-text" || !Array.isArray(nameOverrides.entries)) {
+  throw new Error("MHWData 中文名称补丁格式不受支持。");
+}
+const localizedOverrides = new Map();
+for (const entry of nameOverrides.entries) {
+  const kind = text(entry.kind);
+  const nameEn = text(entry.nameEn);
+  if (!kind || !nameEn || !text(entry.nameZhHans) || !text(entry.nameZhHant) || !Array.isArray(entry.aliases)) {
+    throw new Error("MHWData 中文名称补丁包含无效条目。");
+  }
+  const key = overrideKey(kind, nameEn);
+  if (localizedOverrides.has(key)) throw new Error(`MHWData 中文名称补丁重复：${kind} / ${nameEn}`);
+  localizedOverrides.set(key, entry);
+}
 const outputPath = outputPathFromArguments(process.argv.slice(2));
 await mkdir(path.dirname(outputPath), { recursive: true });
 await rm(outputPath, { force: true });
@@ -106,14 +134,22 @@ const idsByKindAndSourceId = new Map();
 
 function addEntity({ id, kind, sourceKey, row, translation, aliases = [] }) {
   if (entities.has(id)) throw new Error(`MHWData 实体 ID 重复：${id}`);
-  const names = entityNames(row, translation, hantToHans);
+  const override = localizedOverrides.get(overrideKey(kind, row.name_en));
+  const names = entityNames(row, translation, hantToHans, override);
   const entity = {
     id,
     kind,
     sourceKey,
     ...names,
     data: row,
-    aliases: new Set([id, names.nameEn, names.nameZhHans, names.nameZhHant, ...aliases].map(text).filter(Boolean)),
+    aliases: new Set([
+      id,
+      names.nameEn,
+      names.nameZhHans,
+      names.nameZhHant,
+      ...aliases,
+      ...(override?.aliases ?? []),
+    ].map(text).filter(Boolean)),
   };
   entities.set(id, entity);
   if (names.nameEn) idsByKindAndEnglishName.set(`${kind}\u001F${normalized(names.nameEn)}`, id);

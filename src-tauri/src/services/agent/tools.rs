@@ -545,6 +545,21 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "type": "function",
             "function": {
+                "name": "get_armor_set_crafting",
+                "description": "读取一个已消歧防具套装的完整五部位制作配方。仅接受 lookup_game_entities 返回的 armorSet 稳定 ID；返回每件的 MHWData armor.crafting 原始行和同库中文材料名称桥。用户问“整套需要多少材料”时优先使用。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "armorSetId": { "type": "string", "description": "lookup_game_entities 返回的 armorSet 实体 ID" }
+                    },
+                    "required": ["armorSetId"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "search_mod_sources",
                 "description": "联网搜索 MHW MOD 候选页面。返回经过 Rust 页面规则校验的 Nexus Mods、踩蘑菇、3DM、哔哩哔哩、Mod DB、GitHub 或 CurseForge 链接，并标注来源类型和访问方式；不会下载文件。",
                 "parameters": {
@@ -580,6 +595,7 @@ pub(crate) fn tool_label(name: &str) -> &'static str {
         "search_knowledge" => "查询 MHW 知识库",
         "lookup_game_entities" => "查询游戏实体",
         "get_game_entity_relations" => "查询游戏实体关系",
+        "get_armor_set_crafting" => "查询整套防具制作配方",
         "search_mod_sources" => "联网搜索 MOD",
         _ => "处理 AI 请求",
     }
@@ -906,6 +922,23 @@ pub(crate) async fn execute_tool(
                 claims,
             ))
         }
+        "get_armor_set_crafting" => {
+            let args = parse_arguments::<GetArmorSetCraftingArgs>(arguments)?;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                let root = knowledge::knowledge_root()?;
+                mhwdata::get_armor_set_crafting(&root, &args.armor_set_id)
+            })
+            .await
+            .map_err(|error| format!("防具套装制作查询任务失败：{error}"))??;
+            let evidence = relation_evidence(&result);
+            let claims = relation_claims(&result);
+            Ok(ToolExecution::knowledge_query(
+                serde_json::to_string(&json!({ "ok": true, "armorSetCrafting": result }))
+                    .map_err(|error| format!("无法序列化防具套装制作结果：{error}"))?,
+                evidence,
+                claims,
+            ))
+        }
         "search_mod_sources" => {
             let args = parse_arguments::<SearchModSourcesArgs>(arguments)?;
             let key = super::require_deepseek_api_key()?;
@@ -1072,6 +1105,12 @@ struct GetGameEntityRelationsArgs {
     predicates: Option<Vec<String>>,
     direction: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GetArmorSetCraftingArgs {
+    armor_set_id: String,
 }
 
 #[derive(Deserialize)]

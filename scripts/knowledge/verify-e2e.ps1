@@ -31,10 +31,17 @@ $rustFlagParts = @($previousRustFlags, ($escapedArguments -join " ")) | Where-Ob
 $env:RUSTFLAGS = ($rustFlagParts -join " ").Trim()
 
 try {
-    & cargo test --manifest-path (Join-Path $projectRoot "src-tauri\Cargo.toml") `
-        services::mhwdata::tests::installed_database_returns_raw_weapon_rows `
-        --lib -- --exact
-    exit $LASTEXITCODE
+    $tests = @(
+        "services::mhwdata::tests::installed_database_returns_raw_weapon_rows",
+        "services::agent::deepseek::tests::final_evidence_keeps_the_last_returned_recipe_row"
+    )
+    foreach ($test in $tests) {
+        & cargo test --manifest-path (Join-Path $projectRoot "src-tauri\Cargo.toml") `
+            $test --lib -- --exact
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+    }
 }
 finally {
     $env:RUSTFLAGS = $previousRustFlags

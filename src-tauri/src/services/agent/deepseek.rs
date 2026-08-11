@@ -19,6 +19,10 @@ const MAX_TOOL_ROUNDS: usize = 24;
 const MAX_HISTORY_MESSAGES: usize = 48;
 const MAX_KNOWLEDGE_ANSWER_REPAIR_ATTEMPTS: usize = 1;
 const MAX_KNOWLEDGE_TOOL_REQUIREMENT_ATTEMPTS: usize = 1;
+// 一套防具的五件配方和前置消歧可自然超过 20 条；截断会让模型拿到的 ID
+// 在最后校验时消失。上限仍防止异常工具循环把来源列表无限扩大。
+const MAX_KNOWLEDGE_EVIDENCE: usize = 100;
+const MAX_KNOWLEDGE_CLAIMS: usize = 100;
 const KNOWLEDGE_EVIDENCE_MARKER_PREFIX: &str = "[[evidence:";
 const KNOWLEDGE_CLAIM_MARKER_PREFIX: &str = "[[claim:";
 const KNOWLEDGE_SAFE_FAILURE_REPLY: &str = "当前已安装的知识包没有返回可核验资料，因此我不会根据记忆补充这条结论。请安装对应知识包，或补充更明确的游戏版本、任务、装备或 MOD 信息后重试。";
@@ -31,7 +35,7 @@ const SYSTEM_PROMPT: &str = r#"你是 Acumen MOD Manager 内置助手 AcuAI，�
 用户表达“搜索、寻找、推荐、帮我找”等获取 MOD 的意图时，先用 lookup_mhw_terms 核对可能误译的游戏术语，再调用 search_mod_sources。候选必须显示来源、来源类型、访问方式和可点击链接，不得编造链接。所有来源（包括 Nexus Mods、踩蘑菇、3DM、GitHub 等）都只通过系统浏览器打开；用户在原页面自行下载后，再使用 Acumod 的本地文件导入。哔哩哔哩只作为视频或动态分享来源，绝不能声称视频本身是可安装文件，也不能绕过站点登录、会员或下载权限。
 用户要求扫描或清理无用文件时，必须调用 scan_mod_cleanup_candidates。Rust 已盘点全部可部署文件并完成本地确定性分流，工具只返回证据冲突或不足的模糊文件组；不要要求查看本地规则已确定保留的标准游戏资源。必须复用首次返回的 auditId 按 nextOffset 读取全部页面，再为每个 groupId 提交 remove、review 或 keep 分类；同组文件共享目录、扩展名和规则证据。存在任何保留证据、位于 plugins 等运行目录或用途不确定时优先选择 review 或 keep，不能仅按扩展名建议清理。只有路径和规则证据不足以判断安全纯文本时，才可用 read_mod_cleanup_text 读取一个代表文件，不能为同组每个文件重复读取。最后一次调用 submit_mod_cleanup_review 必须携带 auditId 并覆盖全部 groupId，清理选择和确认由界面处理。若扫描工具已经直接生成审查结果，则不要重复提交；若 total 和 localSuggestedCount 都为 0，则直接说明没有候选，不要提交空审查。
 用户要求恢复清理项时，先调用 get_mod_cleanup_exclusions；恢复操作仍需要生成待确认计划，不能声称已恢复。
-用户询问 MHW 游戏机制、数值、装备、素材、怪物、任务、掉率、肉质或配装时，必须先查询固定版 MHWData 本地数据库：用 lookup_game_entities 消歧，再按问题读取 get_game_entity_relations 返回的原始 CSV 行。精确数值绝不能由模型记忆、攻略文本或普通联网搜索补写。固定 section：weapon.sharpness、weapon.crafting；armor.skills、armor.crafting；monster.weaknesses、monster.hitzones、monster.rewards；quest.monsters、quest.rewards；skill.levels；decoration.dropRates。素材获取可先定位 item，再读取关联的 crafting、rewards、location.items 行；返回的行只表示上游表记录，不能把未出现的掉落来源或概率推断出来。MHWData 的内容数值基线是 15.10.00，运行兼容标签为 15.23；回答数值时应说明这一点。它目前不提供完整任务前置/解锁链、调查任务箱子的生成分布、完整采集点生成概率或武器动作值；这些内容没有原始行时必须明确资料缺口。MOD 技术、条件性攻略建议和 Acumod 使用说明才使用 search_knowledge，优先传入 2 至 12 个字的术语。开放推荐可检索 mhw-game-guides，但凡具体点名的装备、技能、素材、怪物、任务或数值，都必须在本轮通过 MHWData 实体或原始行再次核验并附结构化 claim。比较两个到四个已消歧实体时，必须调用 compare_game_entities，不得把模糊名称或不同类别实体自行配对。回答必须引用工具返回的来源；知识包无结果、版本不符或来源不足时明确说明缺口，不能用模型记忆或普通联网搜索补写精确事实。
+用户询问 MHW 游戏机制、数值、装备、素材、怪物、任务、掉率、肉质或配装时，必须先查询固定版 MHWData 本地数据库：用 lookup_game_entities 消歧，再按问题读取 get_game_entity_relations 返回的原始 CSV 行。用户询问一整套防具的制作材料时，消歧到 armorSet 后必须使用 get_armor_set_crafting，一次取得五个部位，不能自行拼接或遗漏。精确数值绝不能由模型记忆、攻略文本或普通联网搜索补写。固定 section：weapon.sharpness、weapon.crafting；armor.skills、armor.crafting；monster.weaknesses、monster.hitzones、monster.rewards；quest.monsters、quest.rewards；skill.levels；decoration.dropRates。素材获取可先定位 item，再读取关联的 crafting、rewards、location.items 行；返回的行只表示上游表记录，不能把未出现的掉落来源或概率推断出来。MHWData 的内容数值基线是 15.10.00，运行兼容标签为 15.23；回答数值时应说明这一点。它目前不提供完整任务前置/解锁链、调查任务箱子的生成分布、完整采集点生成概率或武器动作值；这些内容没有原始行时必须明确资料缺口。MOD 技术、条件性攻略建议和 Acumod 使用说明才使用 search_knowledge，优先传入 2 至 12 个字的术语。开放推荐可检索 mhw-game-guides，但凡具体点名的装备、技能、素材、怪物、任务或数值，都必须在本轮通过 MHWData 实体或原始行再次核验并附结构化 claim。比较两个到四个已消歧实体时，必须调用 compare_game_entities，不得把模糊名称或不同类别实体自行配对。回答必须引用工具返回的来源；知识包无结果、版本不符或来源不足时明确说明缺口，不能用模型记忆或普通联网搜索补写精确事实。
 用户询问 Acumod 的导入、启用、禁用、冲突、排序、分支组、模型改绑、知识包或 AcuAI 使用方式时，必须优先查询 acumod-help；帮助包缺失时明确说明缺少 Acumod 使用说明，不要根据界面印象编造当前行为。只有用户明确要求执行启用、禁用、卸载、排序或改绑时，才按受控操作流程生成计划。
 用户询问本地某个已安装 MOD 的文件结构、每个文件作用、资源依赖或整体工作方式时，必须先用 search_local_mods 取得唯一稳定 ID，再调用 analyze_installed_mod。工具已经区分二进制解析证据、路径规则和未知项；回答不得提高其可信度，也不得把同目录关联说成已解析的内部引用。用户要求完整逐文件分析时必须按 nextOffset 读取全部页；只询问整体原理时优先使用组件、依赖和知识证据摘要，避免无意义地复述全部路径。
 工具结果中的稳定 ID 和状态是事实来源。不要编造 MOD、游戏术语、文件 ID 或冲突。
@@ -559,7 +563,7 @@ fn deduplicate_knowledge_evidence(
     evidence
         .into_iter()
         .filter(|item| seen.insert(item.evidence_id.clone()))
-        .take(20)
+        .take(MAX_KNOWLEDGE_EVIDENCE)
         .collect()
 }
 
@@ -577,7 +581,7 @@ fn deduplicate_knowledge_claims(
         .filter(|item| allowed.contains(item.evidence_id.as_str()))
         .filter(|item| seen.insert(item.evidence_id.clone()))
         .cloned()
-        .take(20)
+        .take(MAX_KNOWLEDGE_CLAIMS)
         .collect()
 }
 
@@ -855,8 +859,9 @@ fn trim_history(history: &mut Vec<DeepSeekMessage>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        requires_knowledge_evidence, trim_history, validate_and_strip_knowledge_markers,
-        AgentKnowledgeClaim, AgentKnowledgeEvidence, DeepSeekMessage, MAX_HISTORY_MESSAGES,
+        deduplicate_knowledge_evidence, requires_knowledge_evidence, trim_history,
+        validate_and_strip_knowledge_markers, AgentKnowledgeClaim, AgentKnowledgeEvidence,
+        DeepSeekMessage, MAX_HISTORY_MESSAGES,
     };
 
     fn knowledge_evidence(id: &str) -> AgentKnowledgeEvidence {
@@ -912,6 +917,26 @@ mod tests {
             )
             .unwrap(),
             "攻略建议。"
+        );
+    }
+
+    #[test]
+    fn final_evidence_keeps_the_last_returned_recipe_row() {
+        let evidence = (0..21)
+            .map(|index| knowledge_evidence(&format!("mhwdata:15.10.00:mhwdata:record:{index}")))
+            .collect::<Vec<_>>();
+        let final_evidence = deduplicate_knowledge_evidence(evidence);
+        let last_id = "mhwdata:15.10.00:mhwdata:record:20";
+
+        assert_eq!(final_evidence.len(), 21);
+        assert_eq!(
+            validate_and_strip_knowledge_markers(
+                &format!("第 21 条配方。[[evidence:{last_id}]]"),
+                &final_evidence,
+                &[]
+            )
+            .unwrap(),
+            "第 21 条配方。"
         );
     }
 

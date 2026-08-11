@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "sourceId": "mhw-editor-game-text",
+  "description": "MHWorldData 缺失或无法与同键中文列配对的黑龙实体名称桥。只补检索和展示名称，不补任何数值、配方或掉落字段。",
+  "entries": [
+    { "kind": "monster", "nameEn": "Fatalis", "nameZhHans": "黑龙", "nameZhHant": "黑龍", "aliases": ["黑龙"] },
+    { "kind": "armorSet", "nameEn": "Dragon α+", "nameZhHans": "黑龙α+套装", "nameZhHant": "黑龍α+套裝", "aliases": ["黑龙套", "黑龙阿尔法套", "黑龙α套"] },
+    { "kind": "armorSet", "nameEn": "Dragon β+", "nameZhHans": "黑龙β+套装", "nameZhHant": "黑龍β+套裝", "aliases": ["黑龙套", "黑龙贝塔套", "黑龙β套"] },
+    { "kind": "armor", "nameEn": "Dragonhead α+", "nameZhHans": "黑龙头部α+", "nameZhHant": "黑龍頭部α+", "aliases": ["黑龙头", "黑龙头盔", "黑龙α头"] },
+    { "kind": "armor", "nameEn": "Dragonhide α+", "nameZhHans": "黑龙身体α+", "nameZhHant": "黑龍身體α+", "aliases": ["黑龙身", "黑龙铠甲", "黑龙α身"] },
+    { "kind": "armor", "nameEn": "Dragonclaws α+", "nameZhHans": "黑龙腕部α+", "nameZhHant": "黑龍腕部α+", "aliases": ["黑龙腕", "黑龙腕甲", "黑龙α腕"] },
+    { "kind": "armor", "nameEn": "Dragonbarbs α+", "nameZhHans": "黑龙腰部α+", "nameZhHant": "黑龍腰部α+", "aliases": ["黑龙腰", "黑龙腰甲", "黑龙α腰"] },
+    { "kind": "armor", "nameEn": "Dragonfeet α+", "nameZhHans": "黑龙脚部α+", "nameZhHant": "黑龍腳部α+", "aliases": ["黑龙脚", "黑龙护腿", "黑龙α脚"] },
+    { "kind": "armor", "nameEn": "Dragonhead β+", "nameZhHans": "黑龙头部β+", "nameZhHant": "黑龍頭部β+", "aliases": ["黑龙β头"] },
+    { "kind": "armor", "nameEn": "Dragonhide β+", "nameZhHans": "黑龙身体β+", "nameZhHant": "黑龍身體β+", "aliases": ["黑龙β身"] },
+    { "kind": "armor", "nameEn": "Dragonclaws β+", "nameZhHans": "黑龙腕部β+", "nameZhHant": "黑龍腕部β+", "aliases": ["黑龙β腕"] },
+    { "kind": "armor", "nameEn": "Dragonbarbs β+", "nameZhHans": "黑龙腰部β+", "nameZhHant": "黑龍腰部β+", "aliases": ["黑龙β腰"] },
+    { "kind": "armor", "nameEn": "Dragonfeet β+", "nameZhHans": "黑龙脚部β+", "nameZhHant": "黑龍腳部β+", "aliases": ["黑龙β脚"] },
+    { "kind": "item", "nameEn": "Fatalis Shard", "nameZhHans": "黑龙的厚鳞", "nameZhHant": "黑龍的厚鱗", "aliases": [] },
+    { "kind": "item", "nameEn": "Fatalis Cortex", "nameZhHans": "黑龙的重壳", "nameZhHant": "黑龍的重殼", "aliases": [] },
+    { "kind": "item", "nameEn": "Fatalis Pectus", "nameZhHans": "黑龙的重胸壳", "nameZhHant": "黑龍的重胸殼", "aliases": [] },
+    { "kind": "item", "nameEn": "Fatalis Hardhorn", "nameZhHans": "黑龙的刚角", "nameZhHant": "黑龍的剛角", "aliases": [] },
+    { "kind": "item", "nameEn": "Fatalis Evil Eye", "nameZhHans": "黑龙的邪眼", "nameZhHant": "黑龍的邪眼", "aliases": [] },
+    { "kind": "item", "nameEn": "Fatalis Fellwing", "nameZhHans": "黑龙的刚翼", "nameZhHant": "黑龍的剛翼", "aliases": [] },
+    { "kind": "weapon", "nameEn": "Fatalis Blade", "nameZhHans": "黑龙刃", "nameZhHant": "黑龍刃", "aliases": ["黑龙大剑"] }
+  ]
+}

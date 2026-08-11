@@ -20,6 +20,7 @@ npm.cmd run knowledge:build-modding-dev
 npm.cmd run knowledge:package-modding-dev
 npm.cmd run knowledge:package-bundle
 npm.cmd run knowledge:verify-dev
+npm.cmd run knowledge:verify-question-bank
 npm.cmd run knowledge:verify-e2e
 npm.cmd run tauri:dev
 npm.cmd run tauri:build
@@ -50,6 +51,7 @@ cargo fmt
 - `knowledge:package-modding-dev`：把技术开发包打成可从应用设置页安装的单包 ZIP。
 - `knowledge:package-bundle`：将一个 `.acumhwdb` 和三个 `.acukb` 文本包打成独立 ZIP，供本地安装测试或 release 上传；生成物位于被忽略的 `references/knowledge/release/`。
 - `knowledge:verify-dev`：校验固定数据库的版本、源表、原始行关联与文本包结构。
+- `knowledge:verify-question-bank`：对 30 道人工题库检查每题需要的固定数值行、技术/攻略文档或安全边界；它不代替真实 AcuAI 对话的语言质量验收。
 - `knowledge:verify-e2e`：旧的四 `.acukb` 图谱 e2e 脚本已废止；当前由 Rust 的 `mhwdata` 安装/查询集成测试覆盖相同安装边界。
 - `preview`：预览前端构建结果。
 - `tauri`：调用 Tauri CLI。

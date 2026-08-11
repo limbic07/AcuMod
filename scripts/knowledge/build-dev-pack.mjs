@@ -9,10 +9,10 @@ const documentInputs = [
     sourcePath: path.join(projectRoot, "references/knowledge/sources/modding-documents.json"),
     outputName: "acumod-dev-modding.acukb",
     packId: "acumod-dev-modding",
-    displayName: "AcuAI MOD 技术开发包",
+    displayName: "AcuAI MOD 离线基础开发包",
     kind: "mhw-modding",
-    version: "0.3.0-dev",
-    description: "项目已验证技术规则的开发包，用于回答 MOD 技术问题。",
+    version: "0.4.0-dev",
+    description: "仅包含 Acumod 已验证的 MOD 路径、格式、改绑与运行时边界；具体制作与排错资料由受控联网技术来源补充。",
   },
   {
     sourcePath: path.join(projectRoot, "references/knowledge/sources/game-guide-documents.json"),
@@ -35,6 +35,27 @@ const documentInputs = [
 ];
 const targetGameVersion = "15.23";
 const packApplicationId = 0x4143554B; // "ACUK"
+// 这些规则可由本地分析器、现有改绑实现或稳定格式边界直接支撑，适合作为离线保底。
+// 其余原始资料先保留在 sources 中，待补全篇幅和来源审计后再考虑重新纳入发布包。
+const offlineModdingDocumentIds = new Set([
+  "modding-nativepc-root",
+  "modding-nativepc-plugins",
+  "modding-mod3",
+  "modding-mrl3",
+  "modding-texture-maps",
+  "modding-ctc-ccl",
+  "modding-efx-scope",
+  "modding-weapon-epv-scope",
+  "modding-evwp",
+  "modding-evam-slinger",
+  "modding-slinger-chain",
+  "modding-armor-am-dat",
+  "modding-dat-armor-remap-boundary",
+  "modding-runtime-framework-boundary",
+  "modding-component-evidence",
+  "modding-sharp-plugin-loader-layout",
+  "modding-sharp-plugin-loader-csharp-plugin",
+]);
 
 function outputDirectory(argv) {
   const outputIndex = argv.findIndex((argument) => argument === "--output");
@@ -60,6 +81,16 @@ function validateDocuments(store, sourceIds, label) {
     ids.add(document.id);
   }
   return store.documents;
+}
+
+function selectDocumentsForPack(definition, documents) {
+  if (definition.kind !== "mhw-modding") return documents;
+  const selected = documents.filter((document) => offlineModdingDocumentIds.has(document.id));
+  assert(
+    selected.length === offlineModdingDocumentIds.size,
+    "MOD 离线基础包缺少已登记的必需规则。",
+  );
+  return selected;
 }
 
 async function buildDocumentPack(outputPath, catalog, documents, definition) {
@@ -146,10 +177,11 @@ const sourceIds = new Set(catalog.sources.map((source) => source.id));
 const selected = argv.includes("--modding-only") ? documentInputs.slice(0, 1) : documentInputs;
 const outputRoot = outputDirectory(argv);
 for (const definition of selected) {
-  const documents = validateDocuments(
+  const sourceDocuments = validateDocuments(
     JSON.parse(await readFile(definition.sourcePath, "utf8")),
     sourceIds,
     definition.displayName,
   );
+  const documents = selectDocumentsForPack(definition, sourceDocuments);
   await buildDocumentPack(path.join(outputRoot, definition.outputName), catalog, documents, definition);
 }

@@ -47,6 +47,7 @@ struct AgentCoordinatorInner {
     cleanup_audits: Mutex<HashMap<String, cleanup::AgentCleanupAudit>>,
     cleanup_reviews: Mutex<HashMap<String, cleanup::AgentCleanupReview>>,
     game_source_candidates: Mutex<HashMap<String, StoredGameSourceCandidate>>,
+    mod_knowledge_source_candidates: Mutex<HashMap<String, StoredModKnowledgeSourceCandidate>>,
 }
 
 struct ActiveTurnGuard {
@@ -168,6 +169,12 @@ struct StoredAgentActionPlan {
 #[derive(Clone)]
 struct StoredGameSourceCandidate {
     candidate: source_search::GameSourceSearchResult,
+    expires_at_unix_seconds: u64,
+}
+
+#[derive(Clone)]
+struct StoredModKnowledgeSourceCandidate {
+    candidate: source_search::ModKnowledgeSourceSearchResult,
     expires_at_unix_seconds: u64,
 }
 
@@ -345,6 +352,11 @@ impl AgentCoordinator {
             .lock()
             .map_err(|_| "联网资料候选状态不可用，请重启 Acumod 后重试。".to_string())?
             .clear();
+        self.inner
+            .mod_knowledge_source_candidates
+            .lock()
+            .map_err(|_| "MOD 技术资料候选状态不可用，请重启 Acumod 后重试。".to_string())?
+            .clear();
         Ok(())
     }
 
@@ -389,6 +401,51 @@ impl AgentCoordinator {
             .map(|value| value.candidate.clone())
             .ok_or_else(|| {
                 "只能读取本次联网搜索刚返回的资料页面；请先调用 search_game_sources。".to_string()
+            })
+    }
+
+    /// 只短时保存 Rust 已校验过的 MOD 技术资料候选；它与下载页面候选不共享账本。
+    pub(crate) fn store_mod_knowledge_source_candidates(
+        &self,
+        candidates: &[source_search::ModKnowledgeSourceSearchResult],
+    ) -> Result<(), String> {
+        let now = unix_seconds_now()?;
+        let mut stored = self
+            .inner
+            .mod_knowledge_source_candidates
+            .lock()
+            .map_err(|_| "MOD 技术资料候选状态不可用，请重启 Acumod 后重试。".to_string())?;
+        stored.retain(|_, value| value.expires_at_unix_seconds > now);
+        for candidate in candidates {
+            stored.insert(
+                candidate.url.clone(),
+                StoredModKnowledgeSourceCandidate {
+                    candidate: candidate.clone(),
+                    expires_at_unix_seconds: now + GAME_SOURCE_CANDIDATE_TTL_SECONDS,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// 返回一条仍有效且由 MOD 技术资料搜索实际产生的候选页面。
+    pub(crate) fn mod_knowledge_source_candidate(
+        &self,
+        url: &str,
+    ) -> Result<source_search::ModKnowledgeSourceSearchResult, String> {
+        let now = unix_seconds_now()?;
+        let mut stored = self
+            .inner
+            .mod_knowledge_source_candidates
+            .lock()
+            .map_err(|_| "MOD 技术资料候选状态不可用，请重启 Acumod 后重试。".to_string())?;
+        stored.retain(|_, value| value.expires_at_unix_seconds > now);
+        stored
+            .get(url.trim())
+            .map(|value| value.candidate.clone())
+            .ok_or_else(|| {
+                "只能读取本次联网搜索刚返回的 MOD 技术资料页面；请先调用 search_mod_knowledge_sources。"
+                    .to_string()
             })
     }
 

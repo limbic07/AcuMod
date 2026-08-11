@@ -9,8 +9,8 @@ const documentPacks = [
   {
     path: path.join(buildRoot, "acumod-dev-modding.acukb"),
     kind: "mhw-modding",
-    minimumDocuments: 30,
-    requiredIds: ["modding-mod3", "modding-mrl3", "modding-evam-slinger", "modding-armor-am-dat", "modding-sharp-plugin-loader-csharp-plugin"],
+    minimumDocuments: 17,
+    requiredIds: ["modding-mod3", "modding-mrl3", "modding-weapon-epv-scope", "modding-evam-slinger", "modding-armor-am-dat", "modding-dat-armor-remap-boundary", "modding-sharp-plugin-loader-csharp-plugin"],
   },
   {
     path: path.join(buildRoot, "acumod-dev-game-guides.acukb"),

@@ -407,6 +407,21 @@
       "licenseStatus": "notAudited"
     },
     {
+      "id": "mhw-modding-wiki-anibullet",
+      "title": "MonsterHunterWorldModding GitHub Wiki（AniBullet）",
+      "kind": "authoringDocumentation",
+      "gameVersion": "15.23",
+      "url": "https://github.com/AniBullet/MonsterHunterWorldModding/wiki",
+      "usage": "liveTechnicalReference",
+      "redistribution": "linkOnly",
+      "verificationStatus": "whitelistedForControlledExcerpt",
+      "notes": [
+        "用于 AcuAI 的受控联网 MOD 技术资料补充；仅允许读取该 Wiki 的具体页面，不能抓取仓库首页、下载页面或任意 GitHub 地址。",
+        "页面原文不进入本地知识包；联网回答只展示实际读取的页面来源卡片。"
+      ],
+      "licenseStatus": "notAudited"
+    },
+    {
       "id": "mhw-armor-editor",
       "title": "MHW Editor Suite 的 armor.am_dat 解析器",
       "kind": "openSourceParser",

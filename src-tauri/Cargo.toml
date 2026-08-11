@@ -27,6 +27,11 @@ name = "live_question_bank_eval"
 path = "src/bin/live_question_bank_eval.rs"
 required-features = ["live-eval"]
 
+[[bin]]
+name = "live_web_search_probe"
+path = "src/bin/live_web_search_probe.rs"
+required-features = ["live-eval"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

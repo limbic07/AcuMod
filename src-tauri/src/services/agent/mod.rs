@@ -29,6 +29,7 @@ const KEYRING_SERVICE: &str = "Acumen MOD Manager";
 const KEYRING_USER: &str = "deepseek-api-key";
 const MAX_USER_MESSAGE_CHARS: usize = 4_000;
 const ACTION_PLAN_TTL_SECONDS: u64 = 5 * 60;
+const GAME_SOURCE_CANDIDATE_TTL_SECONDS: u64 = 10 * 60;
 const MAX_PLAN_TARGETS: usize = 500;
 static NEXT_TURN_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
@@ -45,6 +46,7 @@ struct AgentCoordinatorInner {
     plans: Mutex<HashMap<String, StoredAgentActionPlan>>,
     cleanup_audits: Mutex<HashMap<String, cleanup::AgentCleanupAudit>>,
     cleanup_reviews: Mutex<HashMap<String, cleanup::AgentCleanupReview>>,
+    game_source_candidates: Mutex<HashMap<String, StoredGameSourceCandidate>>,
 }
 
 struct ActiveTurnGuard {
@@ -73,6 +75,19 @@ pub struct AgentConnectionResult {
     pub model: DeepSeekModel,
     pub model_api_name: String,
     pub elapsed_millis: u128,
+    pub message: String,
+}
+
+/// 设置页的受控联网搜索验收结果。搜索和页面读取分开呈现，避免把其中一项失败误报为另一项。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWebSearchTestResult {
+    pub model: DeepSeekModel,
+    pub model_api_name: String,
+    pub elapsed_millis: u128,
+    pub search_result_count: usize,
+    pub page_read_succeeded: bool,
+    pub source: Option<String>,
     pub message: String,
 }
 
@@ -148,6 +163,12 @@ enum AgentPlanAction {
 struct StoredAgentActionPlan {
     public: AgentActionPlan,
     action: AgentPlanAction,
+}
+
+#[derive(Clone)]
+struct StoredGameSourceCandidate {
+    candidate: source_search::GameSourceSearchResult,
+    expires_at_unix_seconds: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -319,7 +340,56 @@ impl AgentCoordinator {
             .lock()
             .map_err(|_| "AI 清理候选状态不可用，请重启 Acumod 后重试。".to_string())?
             .clear();
+        self.inner
+            .game_source_candidates
+            .lock()
+            .map_err(|_| "联网资料候选状态不可用，请重启 Acumod 后重试。".to_string())?
+            .clear();
         Ok(())
+    }
+
+    /// 只短时保存 Rust 已校验过的联网候选，后续页面读取不能接受模型自造的 URL。
+    pub(crate) fn store_game_source_candidates(
+        &self,
+        candidates: &[source_search::GameSourceSearchResult],
+    ) -> Result<(), String> {
+        let now = unix_seconds_now()?;
+        let mut stored = self
+            .inner
+            .game_source_candidates
+            .lock()
+            .map_err(|_| "联网资料候选状态不可用，请重启 Acumod 后重试。".to_string())?;
+        stored.retain(|_, value| value.expires_at_unix_seconds > now);
+        for candidate in candidates {
+            stored.insert(
+                candidate.url.clone(),
+                StoredGameSourceCandidate {
+                    candidate: candidate.clone(),
+                    expires_at_unix_seconds: now + GAME_SOURCE_CANDIDATE_TTL_SECONDS,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// 返回一条仍有效且由联网搜索实际产生的候选页面。
+    pub(crate) fn game_source_candidate(
+        &self,
+        url: &str,
+    ) -> Result<source_search::GameSourceSearchResult, String> {
+        let now = unix_seconds_now()?;
+        let mut stored = self
+            .inner
+            .game_source_candidates
+            .lock()
+            .map_err(|_| "联网资料候选状态不可用，请重启 Acumod 后重试。".to_string())?;
+        stored.retain(|_, value| value.expires_at_unix_seconds > now);
+        stored
+            .get(url.trim())
+            .map(|value| value.candidate.clone())
+            .ok_or_else(|| {
+                "只能读取本次联网搜索刚返回的资料页面；请先调用 search_game_sources。".to_string()
+            })
     }
 
     fn store_plan(&self, plan: StoredAgentActionPlan) -> Result<AgentActionPlan, String> {
@@ -466,6 +536,57 @@ pub async fn test_agent_connection(app: &AppHandle) -> Result<AgentConnectionRes
     let model = config::load(app)?.deep_seek_model;
     let key = require_deepseek_api_key()?;
     deepseek::test_connection(&key, model).await
+}
+
+/// 使用当前保存的 Key 真实调用 DeepSeek 服务端联网搜索，并尝试读取一条返回页面。
+/// 该验收不会写入 MOD、知识包或会话状态。
+pub async fn test_agent_web_search(app: &AppHandle) -> Result<AgentWebSearchTestResult, String> {
+    let model = config::load(app)?.deep_seek_model;
+    let key = require_deepseek_api_key()?;
+    let started_at = SystemTime::now();
+    let results = source_search::search_game_sources(
+        &key,
+        model,
+        "Monster Hunter World Fatalis materials Kiranico",
+    )
+    .await?;
+    let first = results
+        .first()
+        .ok_or_else(|| "DeepSeek 联网搜索没有返回可读取的白名单资料页面。".to_string())?;
+    let page_result = source_search::fetch_game_source_excerpt(first).await;
+    let elapsed_millis = started_at
+        .elapsed()
+        .map_err(|error| format!("无法计算联网搜索测试耗时：{error}"))?
+        .as_millis();
+    match page_result {
+        Ok(page) => Ok(AgentWebSearchTestResult {
+            model,
+            model_api_name: model.api_name().to_string(),
+            elapsed_millis,
+            search_result_count: results.len(),
+            page_read_succeeded: true,
+            source: Some(page.source.clone()),
+            message: format!(
+                "DeepSeek 联网搜索正常，返回 {} 条通过白名单的候选；已读取 {} 页面摘录。",
+                results.len(),
+                page.source
+            ),
+        }),
+        Err(error) => Ok(AgentWebSearchTestResult {
+            model,
+            model_api_name: model.api_name().to_string(),
+            elapsed_millis,
+            search_result_count: results.len(),
+            page_read_succeeded: false,
+            source: Some(first.source.clone()),
+            message: format!(
+                "DeepSeek 联网搜索正常，返回 {} 条通过白名单的候选；但 {} 页面摘录读取失败：{}",
+                results.len(),
+                first.source,
+                error
+            ),
+        }),
+    }
 }
 
 pub async fn start_agent_turn(

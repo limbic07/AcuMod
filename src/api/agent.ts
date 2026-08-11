@@ -108,6 +108,16 @@ export interface AgentKnowledgeEvidence {
   sourceTier: "localVerified" | "localReference" | "localAnalysis" | "webReference";
 }
 
+export interface AgentWebSearchTestResult {
+  model: DeepSeekModel;
+  modelApiName: string;
+  elapsedMillis: number;
+  searchResultCount: number;
+  pageReadSucceeded: boolean;
+  source: string | null;
+  message: string;
+}
+
 export interface AgentEvent {
   turnId: string;
   sequence: number;
@@ -143,6 +153,11 @@ export function deleteDeepSeekApiKey(): Promise<AgentSettings> {
 
 export function testAgentConnection(): Promise<AgentConnectionResult> {
   return invoke<AgentConnectionResult>("test_agent_connection");
+}
+
+/** 使用已保存的 Key 验证 DeepSeek 服务端搜索和白名单页面读取。 */
+export function testAgentWebSearch(): Promise<AgentWebSearchTestResult> {
+  return invoke<AgentWebSearchTestResult>("test_agent_web_search");
 }
 
 /** Channel 保证同一轮流式片段有序到达，前端不接触 DeepSeek 原始 SSE。 */

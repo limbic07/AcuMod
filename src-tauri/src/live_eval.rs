@@ -146,6 +146,24 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// 使用当前用户凭据做一次真实联网搜索验收，不安装知识包、不读取 MOD 库也不修改会话。
+pub fn run_web_search_probe() -> Result<(), String> {
+    let app = tauri::Builder::default()
+        .manage(crate::operations::OperationCoordinator::default())
+        .manage(AgentCoordinator::default())
+        .build(tauri::generate_context!())
+        .map_err(|error| format!("无法创建联网搜索验收应用：{error}"))?;
+    let result = tauri::async_runtime::block_on(agent::test_agent_web_search(&app.handle()))?;
+    let rendered = serde_json::to_string(&result)
+        .map_err(|error| format!("无法输出联网搜索验收结果：{error}"))?;
+    println!("WEB_SEARCH_PROBE {rendered}");
+    if result.page_read_succeeded {
+        Ok(())
+    } else {
+        Err("DeepSeek 服务端搜索已成功，但白名单页面摘录未通过验收。".to_string())
+    }
+}
+
 struct LiveEvalRootGuard {
     root: PathBuf,
 }

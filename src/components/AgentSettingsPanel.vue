@@ -6,6 +6,7 @@ import {
   saveAgentModel,
   setDeepSeekApiKey,
   testAgentConnection,
+  testAgentWebSearch,
   type AgentSettings,
   type DeepSeekModel,
 } from "../api/agent";
@@ -16,7 +17,8 @@ const error = ref("");
 const resultMessage = ref("");
 const isLoading = ref(false);
 const isSavingKey = ref(false);
-const isTesting = ref(false);
+const isTestingConnection = ref(false);
+const isTestingWebSearch = ref(false);
 
 function visibleError(value: unknown) {
   return value instanceof Error ? value.message : String(value);
@@ -78,7 +80,7 @@ async function removeApiKey() {
 }
 
 async function testConnection() {
-  isTesting.value = true;
+  isTestingConnection.value = true;
   error.value = "";
   resultMessage.value = "";
   try {
@@ -87,7 +89,21 @@ async function testConnection() {
   } catch (value) {
     error.value = visibleError(value);
   } finally {
-    isTesting.value = false;
+    isTestingConnection.value = false;
+  }
+}
+
+async function testWebSearch() {
+  isTestingWebSearch.value = true;
+  error.value = "";
+  resultMessage.value = "";
+  try {
+    const result = await testAgentWebSearch();
+    resultMessage.value = `${result.message} ${result.elapsedMillis} 毫秒`;
+  } catch (value) {
+    error.value = visibleError(value);
+  } finally {
+    isTestingWebSearch.value = false;
   }
 }
 
@@ -103,13 +119,22 @@ onMounted(() => {
         <h2>AcuAI</h2>
         <p>使用 DeepSeek V4 查询本地 MOD、冲突和游戏术语。</p>
       </div>
-      <button
-        type="button"
-        :disabled="isLoading || isTesting || !settings?.apiKeyConfigured"
-        @click="testConnection"
-      >
-        {{ isTesting ? "测试中" : "测试连接" }}
-      </button>
+      <div class="agent-settings-actions">
+        <button
+          type="button"
+          :disabled="isLoading || isTestingConnection || isTestingWebSearch || !settings?.apiKeyConfigured"
+          @click="testConnection"
+        >
+          {{ isTestingConnection ? "测试中" : "测试连接" }}
+        </button>
+        <button
+          type="button"
+          :disabled="isLoading || isTestingConnection || isTestingWebSearch || !settings?.apiKeyConfigured"
+          @click="testWebSearch"
+        >
+          {{ isTestingWebSearch ? "联网搜索测试中" : "测试联网搜索" }}
+        </button>
+      </div>
     </div>
 
     <div v-if="settings" class="agent-settings-grid">
@@ -179,6 +204,13 @@ onMounted(() => {
 .agent-settings-heading p,
 .settings-message {
   margin: 0;
+}
+
+.agent-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .agent-settings-heading p {
@@ -272,6 +304,14 @@ onMounted(() => {
 }
 
 @media (max-width: 760px) {
+  .agent-settings-heading {
+    display: grid;
+  }
+
+  .agent-settings-actions {
+    justify-content: flex-start;
+  }
+
   .agent-settings-grid,
   .api-key-form > div {
     grid-template-columns: 1fr;

@@ -3,7 +3,7 @@ use tauri::{ipc::Channel, State};
 use crate::{
     services::agent::{
         self, AgentActionPlan, AgentActionResult, AgentConnectionResult, AgentCoordinator,
-        AgentEvent, AgentSettings, AgentTurnResult,
+        AgentEvent, AgentSettings, AgentTurnResult, AgentWebSearchTestResult,
     },
     storage::config::DeepSeekModel,
 };
@@ -42,6 +42,14 @@ pub fn delete_deepseek_api_key(app: tauri::AppHandle) -> Result<AgentSettings, S
 #[tauri::command]
 pub async fn test_agent_connection(app: tauri::AppHandle) -> Result<AgentConnectionResult, String> {
     agent::test_agent_connection(&app).await
+}
+
+/// 使用当前 DeepSeek Key 做一次真实服务端联网搜索，并验证一条白名单页面可被安全摘录。
+#[tauri::command]
+pub async fn test_agent_web_search(
+    app: tauri::AppHandle,
+) -> Result<AgentWebSearchTestResult, String> {
+    agent::test_agent_web_search(&app).await
 }
 
 /// 开始一次 Agent 对话；写操作只能生成等待确认的受控计划。

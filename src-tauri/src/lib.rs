@@ -26,6 +26,7 @@ pub fn run() {
             commands::agent::set_deepseek_api_key,
             commands::agent::start_agent_turn,
             commands::agent::test_agent_connection,
+            commands::agent::test_agent_web_search,
             commands::app::get_app_info,
             commands::download_watch::start_download_watch,
             commands::game::detect_game_directory,

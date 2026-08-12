@@ -20,8 +20,8 @@ const documentInputs = [
     packId: "acumod-dev-game-guides",
     displayName: "AcuAI 游戏攻略开发包",
     kind: "mhw-game-guides",
-    version: "0.3.0-dev",
-    description: "带来源与适用条件的游戏攻略文本；精确数值必须再查询 MHWData。",
+    version: "0.4.0-dev",
+    description: "当前不内置第三方攻略摘要；精确数值查询 MHWData，开放式建议按需使用受控联网资料。",
   },
   {
     sourcePath: path.join(projectRoot, "references/knowledge/sources/acumod-help-documents.json"),

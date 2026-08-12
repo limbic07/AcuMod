@@ -15,8 +15,9 @@ const documentPacks = [
   {
     path: path.join(buildRoot, "acumod-dev-game-guides.acukb"),
     kind: "mhw-game-guides",
-    minimumDocuments: 18,
-    requiredIds: ["guide-greatsword-iceborne-midlate", "guide-guiding-lands-basics", "guide-fatalis-combat-preparation"],
+    minimumDocuments: 0,
+    requiredIds: [],
+    allowsEmpty: true,
   },
   {
     path: path.join(buildRoot, "acumod-dev-acumod-help.acukb"),
@@ -85,7 +86,7 @@ function verifyDocumentPack(definition, sourceIds) {
       expect(scalar(database, "SELECT COUNT(*) FROM documents WHERE id = ?", [id]) === 1, `${definition.kind} 缺少 ${id}。`);
     }
     const sources = database.prepare("SELECT id FROM sources").all().map((row) => row.id);
-    expect(sources.length > 0 && sources.every((id) => sourceIds.has(id)), `${definition.kind} 含未登记来源。`);
+    expect((definition.allowsEmpty || sources.length > 0) && sources.every((id) => sourceIds.has(id)), `${definition.kind} 含未登记来源。`);
   } finally {
     database.close();
   }

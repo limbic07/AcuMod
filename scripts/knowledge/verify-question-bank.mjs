@@ -76,8 +76,9 @@ const checks = [
     return item && rows(item.id, "monster.rewards").length > 0;
   })],
   ["G08", "安全缺口", () => Boolean(entity("quest", "Land of Convergence"))],
-  ["G09", "应答", () => hasDocument("guides", "guide-guiding-lands-basics")],
-  ["G10", "需上下文", () => hasDocument("guides", "guide-greatsword-iceborne-midlate")],
+  // 第三方攻略摘要已移除；本地题库只验证如实说明缺口或提出必要追问。
+  ["G09", "安全缺口", () => true],
+  ["G10", "需上下文", () => true],
   ["G11", "应答", () => skillHasLevels("Handicraft")],
   ["G12", "部分应答", () => skillHasLevels("Latent Power")],
   ["G13", "应答", () => {
@@ -95,7 +96,7 @@ const checks = [
   ["G17", "需上下文", () => monsterHas("Rajang", "monster.weaknesses")],
   ["G18", "应答", () => monsterHas("Velkhana", "monster.weaknesses")],
   ["G19", "需上下文", () => true],
-  ["G20", "需上下文", () => hasDocument("guides", "guide-beginner-hunting-foundations")],
+  ["G20", "需上下文", () => true],
   ["M01", "应答", () => hasDocument("help", "help-mod-root-detection")],
   ["M02", "应答", () => hasDocument("help", "help-conflict-priority")],
   ["M03", "应答", () => hasDocument("modding", "modding-mrl3")],

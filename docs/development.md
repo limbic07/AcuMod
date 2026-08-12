@@ -14,7 +14,6 @@ npm.cmd run dev
 npm.cmd run typecheck
 npm.cmd run build
 npm.cmd run knowledge:audit
-npm.cmd run knowledge:fetch-quest-unlocks
 npm.cmd run knowledge:build-dev
 npm.cmd run knowledge:build-modding-dev
 npm.cmd run knowledge:package-modding-dev
@@ -44,7 +43,6 @@ cargo fmt
 - `typecheck`：运行 `vue-tsc --noEmit`。
 - `build`：先运行 typecheck，再运行 Vite build。
 - `knowledge:audit`：只读审计现有 MHW 数据基线与本地 MOD 库文件分布，生成匿名聚合报告；缺少受限的 `15.10.00` 原始表时，会明确切换并报告 MHWData 本地快照输入。
-- `knowledge:fetch-quest-unlocks`：显式联网抓取公开可选任务解锁页面，只保存任务名、来源链接和可结构化解析的条件到本地忽略快照。
 - `knowledge:build-mhwdata`：把固定 commit 的 MHWorldData 快照和可用的同键简繁名称桥构建为 `mhwdata.acumhwdb`；保留所有源 CSV 行，不构建事实图谱或 FTS。
 - `knowledge:build-dev`：构建上述数值数据库，以及 MOD 技术、攻略、Acumod 使用说明三个不提交的文本包，用于完整查询链路验证。
 - `knowledge:build-modding-dev`：只生成 MOD 技术文本包；用于独立验证技术知识检索。

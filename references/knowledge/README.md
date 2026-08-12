@@ -25,7 +25,6 @@ npm.cmd run knowledge:audit
 npm.cmd run knowledge:audit-licenses
 npm.cmd run knowledge:fetch-mhw-db
 npm.cmd run knowledge:fetch-mhworlddata
-npm.cmd run knowledge:fetch-quest-unlocks
 npm.cmd run knowledge:build-game-text-bridge
 npm.cmd run knowledge:build-dev
 npm.cmd run knowledge:verify-dev
@@ -41,9 +40,7 @@ npm.cmd run knowledge:audit -- --mod-root "D:\path\to\AcumodData\mods\installed"
 
 ## 任务解锁资料
 
-`knowledge:fetch-quest-unlocks` 显式抓取本体和冰原的已分配、可选、活动、斗技场与挑战任务页面，并把任务名、结构化条件、来源链接、抓取时间和页面校验值保存到被 Git 忽略的本地快照。外部任务 ID 不能单独作为映射证据：只有外部目标怪物全部能在本地任务目标中交叉验证时，才将英文名、任务资料和解锁条件绑定到本地稳定任务实体。此后才会在英文任务名唯一对应时写入 `requiresQuest`；等级、捕获、发现、NPC、营地、剧情和活动开放等信息写入 `requiresCondition`。无法验证的记录保留为开发资料缺口，不会猜测成前置关系。
-
-当前覆盖范围是本体与冰原的已分配、可选任务中可完成目标交叉验证的部分，`sources/quest-name-map.json` 中逐项人工核对的特别任务名称桥接（含黑龙链），以及 Game8 活动、斗技场与挑战任务页面中可唯一定位的条目。活动任务只写入“任务开放期间可承接”；斗技场需由类别、目标怪物和已验证本地任务共同定位，挑战任务只接受类别一致的英文标题精确匹配。交货委托另由 `sources/delivery-unlock-documents.json` 保存 Kuroyonhon 本体前 33 条可用记录的条件原文和简体摘要，其中 32 条已映射到本地交货委托实体，21 条任务前置关系通过本地任务 ID 唯一核验。该表是外部任务 ID 与本地 ID 不一致时的唯一例外入口，构建会同时校验本地 ID 与官方简中名称。未覆盖的特别任务和交货委托不会被猜测成关系。来源为社区资料，AcuAI 回答必须显示来源与版本边界；没有关系时应说明当前知识包缺少已核验资料。
+为消除第三方攻略页面派生内容的再分发风险，当前构建链路不再抓取、保存或导入第三方任务解锁页面。固定 MHWData 只提供任务基础、目标和报酬；任务前置、活动开放、交货委托和营地条件没有可审计的本地字段时，AcuAI 必须明确说明资料缺口，或在用户提问时按受控联网规则读取页面摘录，不能写入知识包。
 
 ## 数据与隐私边界
 
@@ -67,17 +64,16 @@ git clone https://github.com/Synthlight/MHW-Editor.git src-tauri/target/analysis
 git -C src-tauri/target/analysis/MHW-Editor-source checkout a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94
 npm.cmd run knowledge:build-game-text-bridge
 npm.cmd run knowledge:fetch-mhw-db
-npm.cmd run knowledge:fetch-quest-unlocks
 npm.cmd run knowledge:build-dev
 npm.cmd run knowledge:verify-dev
 npm.cmd run knowledge:verify-e2e
 ```
 
-当前 MHW-Editor 文本源固定为 commit `a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94`；克隆后应以 `git -C src-tauri/target/analysis/MHW-Editor-source rev-parse HEAD` 核对。构建器只按同一文本键配对简中、繁中和英文，绝不做逐字简繁转换；没有唯一同键简中名称的任务等条目保留官方繁中或英文回退。回退包会导入 Game8 中英文标题唯一对应 MHWData 本地任务的解锁资料；当前含 459 个任务条目、214 条前置关系和 616 条条件。相近标题、同名记录、特别任务和交货委托仍不会猜测成关系，查询这些具体条件时必须明确说明资料缺口。
+当前 MHW-Editor 文本源固定为 commit `a9fd86fd7dbd29fc3f85b1a2ea8ecb0f47458a94`；克隆后应以 `git -C src-tauri/target/analysis/MHW-Editor-source rev-parse HEAD` 核对。构建器只按同一文本键配对简中、繁中和英文，绝不做逐字简繁转换；没有唯一同键简中名称的任务等条目保留官方繁中或英文回退。任务前置、特别任务、交货委托和同名或近似标题的解锁链不再从第三方页面导入，查询这些条件时必须明确说明资料缺口。
 
 程序只支持整套 ZIP 导入：选择一个包含一个 `.acumhwdb` 和三个 `.acukb` 文件的 ZIP 并点击“整套安装”。程序会先解包并校验固定数值数据库和三个文本包，全部通过后再安装；旧 `mhw-game-facts` 图谱会在数值库成功启用后移除，避免被后续检索误用。
 
-`knowledge:build-dev` 构建固定数值数据库和三个文本包。`knowledge:verify-dev` 验证 `15.10.00` 内容基线、`15.23` 运行兼容标记、50 张源表、8,500 以上实体、3 万以上原始行，以及武器斩味、防具技能、怪物肉质/奖励、任务报酬、技能等级等固定 section；还会验证 MOD3、MRL3、武器特效边界、EVAM、DAT 改绑边界、SPL 等 17 条离线基础规则、Acumod 使用说明和 18 条攻略摘要。
+`knowledge:build-dev` 构建固定数值数据库和三个文本包。`knowledge:verify-dev` 验证 `15.10.00` 内容基线、`15.23` 运行兼容标记、50 张源表、8,500 以上实体、3 万以上原始行，以及武器斩味、防具技能、怪物肉质/奖励、任务报酬、技能等级等固定 section；还会验证 MOD3、MRL3、武器特效边界、EVAM、DAT 改绑边界、SPL 等 17 条离线基础规则、Acumod 使用说明，以及不含第三方攻略文档的空攻略包结构。
 
 旧 `knowledge:verify-e2e` 面向四 `.acukb` 图谱，已由 Rust `mhwdata` 的安装/查询集成测试取代：测试临时安装刚生成的数值数据库，查询防卫队大剑基础行和其斩味 section，再删除临时目录。
 
@@ -101,13 +97,13 @@ npm.cmd run knowledge:verify-e2e
 
 ### 3. 攻略包
 
-`mhw-game-guides` 保存带来源、适用版本、前置条件和许可信息的攻略片段；来源目录另行记录来源类型、使用边界、许可审计状态与核对状态，作者和页面更新时间将在后续 schema 升级后成为文档级字段。事实与攻略分开存储：攻略可以提供路线、思路和推荐，但不能覆盖 `game-facts` 中的实体、数值或解锁条件。当前首批为 14 条全武器冰原中后期进阶摘要，加上本体主线、新手、聚魔之地与黑龙准备四条通用摘要，共 18 条，均保留独立的原始页面链接；清洗时去除广告、评论区、重复导航、图片和视频正文，只保留 Acumod 自行撰写的短摘要。
+`mhw-game-guides` 保留为可独立安装的扩展包类型，但当前不内置任何第三方攻略页面的摘要、翻译或改写内容。开放式路线、配装和战斗建议优先回到 MHWData 核对可验证事实；本地资料不足时，AcuAI 只可按受控联网规则读取当轮白名单页面摘录，并明确显示联网来源。
 
 ### 4. 通用问答与 RAG
 
 当前知识底座包含四个可选知识包：`mhw-game-facts`、`mhw-modding`、`mhw-game-guides` 和 `acumod-help`。人工问题集暂时删除，开放式推荐仍必须同时回到攻略资料和游戏事实包核验具体实体、关系或字段。
 
-用户问题先由 AcuAI 提取目标、限制和术语，再调用固定工具查询实体、关系和全文文档。开放式问题也走这条通用链路：例如配装推荐会先查询玩家进度、目标武器、可用装备和技能关系，再检索攻略思路，最后由模型综合条件给出多个可解释方案。
+用户问题先由 AcuAI 提取目标、限制和术语，再调用固定工具查询实体、关系和全文文档。开放式问题也走这条通用链路：例如配装推荐会先查询玩家进度、目标武器、可用装备和技能关系；若本地没有对应攻略资料，再按受控联网规则补充并由模型给出多个可解释方案。
 
 每条返回结果都带 `evidenceId`、来源、游戏版本、知识包版本和可信度。Rust 只会把实际查询到且通过知识包结构校验的实体、关系和来源发送给前端；AcuAI 回答下方展示本轮实际使用的来源。事实、攻略建议、本地文件分析、受控联网参考和未知缺口分开标注。游戏精确数据先走 MHWData；MOD 技术先走本地分析与离线规则，不足时只可从指定 ModdingWiki 的同轮候选页面读取摘录。没有可靠资料时明确说明缺口，不用模型记忆或普通联网搜索补写精确游戏数据或本地文件行为。
 

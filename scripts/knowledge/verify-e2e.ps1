@@ -33,7 +33,8 @@ $env:RUSTFLAGS = ($rustFlagParts -join " ").Trim()
 try {
     $tests = @(
         "services::mhwdata::tests::installed_database_returns_raw_weapon_rows",
-        "services::agent::deepseek::tests::final_evidence_keeps_the_last_returned_recipe_row"
+        "services::agent::deepseek::tests::final_evidence_keeps_the_last_returned_recipe_row",
+        "services::agent::source_search::tests::mod_knowledge_search_only_accepts_specific_wiki_pages"
     )
     foreach ($test in $tests) {
         & cargo test --manifest-path (Join-Path $projectRoot "src-tauri\Cargo.toml") `

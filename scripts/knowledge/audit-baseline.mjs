@@ -15,8 +15,6 @@ const mhworldDataSnapshotPath = path.join(
 );
 const curatedRoot = path.join(projectRoot, "references/mhwi-data/curated");
 const defaultOutputRoot = path.join(projectRoot, "references/knowledge/audits");
-const questUnlockSnapshotPath = path.join(projectRoot, "references/knowledge/raw/game8-quest-unlocks/current.json");
-const curatedQuestNameMapPath = path.join(projectRoot, "references/knowledge/sources/quest-name-map.json");
 const deliveryUnlockSourcePath = path.join(projectRoot, "references/knowledge/sources/delivery-unlock-documents.json");
 const developmentMhwdataPath = path.join(projectRoot, "references/knowledge/build/acumod-mhwdata-15.10.acumhwdb");
 
@@ -405,44 +403,10 @@ async function auditCuratedData() {
 }
 
 async function auditQuestUnlockCoverage() {
-  if (!(await pathExists(questUnlockSnapshotPath))) {
-    return {
-      available: false,
-      message: "尚未抓取任务解锁快照；运行 knowledge:fetch-quest-unlocks 后可生成来源覆盖统计。",
-    };
-  }
-
-  const [snapshot, curatedNameMap] = await Promise.all([
-    readJson(questUnlockSnapshotPath),
-    readJson(curatedQuestNameMapPath),
-  ]);
-  if (!Array.isArray(snapshot.entries) || !Array.isArray(snapshot.pages) || !Array.isArray(curatedNameMap.entries)) {
-    throw new Error("任务解锁快照或人工名称桥接表结构无效。");
-  }
-
-  const sourcePages = snapshot.pages.map((page) => ({
-    sourceId: String(page.id ?? "unknown"),
-    rank: String(page.rank ?? "unknown"),
-    entryCount: snapshot.entries.filter((entry) => entry.sourceId === page.id).length,
-    parsedCount: snapshot.entries.filter((entry) => entry.sourceId === page.id && entry.parseStatus === "parsed").length,
-  }));
-  const sourceEntryCount = snapshot.entries.length;
-  const parsedSourceEntryCount = snapshot.entries.filter((entry) => entry.parseStatus === "parsed").length;
-
-  // MHWData 不承载任务解锁图谱；保留抓取统计作为后续字段补齐候选。
-  const developmentPack = null;
-
   return {
-    available: true,
-    sourceEntryCount,
-    parsedSourceEntryCount,
-    unparsedSourceEntryCount: sourceEntryCount - parsedSourceEntryCount,
-    curatedNameBridgeCount: curatedNameMap.entries.length,
-    sourcePages,
-    developmentPack,
-    message: developmentPack
-      ? "开发知识包统计只计入通过稳定任务 ID 或人工逐项核对名称桥接的关系。"
-      : "固定 MHWData 当前不导入任务解锁链；该来源保留为后续字段补齐候选。",
+    available: false,
+    // 不再读取或抓取第三方任务解锁页面，避免将其派生条件重新引入知识包。
+    message: "第三方任务解锁资料已移除；固定 MHWData 仅提供任务基础、目标与报酬，解锁链作为明确资料缺口处理。",
   };
 }
 
@@ -762,7 +726,7 @@ function renderReport(baseline, modProfile) {
     "",
     "## 下一步",
     "",
-    "1. 完成特别任务、交货委托和仍有歧义的任务解锁关系人工核验。",
+    "1. 如需任务解锁、特别任务或交货委托条件，使用受控联网资料并明确标记其来源，不将第三方页面派生条件写回知识包。",
     "2. 按真实 MOD 文件分布继续补充低频格式，并为每条规则完成来源和复现实验记录。",
     "3. 完成外部原始数据、派生字段、繁简文本桥和攻略摘要的许可审计。",
     "4. 使用真实 DeepSeek V4 按 docs/knowledge-acceptance.md 完成人工验收。",
@@ -817,8 +781,8 @@ async function main() {
       missing: "部位破坏条件、调查任务与完整掉落语义",
     });
     Object.assign(byTopic.get("quests"), {
-      status: "partial", available: "任务名称、目标、地点、怪物、奖励，以及英文标题唯一对应的前置/解锁关系",
-      missing: "可靠的简中任务名称、特别任务、交货委托、同名或近似标题的解锁链",
+      status: "partial", available: "任务名称、目标、地点、怪物与奖励",
+      missing: "任务前置、活动开放、特别任务、交货委托与同名或近似标题的解锁链",
     });
     Object.assign(byTopic.get("stages"), {
       status: "partial", available: "地图、16 个稳定场景映射、任务地点和采集关系",

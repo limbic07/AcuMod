@@ -13,7 +13,6 @@
     "knowledge:fetch-mhw-db": "node scripts/knowledge/fetch-mhw-db-snapshot.mjs",
     "knowledge:fetch-mhworlddata": "node scripts/knowledge/fetch-mhworlddata-armor-map.mjs",
     "knowledge:build-mhwdata": "node scripts/knowledge/build-mhwdata-database.mjs",
-    "knowledge:fetch-quest-unlocks": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/knowledge/fetch-game8-quest-unlocks.ps1",
     "knowledge:build-game-text-bridge": "node scripts/knowledge/build-local-game-text-bridge.mjs",
     "knowledge:build-dev": "npm.cmd run knowledge:build-mhwdata && node scripts/knowledge/build-dev-pack.mjs",
     "knowledge:build-modding-dev": "node scripts/knowledge/build-dev-pack.mjs --modding-only",

@@ -15,15 +15,6 @@ const documentInputs = [
     description: "仅包含 Acumod 已验证的 MOD 路径、格式、改绑与运行时边界；具体制作与排错资料由受控联网技术来源补充。",
   },
   {
-    sourcePath: path.join(projectRoot, "references/knowledge/sources/game-guide-documents.json"),
-    outputName: "acumod-dev-game-guides.acukb",
-    packId: "acumod-dev-game-guides",
-    displayName: "AcuAI 游戏攻略开发包",
-    kind: "mhw-game-guides",
-    version: "0.4.0-dev",
-    description: "当前不内置第三方攻略摘要；精确数值查询 MHWData，开放式建议按需使用受控联网资料。",
-  },
-  {
     sourcePath: path.join(projectRoot, "references/knowledge/sources/acumod-help-documents.json"),
     outputName: "acumod-dev-acumod-help.acukb",
     packId: "acumod-dev-acumod-help",
@@ -36,7 +27,7 @@ const documentInputs = [
 const targetGameVersion = "15.23";
 const packApplicationId = 0x4143554B; // "ACUK"
 // 这些规则可由本地分析器、现有改绑实现或稳定格式边界直接支撑，适合作为离线保底。
-// 其余原始资料先保留在 sources 中，待补全篇幅和来源审计后再考虑重新纳入发布包。
+// 其余资料仅用于开发期核对；离线包只发布本地实现能够稳定支撑的规则。
 const offlineModdingDocumentIds = new Set([
   "modding-nativepc-root",
   "modding-nativepc-plugins",
@@ -176,6 +167,8 @@ assert(Array.isArray(catalog.sources) && catalog.sources.length > 0, "知识来�
 const sourceIds = new Set(catalog.sources.map((source) => source.id));
 const selected = argv.includes("--modding-only") ? documentInputs.slice(0, 1) : documentInputs;
 const outputRoot = outputDirectory(argv);
+// 攻略包已退出产品模型，构建时清除旧产物，避免旧文件被误打进发布 ZIP。
+await rm(path.join(outputRoot, "acumod-dev-game-guides.acukb"), { force: true });
 for (const definition of selected) {
   const sourceDocuments = validateDocuments(
     JSON.parse(await readFile(definition.sourcePath, "utf8")),

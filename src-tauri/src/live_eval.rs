@@ -189,11 +189,7 @@ fn install_fresh_knowledge(root: &Path) -> Result<(), String> {
         &build_root.join("acumod-mhwdata-15.10.acumhwdb"),
         &reporter,
     )?;
-    for pack_name in [
-        "acumod-dev-modding.acukb",
-        "acumod-dev-game-guides.acukb",
-        "acumod-dev-acumod-help.acukb",
-    ] {
+    for pack_name in ["acumod-dev-modding.acukb", "acumod-dev-acumod-help.acukb"] {
         knowledge::install_pack_into(
             root,
             build_root.join(pack_name).to_string_lossy().into_owned(),

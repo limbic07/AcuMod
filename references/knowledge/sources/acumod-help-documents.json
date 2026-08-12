@@ -86,7 +86,7 @@
       "id": "help-knowledge-pack",
       "domain": "help-knowledge",
       "title": "安装和管理知识包",
-      "body": "知识包在设置页面通过一个整套 ZIP 安装，ZIP 内必须包含游戏事实、MOD 技术、游戏攻略和 Acumod 使用说明四个 .acukb 文件。安装前会解包并校验 SQLite 标识、版本、完整性、来源引用和允许的表结构；四个包在本地按类型独立存储。知识包保存在软件数据目录，不进入主程序安装包；知识包缺失、损坏或未启用时，传统 MOD 管理器仍可正常工作。",
+      "body": "知识包在设置页面通过一个整套 ZIP 安装，ZIP 内必须包含一个 MHWData 数值数据库，以及 MOD 技术和 Acumod 使用说明两个 .acukb 文本包。安装前会解包并校验 SQLite 标识、版本、完整性、来源引用和允许的表结构；三份资料在本地按类型独立存储。知识包保存在软件数据目录，不进入主程序安装包；知识包缺失、损坏或未启用时，传统 MOD 管理器仍可正常工作。",
       "gameVersion": "15.23",
       "confidence": 1,
       "sourceId": "acumod-help-documents"

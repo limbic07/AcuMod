@@ -21,7 +21,6 @@ const confirmingDeletePackId = ref("");
 const kindLabels: Record<KnowledgePackKind, string> = {
   mhwdata: "游戏数值数据库",
   "mhw-modding": "MOD 技术",
-  "mhw-game-guides": "攻略资料",
   "acumod-help": "Acumod 使用说明",
 };
 
@@ -124,7 +123,7 @@ onMounted(() => {
           v-model="bundlePath"
           type="text"
           autocomplete="off"
-          placeholder="请选择包含 3 个 .acukb 和 1 个 .acumhwdb 的 ZIP"
+          placeholder="请选择包含 2 个 .acukb 和 1 个 .acumhwdb 的 ZIP"
         />
         <button type="button" :disabled="isInstallingBundle" @click="chooseBundle">
           选择文件
@@ -137,15 +136,15 @@ onMounted(() => {
           {{ isInstallingBundle ? "整套安装中" : "整套安装" }}
         </button>
       </div>
-      <small>知识资料独立发布，不绑定主程序安装包；一个 ZIP 必须包含固定版 MHWData `.acumhwdb`，以及 MOD 技术、攻略、Acumod 说明三个 `.acukb` 文本包。</small>
+      <small>知识资料独立发布，不绑定主程序安装包；一个 ZIP 必须包含固定版 MHWData `.acumhwdb`，以及 MOD 技术、Acumod 说明两个 `.acukb` 文本包。</small>
     </form>
 
-    <aside class="knowledge-disclaimer" aria-label="知识库本地开发使用声明">
-      <strong>本地开发使用声明</strong>
+    <aside class="knowledge-disclaimer" aria-label="知识资料来源声明">
+      <strong>知识资料来源声明</strong>
       <p>
-        当前知识包仅供个人、本地开发与研究测试，不作为公开下载内容或主程序内置数据发布。来源内容可能受其权利人和平台条款保护；使用者应自行确认其导入、整理或使用的资料具有合法来源与必要权限。
+        知识包作为独立资料发布，不随主程序内置。项目维护者已审核当前来源与分发范围；新增来源或扩大用途时需要重新登记和审核。
       </p>
-      <p>本声明用于明确使用边界，不授予第三方内容许可，也不替代适用法律或平台条款。</p>
+      <p>来源链接、许可状态和适用范围继续保留在知识包记录中。</p>
     </aside>
 
     <div v-if="status?.packs.length" class="pack-list">

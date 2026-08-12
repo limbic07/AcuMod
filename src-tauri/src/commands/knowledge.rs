@@ -13,7 +13,7 @@ pub fn get_knowledge_status() -> Result<KnowledgeStatus, String> {
     knowledge::get_status()
 }
 
-/// 从一个知识包 ZIP 中校验并安装完整的四个知识包。
+/// 从一个知识包 ZIP 中校验并安装 MHWData、MOD 技术和 Acumod 帮助资料。
 #[tauri::command]
 pub async fn install_knowledge_bundle(
     app: tauri::AppHandle,

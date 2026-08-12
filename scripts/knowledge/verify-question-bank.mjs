@@ -7,7 +7,6 @@ const buildRoot = path.join(projectRoot, "references/knowledge/build");
 const databasePath = path.join(buildRoot, "acumod-mhwdata-15.10.acumhwdb");
 const packs = {
   modding: path.join(buildRoot, "acumod-dev-modding.acukb"),
-  guides: path.join(buildRoot, "acumod-dev-game-guides.acukb"),
   help: path.join(buildRoot, "acumod-dev-acumod-help.acukb"),
 };
 
@@ -76,7 +75,7 @@ const checks = [
     return item && rows(item.id, "monster.rewards").length > 0;
   })],
   ["G08", "安全缺口", () => Boolean(entity("quest", "Land of Convergence"))],
-  // 第三方攻略摘要已移除；本地题库只验证如实说明缺口或提出必要追问。
+  // 游戏攻略不进入本地知识包；题库只验证如实说明缺口或提出必要追问。
   ["G09", "安全缺口", () => true],
   ["G10", "需上下文", () => true],
   ["G11", "应答", () => skillHasLevels("Handicraft")],

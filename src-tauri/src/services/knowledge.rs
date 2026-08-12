@@ -24,6 +24,7 @@ const MAX_PACK_SIZE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_SEARCH_QUERY_CHARS: usize = 200;
 const MAX_SEARCH_RESULTS: usize = 50;
+const RETIRED_PACK_KINDS: [&str; 2] = ["mhw-game-facts", "mhw-game-guides"];
 const MAX_STRUCTURED_DATA_BYTES: usize = 256 * 1024;
 const MAX_FTS_FALLBACK_TERMS: usize = 48;
 const MAX_READ_RESULT_CHARS: usize = 16 * 1024;
@@ -240,9 +241,11 @@ struct ValidatedPack {
     source_count: usize,
 }
 
-/// 读取知识包状态时只依赖本地索引，不访问网络或 MOD/游戏目录。
+/// 读取知识包状态前迁移已经退出产品模型的旧包，不访问网络或 MOD/游戏目录。
 pub fn get_status() -> Result<KnowledgeStatus, String> {
     let root = knowledge_root()?;
+    // 设置页首次读取即可完成升级清理，避免旧攻略包继续显示或被全文检索。
+    remove_retired_pack_kinds(&root, &RETIRED_PACK_KINDS, &OperationReporter::default())?;
     get_status_from(&root)
 }
 
@@ -316,9 +319,9 @@ fn install_extracted_bundle(
     package_paths.sort();
     database_paths.sort();
 
-    if package_paths.len() != 3 || database_paths.len() != 1 {
+    if package_paths.len() != 2 || database_paths.len() != 1 {
         return Err(format!(
-            "知识包 ZIP 必须包含三个文本 `.acukb` 文件和一个 `.acumhwdb` 数值数据库，当前找到 {} 个文本包和 {} 个数值数据库。",
+            "知识包 ZIP 必须包含两个文本 `.acukb` 文件和一个 `.acumhwdb` 数值数据库，当前找到 {} 个文本包和 {} 个数值数据库。",
             package_paths.len(),
             database_paths.len()
         ));
@@ -336,10 +339,7 @@ fn install_extracted_bundle(
         }
         let validated = validate_pack(path)
             .map_err(|error| format!("知识包 {} 校验失败：{error}", display_path(path)))?;
-        if !matches!(
-            validated.kind.as_str(),
-            "mhw-modding" | "mhw-game-guides" | "acumod-help"
-        ) {
+        if !matches!(validated.kind.as_str(), "mhw-modding" | "acumod-help") {
             return Err(format!(
                 "知识包 {} 的类型 `{}` 不是固定数值数据库配套文本包支持的类型。",
                 display_path(path),
@@ -352,9 +352,9 @@ fn install_extracted_bundle(
         validated_packs.push((path.clone(), validated));
     }
 
-    let required_kinds = ["mhw-modding", "mhw-game-guides", "acumod-help"];
+    let required_kinds = ["mhw-modding", "acumod-help"];
     if required_kinds.iter().any(|kind| !kinds.contains(*kind)) {
-        return Err("知识包 ZIP 缺少 MOD 技术、攻略或 Acumod 说明文本包。".to_string());
+        return Err("知识包 ZIP 缺少 MOD 技术或 Acumod 说明文本包。".to_string());
     }
     mhwdata::validate_bundle_database(&database_paths[0])
         .map_err(|error| format!("MHWData 数值数据库校验失败：{error}"))?;
@@ -378,19 +378,12 @@ fn install_extracted_bundle(
         Some("MHWData 数值数据库".to_string()),
     );
     mhwdata::install_database_into(root, &database_paths[0], progress)?;
-    // 用户已明确迁移到新方案；新库成功启用后，旧的事实图谱不再保留为可误用的回退。
-    if load_index(root)?
-        .packs
-        .iter()
-        .any(|pack| pack.pack_id == "acumod-dev-game-facts" || pack.kind == "mhw-game-facts")
-    {
-        remove_legacy_game_facts(root, progress)?;
-    }
+    // 新整包成功启用后统一移除已退出运行链路的旧事实图谱和攻略包。
+    remove_retired_pack_kinds(root, &RETIRED_PACK_KINDS, progress)?;
 
     Ok(KnowledgeBundleInstallResult {
-        message:
-            "已安装整套知识资料：MHWData 固定数值数据库，以及 MOD 技术、攻略和 Acumod 说明文本包。"
-                .to_string(),
+        message: "已安装整套知识资料：MHWData 固定数值数据库，以及 MOD 技术和 Acumod 说明文本包。"
+            .to_string(),
         status: get_status_from(root)?,
         installed_count: total,
     })
@@ -628,12 +621,16 @@ fn delete_pack_from(
     get_status_from(root)
 }
 
-fn remove_legacy_game_facts(root: &Path, progress: &OperationReporter) -> Result<(), String> {
+fn remove_retired_pack_kinds(
+    root: &Path,
+    retired_kinds: &[&str],
+    progress: &OperationReporter,
+) -> Result<(), String> {
     let mut index = load_index(root)?;
     let selected = index
         .packs
         .iter()
-        .filter(|pack| pack.kind == "mhw-game-facts")
+        .filter(|pack| retired_kinds.contains(&pack.kind.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     if selected.is_empty() {
@@ -641,9 +638,9 @@ fn remove_legacy_game_facts(root: &Path, progress: &OperationReporter) -> Result
     }
     let delete_staging = root
         .join("staging")
-        .join(format!("legacy-game-facts-{}", unix_nanos_now()?));
+        .join(format!("retired-knowledge-packs-{}", unix_nanos_now()?));
     fs::create_dir_all(&delete_staging)
-        .map_err(|error| format!("无法创建旧游戏事实包删除暂存目录：{error}"))?;
+        .map_err(|error| format!("无法创建退役知识包删除暂存目录：{error}"))?;
     let mut moved_files = Vec::new();
     for (position, pack) in selected.iter().enumerate() {
         let path = installed_pack_path(root, &pack.relative_path)?;
@@ -652,12 +649,14 @@ fn remove_legacy_game_facts(root: &Path, progress: &OperationReporter) -> Result
             if let Err(error) = fs::rename(&path, &backup_path) {
                 restore_moved_pack_files(&moved_files);
                 let _ = fs::remove_dir_all(&delete_staging);
-                return Err(format!("无法暂存旧游戏事实包：{error}"));
+                return Err(format!("无法暂存退役知识包：{error}"));
             }
             moved_files.push((path, backup_path));
         }
     }
-    index.packs.retain(|pack| pack.kind != "mhw-game-facts");
+    index
+        .packs
+        .retain(|pack| !retired_kinds.contains(&pack.kind.as_str()));
     if let Err(error) = save_index(root, &index) {
         restore_moved_pack_files(&moved_files);
         let _ = fs::remove_dir_all(&delete_staging);
@@ -665,7 +664,7 @@ fn remove_legacy_game_facts(root: &Path, progress: &OperationReporter) -> Result
     }
     let _ = fs::remove_dir_all(&delete_staging);
     progress.report(
-        "已移除旧游戏事实图谱",
+        "已移除退役知识包",
         selected.len(),
         Some(selected.len()),
         None,
@@ -699,7 +698,7 @@ pub fn read_search_result(
         .iter()
         .find(|pack| {
             pack.active
-                && pack.kind != "mhw-game-facts"
+                && !is_retired_pack_kind(&pack.kind)
                 && pack.pack_id == pack_id
                 && pack.version == pack_version
         })
@@ -733,7 +732,7 @@ fn search_from(
         .packs
         .iter()
         // 旧游戏事实包在迁移后不能继续作为全文 RAG 结果混入回答。
-        .filter(|pack| pack.active && pack.kind != "mhw-game-facts")
+        .filter(|pack| pack.active && !is_retired_pack_kind(&pack.kind))
         .filter(|pack| {
             normalized_domains.is_empty() || normalized_domains.contains(pack.kind.as_str())
         })
@@ -751,7 +750,7 @@ fn search_from(
             Err(error) => warnings.push(format!("知识包“{}”查询失败：{error}", pack.display_name)),
         }
     }
-    // 跨知识域的问题不能让实体数量巨大的事实包占满全局上限，导致攻略或技术资料完全不可见。
+    // 跨知识域的问题不能让实体数量巨大的旧事实包占满全局上限，导致技术或帮助资料不可见。
     // 每个包先按自身相关性排序，再以轮转方式合并；指定单一领域时自然退化为原有顺序。
     let max_pack_matches = matches_by_pack.iter().map(Vec::len).max().unwrap_or(0);
     let mut matches = Vec::with_capacity(limit);
@@ -1715,7 +1714,7 @@ fn normalized_bundle_path(value: &str) -> Result<PathBuf, String> {
         .and_then(|extension| extension.to_str())
         .is_none_or(|extension| !extension.eq_ignore_ascii_case("zip"))
     {
-        return Err("知识包文件扩展名必须是 `.zip`。ZIP 内应包含四个 `.acukb` 文件。".to_string());
+        return Err("知识包文件扩展名必须是 `.zip`。ZIP 内应包含两个 `.acukb` 文件和一个 `.acumhwdb` 数值数据库。".to_string());
     }
     Ok(path)
 }
@@ -1898,11 +1897,15 @@ fn normalize_relation_direction(value: &str) -> Result<&'static str, String> {
 }
 
 fn validate_pack_kind(value: &str) -> Result<(), String> {
-    if matches!(value, "mhw-modding" | "mhw-game-guides" | "acumod-help") {
+    if matches!(value, "mhw-modding" | "acumod-help") {
         Ok(())
     } else {
         Err(format!("不支持的知识包类型：{value}"))
     }
+}
+
+fn is_retired_pack_kind(value: &str) -> bool {
+    RETIRED_PACK_KINDS.contains(&value)
 }
 
 fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
@@ -2105,8 +2108,9 @@ mod tests {
         delete_pack_from, get_game_entity_relations_from, get_status_from, install_pack_into,
         installed_pack_path, load_index, lookup_game_entities_from, normalize_domains,
         normalize_relation_predicates, normalized_bundle_path, parse_numeric_version,
-        quoted_fts_query, search_from, search_pack, validate_identifier, validate_pack,
-        validate_version, InstalledPackRecord, PACK_APPLICATION_ID,
+        quoted_fts_query, remove_retired_pack_kinds, save_index, search_from, search_pack,
+        validate_identifier, validate_pack, validate_version, InstalledPackRecord,
+        PACK_APPLICATION_ID,
     };
     use crate::operations::OperationReporter;
     use rusqlite::{params, Connection};
@@ -2257,34 +2261,6 @@ mod tests {
             .unwrap();
     }
 
-    fn create_test_guide_pack(path: &Path) {
-        create_test_pack(
-            path,
-            "0.1.0",
-            "冰原中后期大剑优先集中、弱点特效和体力增强。",
-        );
-        let connection = Connection::open(path).unwrap();
-        connection
-            .execute(
-                "UPDATE pack_manifest SET pack_id = 'test-game-guides', display_name = '测试游戏攻略包', kind = 'mhw-game-guides'",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "UPDATE documents SET id = 'guide-greatsword', namespace = 'guide-build', title = '冰原大剑进阶', body = '冰原中后期大剑优先集中、弱点特效和体力增强。'",
-                [],
-            )
-            .unwrap();
-        connection.execute("DELETE FROM knowledge_fts", []).unwrap();
-        connection
-            .execute(
-                "INSERT INTO knowledge_fts VALUES ('guide-greatsword', 'document', 'guide-build', '冰原大剑进阶', '冰原中后期大剑优先集中、弱点特效和体力增强。')",
-                [],
-            )
-            .unwrap();
-    }
-
     #[test]
     fn identifiers_reject_path_material() {
         assert!(validate_identifier("mhw-modding", "ID").is_ok());
@@ -2301,10 +2277,40 @@ mod tests {
 
     #[test]
     fn search_domains_are_fixed_pack_kinds() {
-        let domains = vec!["mhw-modding".to_string(), "mhw-game-facts".to_string()];
+        let domains = vec!["mhw-modding".to_string(), "acumod-help".to_string()];
         assert_eq!(normalize_domains(Some(&domains)).unwrap().len(), 2);
+        assert!(normalize_domains(Some(&["mhw-game-guides".to_string()])).is_err());
         assert!(normalize_domains(Some(&["other".to_string()])).is_err());
         assert!(normalize_domains(Some(&["acumod-help".to_string()])).is_ok());
+    }
+
+    #[test]
+    fn retired_game_guide_pack_is_removed_from_index_and_disk() {
+        let test_root = unique_test_path("retired-guide");
+        let knowledge_root = test_root.join("knowledge");
+        fs::create_dir_all(&test_root).unwrap();
+        let source = test_root.join("guide.acukb");
+        create_test_pack(&source, "0.1.0", "旧攻略测试内容");
+        let reporter = OperationReporter::default();
+        install_pack_into(
+            &knowledge_root,
+            source.to_string_lossy().into_owned(),
+            &reporter,
+        )
+        .unwrap();
+
+        let mut index = load_index(&knowledge_root).unwrap();
+        index.packs[0].kind = "mhw-game-guides".to_string();
+        let installed_path = installed_pack_path(&knowledge_root, &index.packs[0].relative_path)
+            .expect("测试包路径应有效");
+        save_index(&knowledge_root, &index).unwrap();
+
+        let search = search_from(&knowledge_root, "旧攻略", None, 10).unwrap();
+        assert!(search.matches.is_empty());
+        remove_retired_pack_kinds(&knowledge_root, &["mhw-game-guides"], &reporter).unwrap();
+        assert!(load_index(&knowledge_root).unwrap().packs.is_empty());
+        assert!(!installed_path.exists());
+        fs::remove_dir_all(test_root).unwrap();
     }
 
     #[test]
@@ -2421,44 +2427,6 @@ mod tests {
     }
 
     #[test]
-    fn guide_search_is_isolated_from_game_facts() {
-        let test_root = unique_test_path("guide-search");
-        let knowledge_root = test_root.join("knowledge");
-        fs::create_dir_all(&test_root).unwrap();
-        let game_source = test_root.join("game.acukb");
-        let guide_source = test_root.join("guide.acukb");
-        create_test_game_pack(&game_source);
-        create_test_guide_pack(&guide_source);
-        let reporter = OperationReporter::default();
-        install_pack_into(
-            &knowledge_root,
-            game_source.to_string_lossy().into_owned(),
-            &reporter,
-        )
-        .unwrap();
-        install_pack_into(
-            &knowledge_root,
-            guide_source.to_string_lossy().into_owned(),
-            &reporter,
-        )
-        .unwrap();
-
-        let guides = vec!["mhw-game-guides".to_string()];
-        let guide_matches = search_from(&knowledge_root, "冰原大剑", Some(&guides), 10).unwrap();
-        assert_eq!(guide_matches.matches.len(), 1);
-        assert_eq!(guide_matches.matches[0].pack_id, "test-game-guides");
-
-        let facts = vec!["mhw-game-facts".to_string()];
-        let fact_matches = search_from(&knowledge_root, "冰原大剑", Some(&facts), 10).unwrap();
-        // 完整实体别名可合法命中游戏事实；隔离要求是不能越过调用方指定的包域。
-        assert!(fact_matches
-            .matches
-            .iter()
-            .all(|item| item.pack_kind == "mhw-game-facts"));
-        fs::remove_dir_all(test_root).unwrap();
-    }
-
-    #[test]
     fn search_skips_missing_or_corrupt_pack_without_blocking_valid_pack() {
         let test_root = unique_test_path("damaged-pack");
         let knowledge_root = test_root.join("knowledge");
@@ -2543,11 +2511,9 @@ mod tests {
             .join("build");
         let game_facts = build_root.join("acumod-dev-game-facts.acukb");
         let modding = build_root.join("acumod-dev-modding.acukb");
-        let guides = build_root.join("acumod-dev-game-guides.acukb");
         let acumod_help = build_root.join("acumod-dev-acumod-help.acukb");
         assert!(game_facts.is_file(), "缺少游戏事实开发包：{game_facts:?}");
         assert!(modding.is_file(), "缺少 MOD 技术开发包：{modding:?}");
-        assert!(guides.is_file(), "缺少攻略开发包：{guides:?}");
         assert!(
             acumod_help.is_file(),
             "缺少 Acumod 使用说明开发包：{acumod_help:?}"
@@ -2557,7 +2523,7 @@ mod tests {
         let knowledge_root = test_root.join("knowledge");
         fs::create_dir_all(&test_root).unwrap();
         let reporter = OperationReporter::default();
-        for pack in [&game_facts, &modding, &guides, &acumod_help] {
+        for pack in [&game_facts, &modding, &acumod_help] {
             install_pack_into(
                 &knowledge_root,
                 pack.to_string_lossy().into_owned(),
@@ -2568,7 +2534,7 @@ mod tests {
 
         assert_eq!(
             get_status_from(&knowledge_root).unwrap().active_pack_count,
-            4
+            3
         );
 
         // 完整原始表和 MHWData 回退包使用不同的稳定 ID，但两者都必须经过真实安装、
@@ -2675,13 +2641,6 @@ mod tests {
                 .iter()
                 .any(|item| item.predicate == "hasHitzone"));
 
-            let guide_domains = vec!["mhw-game-guides".to_string()];
-            let guide_matches =
-                search_from(&knowledge_root, "冰原中后期大剑", Some(&guide_domains), 20).unwrap();
-            assert!(guide_matches
-                .matches
-                .iter()
-                .any(|item| item.result_id == "guide-greatsword-iceborne-midlate"));
             let modding_domains = vec!["mhw-modding".to_string()];
             let modding_matches =
                 search_from(&knowledge_root, "EVAM", Some(&modding_domains), 20).unwrap();
@@ -2693,7 +2652,7 @@ mod tests {
             return;
         }
 
-        // 真实包验收覆盖核心实体、关系、攻略和 MOD 技术问法，确保安装索引、别名检索、
+        // 真实包验收覆盖核心实体、关系和 MOD 技术问法，确保安装索引、别名检索、
         // 关系遍历和 FTS/LIKE 回退均能为 AcuAI 返回证据，而不是只检查 SQLite 中存在原始记录。
         let quest =
             lookup_game_entities_from(&knowledge_root, "贼龙与古代树森林", None, 20).unwrap();
@@ -3014,42 +2973,6 @@ mod tests {
             .iter()
             .any(|item| item.object_id == "game-item:205"));
 
-        let guide_domains = vec!["mhw-game-guides".to_string()];
-        let guide_matches =
-            search_from(&knowledge_root, "冰原中后期大剑", Some(&guide_domains), 20).unwrap();
-        assert!(guide_matches
-            .matches
-            .iter()
-            .any(|item| item.result_id == "guide-greatsword-iceborne-midlate"));
-        let natural_build_question = search_from(
-            &knowledge_root,
-            "我刚打到冰原中期，推荐一套好做又稳定的大剑配装",
-            Some(&guide_domains),
-            20,
-        )
-        .unwrap();
-        assert!(natural_build_question
-            .matches
-            .iter()
-            .any(|item| item.result_id == "guide-greatsword-iceborne-midlate"));
-        let story_matches =
-            search_from(&knowledge_root, "本体主线", Some(&guide_domains), 20).unwrap();
-        assert!(story_matches
-            .matches
-            .iter()
-            .any(|item| item.result_id == "guide-story-progression-basics"));
-        let guiding_lands_matches =
-            search_from(&knowledge_root, "聚魔之地", Some(&guide_domains), 20).unwrap();
-        assert!(guiding_lands_matches
-            .matches
-            .iter()
-            .any(|item| item.result_id == "guide-guiding-lands-basics"));
-        let fatalis_matches =
-            search_from(&knowledge_root, "黑龙", Some(&guide_domains), 20).unwrap();
-        assert!(fatalis_matches
-            .matches
-            .iter()
-            .any(|item| item.result_id == "guide-fatalis-combat-preparation"));
         let modding_domains = vec!["mhw-modding".to_string()];
         for (query, expected_document) in [
             ("MOD3", "modding-mod3"),
@@ -3335,11 +3258,7 @@ mod tests {
             let reporter = OperationReporter::default();
             let database = build_root.join("acumod-mhwdata-15.10.acumhwdb");
             mhwdata::install_database_into(&root, &database, &reporter)?;
-            for pack_name in [
-                "acumod-dev-modding.acukb",
-                "acumod-dev-game-guides.acukb",
-                "acumod-dev-acumod-help.acukb",
-            ] {
+            for pack_name in ["acumod-dev-modding.acukb", "acumod-dev-acumod-help.acukb"] {
                 install_pack_into(
                     &root,
                     build_root.join(pack_name).to_string_lossy().into_owned(),

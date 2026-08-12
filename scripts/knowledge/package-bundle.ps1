@@ -12,7 +12,6 @@ $buildRoot = Join-Path $root "references/knowledge/build"
   @(
     (Join-Path $buildRoot "acumod-mhwdata-15.10.acumhwdb"),
     (Join-Path $buildRoot "acumod-dev-modding.acukb"),
-    (Join-Path $buildRoot "acumod-dev-game-guides.acukb"),
     (Join-Path $buildRoot "acumod-dev-acumod-help.acukb")
   )
 }

@@ -13,13 +13,6 @@ const documentPacks = [
     requiredIds: ["modding-mod3", "modding-mrl3", "modding-weapon-epv-scope", "modding-evam-slinger", "modding-armor-am-dat", "modding-dat-armor-remap-boundary", "modding-sharp-plugin-loader-csharp-plugin"],
   },
   {
-    path: path.join(buildRoot, "acumod-dev-game-guides.acukb"),
-    kind: "mhw-game-guides",
-    minimumDocuments: 0,
-    requiredIds: [],
-    allowsEmpty: true,
-  },
-  {
     path: path.join(buildRoot, "acumod-dev-acumod-help.acukb"),
     kind: "acumod-help",
     minimumDocuments: 12,
@@ -99,4 +92,4 @@ await requireFile(mhwdataPath);
 for (const definition of documentPacks) await requireFile(definition.path);
 verifyMhwdata();
 for (const definition of documentPacks) verifyDocumentPack(definition, sourceIds);
-console.log("开发知识资料验收通过：MHWData 固定数值数据库、攻略、MOD 技术和 Acumod 使用说明均符合预期。");
+console.log("开发知识资料验收通过：MHWData 固定数值数据库、MOD 技术和 Acumod 使用说明均符合预期。");

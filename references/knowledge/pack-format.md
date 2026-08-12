@@ -6,7 +6,7 @@
 
 - `PRAGMA application_id = 0x4143554B`，ASCII 为 `ACUK`。
 - `PRAGMA user_version = 1`。
-- 当前应用接受 `mhw-modding`、`mhw-game-facts`、`mhw-game-guides` 和 `acumod-help` 四种包类型。
+- 当前 `.acukb` 文本包只接受 `mhw-modding` 和 `acumod-help` 两种类型。游戏数值使用独立 `.acumhwdb` 格式；旧 `mhw-game-facts` 和 `mhw-game-guides` 类型只参与升级清理，不再接受安装或检索。
 
 ## 必要数据表
 
@@ -17,18 +17,18 @@
 | `entities` | 稳定实体、名称、摘要、版本、可信度和类型化 JSON 数据 |
 | `aliases` | 实体的简繁中文、英文、资源 ID 和常用别名 |
 | `relations` | 实体之间带来源、版本和可信度的有向关系 |
-| `documents` | MOD 技术资料与攻略正文 |
+| `documents` | MOD 技术资料或 Acumod 使用说明 |
 | `knowledge_fts` | 使用 trigram tokenizer 的中文子串全文索引 |
 
 运行时不执行知识包提供的 SQL。Rust 只使用固定、参数化查询，并拒绝未知 table、trigger 和 view；FTS5 自动生成的 `knowledge_fts_*` shadow table 是唯一允许的额外数据表。
 
 ## ZIP 发布与安装流程
 
-1. 发布物是一个 ZIP，内部必须包含四个 `.acukb`：`mhw-game-facts`、`mhw-modding`、`mhw-game-guides` 和 `acumod-help`。四个文件可以位于 ZIP 根目录或其子目录中。
+1. 发布物是一个 ZIP，内部必须包含一个固定 MHWData `.acumhwdb`，以及 `mhw-modding`、`acumod-help` 两个 `.acukb`。三个文件可以位于 ZIP 根目录或其子目录中。
 2. 用户在设置页选择 ZIP；前端通过系统文件选择器取得路径，不要求复制路径。
 3. Rust 使用应用内置 7-Zip 解包到 `AcumodData/knowledge/staging/`，不依赖用户额外安装 7-Zip。
-4. 解包后必须找到且仅找到四个 `.acukb`，逐个校验文件上限、SQLite 标识、schema、完整性、manifest、包类型、最低应用版本、结构化 JSON、可信度范围和实体/来源引用完整性。
-5. 四个包全部通过后，分别移动到 `packs/<pack-id>/<version>-<hash>.acukb`，更新 `index.json`；同一包 ID 的旧版本保留但不再活动。
+4. 解包后必须找到且仅找到一个 `.acumhwdb` 和两个 `.acukb`，逐个校验文件上限、SQLite 标识、schema、完整性、manifest、包类型、最低应用版本、结构化 JSON、可信度范围和实体/来源引用完整性。
+5. 三份资料全部通过后，数值库切换到 `mhwdata/`，文本包移动到 `packs/<pack-id>/<version>-<hash>.acukb` 并更新 `index.json`；同一包 ID 的旧版本保留但不再活动。
 
 ZIP 解包或任一包校验失败时，不安装未完成校验的整套包，并清理本次解包暂存目录。
 
